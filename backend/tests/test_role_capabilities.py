@@ -13,6 +13,11 @@ from app.state.case_store import CaseStore
 from app.state.schemas import RoleName
 
 
+class _DummyGeneration:
+    def update(self, **kwargs) -> None:
+        _ = kwargs
+
+
 def test_all_roles_have_capability_metadata() -> None:
     assert set(ROLE_CAPABILITIES) == set(get_args(RoleName))
     registry = RoleRegistry(LlmClient())
@@ -62,6 +67,23 @@ def test_role_agents_use_manifest_prompt_versions() -> None:
         assert registry.prompt(role)
         assert registry.prompt_version(role) == role_prompt_version(role)
         assert registry.trace_metadata(role)["prompt_version"] == role_prompt_version(role)
+
+
+def test_role_agent_tools_raise_errors_to_runtime_recovery() -> None:
+    registry = RoleRegistry(LlmClient())
+
+    tool = registry.as_tool(
+        "evidence_reviewer",
+        run_config=None,
+        started=0.0,
+        input_preview="{}",
+        payload={},
+        generation=_DummyGeneration(),
+    )
+
+    assert getattr(tool, "_is_agent_tool") is True
+    assert getattr(tool, "_agent_instance").name == "evidence_reviewer"
+    assert getattr(tool, "_failure_error_function") is None
 
 
 def test_role_trace_metadata_can_be_recorded_in_role_call_and_context_manifest(tmp_path) -> None:

@@ -192,6 +192,7 @@ class RoleRegistry:
             tool_name=role,
             tool_description=f"Run specialist agent {role} and return {capability.output_model.__name__}.",
             custom_output_extractor=output_extractor,
+            failure_error_function=None,
             run_config=run_config,
             max_turns=2,
             include_input_schema=False,
