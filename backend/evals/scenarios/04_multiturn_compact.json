@@ -1,0 +1,28 @@
+{
+  "name": "多轮问答与 compact",
+  "case_id": "eval_multiturn_compact",
+  "raw_leak_phrases": ["Industrial sensor module OS-88"],
+  "steps": [
+    {"message": "新建一个发票付款审查 case。"},
+    {"message": "我需要准备什么材料？"},
+    {
+      "message": "提交 invoice。",
+      "attachments": ["samples/cases/INV-5001_complete_payment_review/evidence/01_invoice_INV-5001.md"]
+    },
+    {
+      "message": "提交 PO。",
+      "attachments": ["samples/cases/INV-5001_complete_payment_review/evidence/02_purchase_order_PO-5001.md"]
+    },
+    {
+      "message": "提交 GRN。",
+      "attachments": ["samples/cases/INV-5001_complete_payment_review/evidence/03_goods_receipt_GRN-5001.md"]
+    },
+    {"message": "我现在还缺什么？"}
+  ],
+  "force_compact_after": 5,
+  "expect": {
+    "session_compact_history": true,
+    "reply_contains_any": ["vendor", "供应商", "duplicate", "重复付款"],
+    "forbid_step_limit": true
+  }
+}

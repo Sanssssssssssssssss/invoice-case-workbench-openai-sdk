@@ -1,0 +1,663 @@
+[
+  {
+    "scenario": "多轮问答与 compact",
+    "case_id": "eval_multiturn_compact",
+    "pass": true,
+    "bug_notes": [],
+    "action_chain": [
+      "final_answer",
+      "call_role:materials_advisor",
+      "final_answer",
+      "call_tool:read_attachment",
+      "call_role:evidence_reviewer",
+      "call_role:case_patch_writer",
+      "write_case_patch",
+      "final_answer",
+      "call_tool:read_attachment",
+      "call_role:evidence_reviewer",
+      "call_role:case_patch_writer",
+      "write_case_patch",
+      "final_answer",
+      "call_tool:read_attachment",
+      "call_role:evidence_reviewer",
+      "call_role:case_patch_writer",
+      "write_case_patch",
+      "final_answer",
+      "final_answer"
+    ],
+    "planner_input_raw_leak_check": {
+      "raw_hits": [],
+      "passed": true
+    },
+    "role_context_check": {
+      "hits": [
+        "attachment_context",
+        "materials_advisor_rag_context"
+      ],
+      "passed": true
+    },
+    "case_state_delta": {
+      "case_id": "eval_multiturn_compact",
+      "status": "collecting_materials",
+      "requirements": [
+        {
+          "id": "invoice",
+          "status": "satisfied"
+        },
+        {
+          "id": "purchase_order",
+          "status": "satisfied"
+        },
+        {
+          "id": "goods_receipt",
+          "status": "satisfied"
+        },
+        {
+          "id": "vendor_record",
+          "status": "missing"
+        },
+        {
+          "id": "duplicate_payment_check",
+          "status": "missing"
+        }
+      ],
+      "evidence_count": 3,
+      "missing_materials": [
+        "vendor_record",
+        "duplicate_payment_check"
+      ],
+      "risk_flags": []
+    },
+    "final_reply": "当前 case 仍缺 2 项材料：\n1. 供应商记录（vendor_record）：用于核对供应商法定名称、银行账户及活跃状态；\n2. 重复付款检查（duplicate_payment_check）：用于排查 INV-5001 是否已有历史付款或清账记录，识别重复付款风险。\n\n已提交材料（3 项）：发票（INV-5001）、采购订单（PO-5001）、收货/服务验收记录（GRN-5001）。\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+    "generated_files": [
+      "case_state.json",
+      "conversation.jsonl",
+      "session.json",
+      "traces/artifacts/run_43b5ca049b24/art_001_attachment_batch_read_attachment.json",
+      "traces/artifacts/run_43b5ca049b24/art_002_role_result_evidence_reviewer.json",
+      "traces/artifacts/run_43b5ca049b24/art_003_role_result_case_patch_writer.json",
+      "traces/artifacts/run_43b5ca049b24/art_004_tool_result_write_case_patch.json",
+      "traces/artifacts/run_55f1fde449eb/art_001_role_result_materials_advisor.json",
+      "traces/artifacts/run_5f7a379fdd7b/art_001_attachment_batch_read_attachment.json",
+      "traces/artifacts/run_5f7a379fdd7b/art_002_role_result_evidence_reviewer.json",
+      "traces/artifacts/run_5f7a379fdd7b/art_003_role_result_case_patch_writer.json",
+      "traces/artifacts/run_5f7a379fdd7b/art_004_tool_result_write_case_patch.json",
+      "traces/artifacts/run_a6f1813920d3/art_001_attachment_batch_read_attachment.json",
+      "traces/artifacts/run_a6f1813920d3/art_002_role_result_evidence_reviewer.json",
+      "traces/artifacts/run_a6f1813920d3/art_003_role_result_case_patch_writer.json",
+      "traces/artifacts/run_a6f1813920d3/art_004_tool_result_write_case_patch.json",
+      "traces/case_audit.jsonl",
+      "traces/run_43b5ca049b24.json",
+      "traces/run_43b5ca049b24/context_manifest_000_planner.json",
+      "traces/run_43b5ca049b24/context_manifest_001_planner.json",
+      "traces/run_43b5ca049b24/context_manifest_002_planner.json",
+      "traces/run_43b5ca049b24/context_manifest_002_role_evidence_reviewer.json",
+      "traces/run_43b5ca049b24/context_manifest_003_planner.json",
+      "traces/run_43b5ca049b24/context_manifest_003_role_case_patch_writer.json",
+      "traces/run_43b5ca049b24/context_manifest_004_planner.json",
+      "traces/run_55f1fde449eb.json",
+      "traces/run_55f1fde449eb/context_manifest_000_planner.json",
+      "traces/run_55f1fde449eb/context_manifest_001_planner.json",
+      "traces/run_55f1fde449eb/context_manifest_001_role_materials_advisor.json",
+      "traces/run_5f7a379fdd7b.json",
+      "traces/run_5f7a379fdd7b/context_manifest_000_planner.json",
+      "traces/run_5f7a379fdd7b/context_manifest_001_planner.json",
+      "traces/run_5f7a379fdd7b/context_manifest_002_planner.json",
+      "traces/run_5f7a379fdd7b/context_manifest_002_role_evidence_reviewer.json",
+      "traces/run_5f7a379fdd7b/context_manifest_003_planner.json",
+      "traces/run_5f7a379fdd7b/context_manifest_003_role_case_patch_writer.json",
+      "traces/run_5f7a379fdd7b/context_manifest_004_planner.json",
+      "traces/run_85b50ba462f3.json",
+      "traces/run_85b50ba462f3/context_manifest_000_planner.json",
+      "traces/run_a6f1813920d3.json",
+      "traces/run_a6f1813920d3/context_manifest_000_planner.json",
+      "traces/run_a6f1813920d3/context_manifest_001_planner.json",
+      "traces/run_a6f1813920d3/context_manifest_002_planner.json",
+      "traces/run_a6f1813920d3/context_manifest_002_role_evidence_reviewer.json",
+      "traces/run_a6f1813920d3/context_manifest_003_planner.json",
+      "traces/run_a6f1813920d3/context_manifest_003_role_case_patch_writer.json",
+      "traces/run_a6f1813920d3/context_manifest_004_planner.json",
+      "traces/run_fadb5631f7ba.json",
+      "traces/run_fadb5631f7ba/context_manifest_000_planner.json"
+    ],
+    "session": {
+      "session_json_exists": true,
+      "turn_count": 6,
+      "session_summary": "Session compacted at 2026-05-21T14:02:33.933182+00:00 for case eval_multiturn_compact. 当前案卷状态为 collecting_materials；requirements: invoice:satisfied, purchase_order:satisfied, goods_receipt:satisfied, vendor_record:missing, duplicate_payment_check:missing。已接受/可用证据 3 项；被拒绝或不适配证据 0 项。缺口: vendor_record, duplicate_payment_check。最近保留 3 轮，较早 2 轮已压缩。",
+      "compact_history_count": 1
+    },
+    "steps": [
+      {
+        "step": 1,
+        "message": "新建一个发票付款审查 case。",
+        "attachments": [],
+        "action_chain": [
+          "final_answer"
+        ],
+        "step_count": 1,
+        "model_calls": 1,
+        "errors": [],
+        "reply": "本地发票付款审查 case 已创建。当前还没有提交材料；请准备发票、采购订单、收货/服务验收记录、供应商记录和重复付款检查。本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_multiturn_compact",
+          "status": "new",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "missing"
+            },
+            {
+              "id": "purchase_order",
+              "status": "missing"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 0,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_fadb5631f7ba"
+      },
+      {
+        "step": 2,
+        "message": "我需要准备什么材料？",
+        "attachments": [],
+        "action_chain": [
+          "call_role:materials_advisor",
+          "final_answer"
+        ],
+        "step_count": 2,
+        "model_calls": 3,
+        "errors": [],
+        "reply": "当前案卷为新案件，所有核心材料均未提交。您需要准备以下五类材料以支持发票付款审查：\n\n1. **发票（Invoice）**\n   - 发票扫描件或电子发票\n   - 发票号码、开票日期、金额、税额\n   - 供应商名称及纳税人识别号\n\n2. **采购订单（Purchase Order）**\n   - PO 编号、日期、金额\n   - 采购物料/服务明细\n   - 审批记录或系统截图\n\n3. **收货/服务验收记录（Goods Receipt/Service Entry）**\n   - 收货单号/服务确认单号\n   - 验收日期、数量、金额\n   - 质检或签字确认记录\n\n4. **供应商记录（Vendor Record）**\n   - 供应商主数据（名称、税号、银行账户）\n   - 付款条款、账期信息\n   - 供应商状态是否正常\n\n5. **重复付款检查（Duplicate Payment Check）**\n   - 历史付款记录查询结果\n   - 相同发票号/金额/供应商的付款排查\n   - 清账记录核对\n\n请将上述材料以文字粘贴或附件形式提交，本工具将进行本地审查并记录。本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_multiturn_compact",
+          "status": "new",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "missing"
+            },
+            {
+              "id": "purchase_order",
+              "status": "missing"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 0,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_55f1fde449eb"
+      },
+      {
+        "step": 3,
+        "message": "提交 invoice。",
+        "attachments": [
+          "01_invoice_INV-5001.md"
+        ],
+        "action_chain": [
+          "call_tool:read_attachment",
+          "call_role:evidence_reviewer",
+          "call_role:case_patch_writer",
+          "write_case_patch",
+          "final_answer"
+        ],
+        "step_count": 5,
+        "model_calls": 8,
+        "errors": [],
+        "reply": "发票材料已审查并写入本地 case。当前已提交：发票（INV-5001）。\n\n仍缺材料：采购订单、收货/服务验收记录、供应商记录、重复付款检查。\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_multiturn_compact",
+          "status": "collecting_materials",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "satisfied"
+            },
+            {
+              "id": "purchase_order",
+              "status": "missing"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 1,
+          "missing_materials": [
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_a6f1813920d3"
+      },
+      {
+        "step": 4,
+        "message": "提交 PO。",
+        "attachments": [
+          "02_purchase_order_PO-5001.md"
+        ],
+        "action_chain": [
+          "call_tool:read_attachment",
+          "call_role:evidence_reviewer",
+          "call_role:case_patch_writer",
+          "write_case_patch",
+          "final_answer"
+        ],
+        "step_count": 5,
+        "model_calls": 8,
+        "errors": [],
+        "reply": "采购订单材料已审查并写入本地 case。当前已提交：发票（INV-5001）、采购订单（PO-5001）。\n\n仍缺材料：\n- 收货/服务验收记录（GRN）—— 确认货物已按 PO-5001 数量及规格验收\n- 供应商记录 —— 核对供应商法定名称、银行账户及活跃状态\n- 重复付款检查 —— 排查 INV-5001 是否已有历史付款或清账记录\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_multiturn_compact",
+          "status": "collecting_materials",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "satisfied"
+            },
+            {
+              "id": "purchase_order",
+              "status": "satisfied"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 2,
+          "missing_materials": [
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_5f7a379fdd7b"
+      },
+      {
+        "step": 5,
+        "message": "提交 GRN。",
+        "attachments": [
+          "03_goods_receipt_GRN-5001.md"
+        ],
+        "action_chain": [
+          "call_tool:read_attachment",
+          "call_role:evidence_reviewer",
+          "call_role:case_patch_writer",
+          "write_case_patch",
+          "final_answer"
+        ],
+        "step_count": 5,
+        "model_calls": 7,
+        "errors": [],
+        "reply": "收货/服务验收记录（GRN-5001）材料已审查并写入本地 case。当前已提交：发票（INV-5001）、采购订单（PO-5001）、收货/服务验收记录（GRN-5001）。仍缺材料：供应商记录、重复付款检查。请提供：1）供应商主数据记录以核对供应商法定名称、银行账户及活跃状态；2）重复付款检查结果，排查 INV-5001 是否已有历史付款或清账记录。本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_multiturn_compact",
+          "status": "collecting_materials",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "satisfied"
+            },
+            {
+              "id": "purchase_order",
+              "status": "satisfied"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "satisfied"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 3,
+          "missing_materials": [
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_43b5ca049b24"
+      },
+      {
+        "step": 6,
+        "message": "我现在还缺什么？",
+        "attachments": [],
+        "action_chain": [
+          "final_answer"
+        ],
+        "step_count": 1,
+        "model_calls": 1,
+        "errors": [],
+        "reply": "当前 case 仍缺 2 项材料：\n1. 供应商记录（vendor_record）：用于核对供应商法定名称、银行账户及活跃状态；\n2. 重复付款检查（duplicate_payment_check）：用于排查 INV-5001 是否已有历史付款或清账记录，识别重复付款风险。\n\n已提交材料（3 项）：发票（INV-5001）、采购订单（PO-5001）、收货/服务验收记录（GRN-5001）。\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_multiturn_compact",
+          "status": "collecting_materials",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "satisfied"
+            },
+            {
+              "id": "purchase_order",
+              "status": "satisfied"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "satisfied"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 3,
+          "missing_materials": [
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_85b50ba462f3"
+      }
+    ]
+  },
+  {
+    "scenario": "Planner 显式 LLM compact session",
+    "case_id": "eval_planner_compact_session",
+    "pass": true,
+    "bug_notes": [],
+    "action_chain": [
+      "final_answer",
+      "call_tool:rag_search",
+      "call_role:materials_advisor",
+      "final_answer",
+      "call_tool:compact_session",
+      "final_answer"
+    ],
+    "planner_input_raw_leak_check": {
+      "raw_hits": [],
+      "passed": true
+    },
+    "role_context_check": {
+      "hits": [
+        "materials_advisor_rag_context"
+      ],
+      "passed": true
+    },
+    "case_state_delta": {
+      "case_id": "eval_planner_compact_session",
+      "status": "new",
+      "requirements": [
+        {
+          "id": "invoice",
+          "status": "missing"
+        },
+        {
+          "id": "purchase_order",
+          "status": "missing"
+        },
+        {
+          "id": "goods_receipt",
+          "status": "missing"
+        },
+        {
+          "id": "vendor_record",
+          "status": "missing"
+        },
+        {
+          "id": "duplicate_payment_check",
+          "status": "missing"
+        }
+      ],
+      "evidence_count": 0,
+      "missing_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt",
+        "vendor_record",
+        "duplicate_payment_check"
+      ],
+      "risk_flags": []
+    },
+    "final_reply": "已压缩。后续对话使用中文，回复简洁。",
+    "generated_files": [
+      "case_state.json",
+      "conversation.jsonl",
+      "session.json",
+      "traces/artifacts/run_c692d594bf58/art_001_rag_result_rag_search.json",
+      "traces/artifacts/run_c692d594bf58/art_002_role_result_materials_advisor.json",
+      "traces/artifacts/run_da02b5bf3597/art_001_session_compact_compact_session.json",
+      "traces/run_c291de394eb0.json",
+      "traces/run_c291de394eb0/context_manifest_000_planner.json",
+      "traces/run_c692d594bf58.json",
+      "traces/run_c692d594bf58/context_manifest_000_planner.json",
+      "traces/run_c692d594bf58/context_manifest_001_planner.json",
+      "traces/run_c692d594bf58/context_manifest_002_planner.json",
+      "traces/run_c692d594bf58/context_manifest_002_role_materials_advisor.json",
+      "traces/run_da02b5bf3597.json",
+      "traces/run_da02b5bf3597/context_manifest_000_planner.json",
+      "traces/run_da02b5bf3597/context_manifest_001_planner.json"
+    ],
+    "session": {
+      "session_json_exists": true,
+      "turn_count": 3,
+      "session_summary": "用户已创建本地发票付款审查 case（case_id=eval_planner_compact_session），当前五项核心材料（发票、采购订单、收货记录、供应商记录、重复付款检查）均缺失。用户已明确偏好：后续对话使用中文，回复尽量简洁。本工具仅生成本地审查材料，不进入 ERP 流程。",
+      "compact_history_count": 1
+    },
+    "steps": [
+      {
+        "step": 1,
+        "message": "新建一个发票付款审查 case。",
+        "attachments": [],
+        "action_chain": [
+          "final_answer"
+        ],
+        "step_count": 1,
+        "model_calls": 1,
+        "errors": [],
+        "reply": "本地发票付款审查 case 已创建（case_id=eval_planner_compact_session）。当前还没有提交材料；请准备以下五类材料：\n\n1. 发票（invoice）\n2. 采购订单（purchase_order）\n3. 收货/服务验收记录（goods_receipt）\n4. 供应商记录（vendor_record）\n5. 重复付款检查（duplicate_payment_check）\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_planner_compact_session",
+          "status": "new",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "missing"
+            },
+            {
+              "id": "purchase_order",
+              "status": "missing"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 0,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_c291de394eb0"
+      },
+      {
+        "step": 2,
+        "message": "我需要准备什么材料？",
+        "attachments": [],
+        "action_chain": [
+          "call_tool:rag_search",
+          "call_role:materials_advisor",
+          "final_answer"
+        ],
+        "step_count": 3,
+        "model_calls": 4,
+        "errors": [],
+        "reply": "本地发票付款审查 case（case_id=eval_planner_compact_session）已创建，当前五项核心材料均缺失。请按以下标准准备：\n\n1. 发票（invoice）：含发票号码、日期、金额、税额、供应商名称、银行账号等关键字段；建议提供 PDF 或清晰扫描件。\n2. 采购订单（purchase_order）：含 PO 编号、日期、物料/服务明细、单价、数量、金额、供应商信息。\n3. 收货/服务验收记录（goods_receipt）：含 GRN 编号、收货日期、数量、质检状态、仓库/项目确认签字。\n4. 供应商记录（vendor_record）：含供应商主数据、银行信息、付款条款、历史合作记录、资质文件。\n5. 重复付款检查（duplicate_payment_check）：含历史付款记录、清账记录、发票查重结果，用于排查重复付款风险。\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_planner_compact_session",
+          "status": "new",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "missing"
+            },
+            {
+              "id": "purchase_order",
+              "status": "missing"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 0,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_c692d594bf58"
+      },
+      {
+        "step": 3,
+        "message": "请用 LLM 压缩当前 session 上下文，保留我的偏好：后续都用中文、回复尽量简洁。",
+        "attachments": [],
+        "action_chain": [
+          "call_tool:compact_session",
+          "final_answer"
+        ],
+        "step_count": 2,
+        "model_calls": 3,
+        "errors": [],
+        "reply": "已压缩。后续对话使用中文，回复简洁。",
+        "case_state": {
+          "case_id": "eval_planner_compact_session",
+          "status": "new",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "missing"
+            },
+            {
+              "id": "purchase_order",
+              "status": "missing"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 0,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_da02b5bf3597"
+      }
+    ]
+  }
+]

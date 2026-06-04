@@ -1,0 +1,18 @@
+{
+  "name": "长文本粘贴发票材料",
+  "case_id": "eval_long_pasted_invoice",
+  "raw_leak_phrases": ["LONG-RAW-INVOICE-DETAIL-XYZ", "Repeated invoice line marker"],
+  "steps": [
+    {
+      "message": "请审查下面这段很长的发票材料：Invoice INV-LONG-001, Supplier Orion Parts Co., Ltd., Amount 12800.00 CNY, PO PO-5001, LONG-RAW-INVOICE-DETAIL-XYZ. ",
+      "repeat_text": "Repeated invoice line marker. Industrial sensor module OS-88, 16 units, 800 CNY each. ",
+      "repeat_count": 80
+    }
+  ],
+  "expect": {
+    "user_message_artifact": true,
+    "contains_actions": ["call_role:evidence_reviewer", "call_role:case_patch_writer", "write_case_patch"],
+    "min_evidence": 1,
+    "forbid_step_limit": true
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "multi-field conflict with report matrix",
+  "case_id": "eval_multi_field_conflict_report",
+  "steps": [
+    {
+      "message": "Review this payable packet. Amount, quantity, and vendor bank details may not match. Then generate a final report with a conflict matrix.",
+      "attachments": [
+        "samples/cases/enterprise_edge_cases/multi_field_conflict/01_invoice_INV-9301.md",
+        "samples/cases/enterprise_edge_cases/multi_field_conflict/02_purchase_order_PO-9301.md",
+        "samples/cases/enterprise_edge_cases/multi_field_conflict/03_goods_receipt_GRN-9301.md",
+        "samples/cases/enterprise_edge_cases/multi_field_conflict/04_vendor_record_Northwind.md",
+        "samples/cases/enterprise_edge_cases/multi_field_conflict/05_duplicate_payment_check_INV-9301.md"
+      ]
+    },
+    {
+      "message": "Generate the final report. It must not say payable or approved."
+    }
+  ],
+  "expect": {
+    "contains_actions": ["call_tool:read_attachment", "call_role:evidence_reviewer", "call_role:case_patch_writer", "write_case_patch", "call_role:report_writer", "call_tool:write_case_file", "final_answer"],
+    "min_evidence": 5,
+    "case_status_not": "ready_for_report",
+    "requirement_statuses": {
+      "invoice": ["weak", "conflict"],
+      "purchase_order": ["weak", "conflict"],
+      "goods_receipt": ["weak", "conflict"],
+      "vendor_record": ["weak", "conflict"]
+    },
+    "risk_contains_any": ["amount", "bank", "quantity", "12800", "12000", "7799", "6621", "15"],
+    "generated_files": ["reports/final_report.md"],
+    "report_content_contains": ["Claim-to-Evidence", "conflict"],
+    "report_content_not_contains": ["can pay", "payable", "approved for payment"],
+    "forbid_execution_claim": true,
+    "forbid_step_limit": true
+  }
+}

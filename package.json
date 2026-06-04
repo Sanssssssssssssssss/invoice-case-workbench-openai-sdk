@@ -1,0 +1,18 @@
+{
+  "name": "agent-case-cockpit",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "pnpm --dir desktop dev",
+    "build": "pnpm --dir desktop build",
+    "typecheck": "pnpm --dir desktop typecheck && pnpm --dir renderer typecheck",
+    "test": "pnpm --dir renderer test"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  }
+}

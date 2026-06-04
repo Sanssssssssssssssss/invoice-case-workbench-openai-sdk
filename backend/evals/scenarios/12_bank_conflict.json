@@ -1,0 +1,30 @@
+{
+  "name": "供应商银行账号冲突",
+  "case_id": "eval_bank_conflict",
+  "steps": [
+    {
+      "message": "请审查这批材料，特别核对发票上的供应商银行尾号和供应商主数据是否一致。",
+      "attachments": [
+        "samples/cases/enterprise_edge_cases/bank_conflict/01_invoice_INV-9101.md",
+        "samples/cases/enterprise_edge_cases/bank_conflict/02_purchase_order_PO-9101.md",
+        "samples/cases/enterprise_edge_cases/bank_conflict/03_goods_receipt_GRN-9101.md",
+        "samples/cases/enterprise_edge_cases/bank_conflict/04_vendor_record_Meridian.md",
+        "samples/cases/enterprise_edge_cases/bank_conflict/05_duplicate_payment_check_INV-9101.md"
+      ]
+    }
+  ],
+  "expect": {
+    "contains_actions": ["call_tool:read_attachment", "call_role:evidence_reviewer", "call_role:case_patch_writer", "write_case_patch", "final_answer"],
+    "min_evidence": 5,
+    "case_status_not": "ready_for_report",
+    "requirement_statuses": {
+      "vendor_record": ["weak", "conflict"],
+      "invoice": ["weak", "conflict", "satisfied"]
+    },
+    "risk_contains_any": ["银行", "bank", "6621", "7799"],
+    "reply_contains_any": ["银行", "账户", "不一致", "6621", "7799"],
+    "reply_not_contains": ["五项必备材料均已满足", "证据链完整"],
+    "forbid_execution_claim": true,
+    "forbid_step_limit": true
+  }
+}

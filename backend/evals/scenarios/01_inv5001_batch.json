@@ -1,0 +1,24 @@
+{
+  "name": "INV-5001 六附件一次提交",
+  "case_id": "eval_inv5001_batch",
+  "raw_leak_phrases": ["Industrial sensor module OS-88", "Supplier tax ID: 98-7654321"],
+  "steps": [
+    {
+      "message": "请审查这一批发票付款材料，判断证据链是否完整，不要生成报告。",
+      "attachments": [
+        "samples/cases/INV-5001_complete_payment_review/README.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/01_invoice_INV-5001.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/02_purchase_order_PO-5001.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/03_goods_receipt_GRN-5001.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/04_vendor_record_Orion.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/05_duplicate_payment_check_INV-5001.md"
+      ]
+    }
+  ],
+  "expect": {
+    "contains_actions": ["call_tool:read_attachment", "call_role:evidence_reviewer", "call_role:case_patch_writer", "write_case_patch", "final_answer"],
+    "role_context_contains": "attachment_context",
+    "min_evidence": 5,
+    "forbid_step_limit": true
+  }
+}

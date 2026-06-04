@@ -1,0 +1,61 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Python: Create venv",
+      "type": "shell",
+      "command": "python -m venv .venv",
+      "problemMatcher": []
+    },
+    {
+      "label": "Python: Install dependencies",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe -m pip install -r backend\\requirements.txt",
+      "problemMatcher": []
+    },
+    {
+      "label": "Desktop: Install dependencies",
+      "type": "shell",
+      "command": "pnpm install",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: Pytest",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe -m pytest backend\\tests -q",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: Desktop app",
+      "type": "shell",
+      "command": "pnpm dev",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: Legacy Tkinter desktop",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe -m app.desktop",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: API",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: Smoke four flows",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe backend\\scripts\\smoke_four_flows.py",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: Sample file case",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe backend\\scripts\\run_sample_case.py",
+      "problemMatcher": []
+    }
+  ]
+}

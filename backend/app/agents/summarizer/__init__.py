@@ -1,0 +1,1 @@
+"""Artifact summarizer prompt assets."""

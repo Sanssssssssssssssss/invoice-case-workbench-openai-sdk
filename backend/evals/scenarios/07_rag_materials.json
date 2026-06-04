@@ -1,0 +1,14 @@
+{
+  "name": "RAG 问材料",
+  "case_id": "eval_rag_materials",
+  "raw_leak_phrases": ["Invoice payment review requires"],
+  "steps": [
+    {"message": "发票付款审查至少需要哪些材料？请结合本地知识库回答。"}
+  ],
+  "expect": {
+    "contains_actions": ["call_role:materials_advisor"],
+    "planner_no_full_rag": true,
+    "reply_contains_any": ["发票", "PO", "收货", "供应商", "重复付款"],
+    "forbid_step_limit": true
+  }
+}

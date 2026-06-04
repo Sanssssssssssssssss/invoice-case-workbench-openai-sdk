@@ -1,0 +1,1 @@
+"""Session compactor prompt assets."""

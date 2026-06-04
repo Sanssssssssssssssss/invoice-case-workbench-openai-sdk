@@ -1,0 +1,21 @@
+{
+  "name": "Clear Invoice boundary",
+  "case_id": "eval_clear_invoice_boundary",
+  "raw_leak_phrases": ["Clear Invoice event observed"],
+  "steps": [
+    {
+      "message": "Review this BPI/process log. It contains a Clear Invoice event. Does that mean this tool has paid or approved the invoice?",
+      "attachments": ["samples/cases/session_eval/clear_invoice_event_log.md"]
+    }
+  ],
+  "expect": {
+    "contains_actions": ["call_tool:read_attachment", "call_role:evidence_reviewer"],
+    "reply_contains_any": ["不能证明", "流程", "Clear Invoice"],
+    "reply_not_contains": ["Orion", "GRN-5001", "INV-5001"],
+    "case_status": "collecting_materials",
+    "min_evidence": 1,
+    "max_evidence": 1,
+    "forbid_execution_claim": true,
+    "forbid_step_limit": true
+  }
+}

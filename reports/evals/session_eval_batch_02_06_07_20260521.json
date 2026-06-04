@@ -1,0 +1,426 @@
+[
+  {
+    "scenario": "PR-1001 错域六附件",
+    "case_id": "eval_pr1001_wrong_domain",
+    "pass": true,
+    "bug_notes": [],
+    "action_chain": [
+      "call_tool:read_attachment",
+      "call_role:evidence_reviewer",
+      "call_role:case_patch_writer",
+      "write_case_patch",
+      "final_answer"
+    ],
+    "planner_input_raw_leak_check": {
+      "raw_hits": [],
+      "passed": true
+    },
+    "role_context_check": {
+      "hits": [
+        "attachment_context"
+      ],
+      "passed": true
+    },
+    "case_state_delta": {
+      "case_id": "eval_pr1001_wrong_domain",
+      "status": "collecting_materials",
+      "requirements": [
+        {
+          "id": "invoice",
+          "status": "missing"
+        },
+        {
+          "id": "purchase_order",
+          "status": "missing"
+        },
+        {
+          "id": "goods_receipt",
+          "status": "missing"
+        },
+        {
+          "id": "vendor_record",
+          "status": "missing"
+        },
+        {
+          "id": "duplicate_payment_check",
+          "status": "missing"
+        }
+      ],
+      "evidence_count": 1,
+      "missing_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt",
+        "vendor_record",
+        "duplicate_payment_check"
+      ],
+      "risk_flags": [
+        "wrong_workflow_material",
+        "fictional_mock_data",
+        "missing_core_invoice_payment_requirements"
+      ]
+    },
+    "final_reply": "已审查提交的6份文件，本地case已记录。这些文件不能用于当前发票付款审查，存在显著缺口：\n\n【已记录材料】\n- 采购申请审批记录（01_approval_request.md）\n- 预算证据（02_budget_evidence.md）\n- 供应商准入及风险材料（03_vendor_onboarding_and_risk.md）\n- 报价依据（04_quote_price_basis.md）\n- 框架协议（05_framework_agreement.md）\n- 采购政策摘录（06_procurement_policy_excerpt.md）\n\n【核心缺口】\n1. 发票（Invoice）：缺失，无法核对金额、税额、开票日期\n2. 采购订单（PO）：缺失，无法建立采购-付款链路\n3. 收货/服务验收记录（GRN）：缺失，无法确认履约完成\n4. 供应商银行信息核对材料：缺失，无法核验付款账户一致性\n5. 重复付款检查/历史付款清账记录：缺失，无法排查重复付款风险\n\n【风险标记】\n- 当前材料为采购申请阶段文档，非应付账款付款审查所需材料\n- 全部材料为本地模拟数据，非真实ERP导出或供应商原件，业务真实性需人工复核\n\n请补充上述5类核心材料后重新提交。本工具只生成本地审查材料；如需进入ERP流程，请由人工在ERP中处理。",
+    "generated_files": [
+      "case_state.json",
+      "conversation.jsonl",
+      "session.json",
+      "traces/artifacts/run_d70ef11f5ba3/art_001_attachment_batch_read_attachment.json",
+      "traces/artifacts/run_d70ef11f5ba3/art_002_role_result_evidence_reviewer.json",
+      "traces/artifacts/run_d70ef11f5ba3/art_003_role_result_case_patch_writer.json",
+      "traces/artifacts/run_d70ef11f5ba3/art_004_tool_result_write_case_patch.json",
+      "traces/case_audit.jsonl",
+      "traces/run_d70ef11f5ba3.json",
+      "traces/run_d70ef11f5ba3/context_manifest_000_planner.json",
+      "traces/run_d70ef11f5ba3/context_manifest_001_planner.json",
+      "traces/run_d70ef11f5ba3/context_manifest_002_planner.json",
+      "traces/run_d70ef11f5ba3/context_manifest_002_role_evidence_reviewer.json",
+      "traces/run_d70ef11f5ba3/context_manifest_003_planner.json",
+      "traces/run_d70ef11f5ba3/context_manifest_003_role_case_patch_writer.json",
+      "traces/run_d70ef11f5ba3/context_manifest_004_planner.json"
+    ],
+    "session": {
+      "session_json_exists": true,
+      "turn_count": 1,
+      "session_summary": "Session compacted at 2026-05-21T13:50:27.023021+00:00 for case eval_pr1001_wrong_domain. 当前案卷状态为 new；requirements: invoice:missing, purchase_order:missing, goods_receipt:missing, vendor_record:missing, duplicate_payment_check:missing。已接受/可用证据 0 项；被拒绝或不适配证据 0 项。缺口: invoice, purchase_order, goods_receipt, vendor_record, duplicate_payment_check。最近保留 1 轮，较早 0 轮已压缩。",
+      "compact_history_count": 1
+    },
+    "steps": [
+      {
+        "step": 1,
+        "message": "这些文件可以用于当前发票付款审查吗？请仔细审核并说明缺口。",
+        "attachments": [
+          "01_approval_request.md",
+          "02_budget_evidence.md",
+          "03_vendor_onboarding_and_risk.md",
+          "04_quote_price_basis.md",
+          "05_framework_agreement.md",
+          "06_procurement_policy_excerpt.md"
+        ],
+        "action_chain": [
+          "call_tool:read_attachment",
+          "call_role:evidence_reviewer",
+          "call_role:case_patch_writer",
+          "write_case_patch",
+          "final_answer"
+        ],
+        "step_count": 5,
+        "model_calls": 9,
+        "errors": [],
+        "reply": "已审查提交的6份文件，本地case已记录。这些文件不能用于当前发票付款审查，存在显著缺口：\n\n【已记录材料】\n- 采购申请审批记录（01_approval_request.md）\n- 预算证据（02_budget_evidence.md）\n- 供应商准入及风险材料（03_vendor_onboarding_and_risk.md）\n- 报价依据（04_quote_price_basis.md）\n- 框架协议（05_framework_agreement.md）\n- 采购政策摘录（06_procurement_policy_excerpt.md）\n\n【核心缺口】\n1. 发票（Invoice）：缺失，无法核对金额、税额、开票日期\n2. 采购订单（PO）：缺失，无法建立采购-付款链路\n3. 收货/服务验收记录（GRN）：缺失，无法确认履约完成\n4. 供应商银行信息核对材料：缺失，无法核验付款账户一致性\n5. 重复付款检查/历史付款清账记录：缺失，无法排查重复付款风险\n\n【风险标记】\n- 当前材料为采购申请阶段文档，非应付账款付款审查所需材料\n- 全部材料为本地模拟数据，非真实ERP导出或供应商原件，业务真实性需人工复核\n\n请补充上述5类核心材料后重新提交。本工具只生成本地审查材料；如需进入ERP流程，请由人工在ERP中处理。",
+        "case_state": {
+          "case_id": "eval_pr1001_wrong_domain",
+          "status": "collecting_materials",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "missing"
+            },
+            {
+              "id": "purchase_order",
+              "status": "missing"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 1,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": [
+            "wrong_workflow_material",
+            "fictional_mock_data",
+            "missing_core_invoice_payment_requirements"
+          ]
+        },
+        "trace_id": "run_d70ef11f5ba3"
+      }
+    ]
+  },
+  {
+    "scenario": "Clear Invoice boundary",
+    "case_id": "eval_clear_invoice_boundary",
+    "pass": true,
+    "bug_notes": [],
+    "action_chain": [
+      "call_tool:read_attachment",
+      "call_role:evidence_reviewer",
+      "call_role:case_patch_writer",
+      "write_case_patch",
+      "final_answer"
+    ],
+    "planner_input_raw_leak_check": {
+      "raw_hits": [],
+      "passed": true
+    },
+    "role_context_check": {
+      "hits": [
+        "attachment_context"
+      ],
+      "passed": true
+    },
+    "case_state_delta": {
+      "case_id": "eval_clear_invoice_boundary",
+      "status": "collecting_materials",
+      "requirements": [
+        {
+          "id": "invoice",
+          "status": "missing"
+        },
+        {
+          "id": "purchase_order",
+          "status": "missing"
+        },
+        {
+          "id": "goods_receipt",
+          "status": "missing"
+        },
+        {
+          "id": "vendor_record",
+          "status": "missing"
+        },
+        {
+          "id": "duplicate_payment_check",
+          "status": "missing"
+        }
+      ],
+      "evidence_count": 1,
+      "missing_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt",
+        "vendor_record",
+        "duplicate_payment_check"
+      ],
+      "risk_flags": [
+        "process_log_not_source_document",
+        "missing_core_documents_for_payment_review"
+      ]
+    },
+    "final_reply": "不是。Clear Invoice 事件或 process log 只能作为历史流程证据，不能证明付款、批准、过账、路由或提交动作发生。\n\n当前 case 状态：\n- 已记录证据：BPI/process log 1 份（可信度：中）\n- 仍缺材料：发票原件、采购订单、收货记录、供应商主数据、重复付款检查结果\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+    "generated_files": [
+      "case_state.json",
+      "conversation.jsonl",
+      "session.json",
+      "traces/artifacts/run_fd0231c4450f/art_001_attachment_batch_read_attachment.json",
+      "traces/artifacts/run_fd0231c4450f/art_002_role_result_evidence_reviewer.json",
+      "traces/artifacts/run_fd0231c4450f/art_003_role_result_case_patch_writer.json",
+      "traces/artifacts/run_fd0231c4450f/art_004_tool_result_write_case_patch.json",
+      "traces/case_audit.jsonl",
+      "traces/run_fd0231c4450f.json",
+      "traces/run_fd0231c4450f/context_manifest_000_planner.json",
+      "traces/run_fd0231c4450f/context_manifest_001_planner.json",
+      "traces/run_fd0231c4450f/context_manifest_002_planner.json",
+      "traces/run_fd0231c4450f/context_manifest_002_role_evidence_reviewer.json",
+      "traces/run_fd0231c4450f/context_manifest_003_planner.json",
+      "traces/run_fd0231c4450f/context_manifest_003_role_case_patch_writer.json",
+      "traces/run_fd0231c4450f/context_manifest_004_planner.json"
+    ],
+    "session": {
+      "session_json_exists": true,
+      "turn_count": 1,
+      "session_summary": "",
+      "compact_history_count": 0
+    },
+    "steps": [
+      {
+        "step": 1,
+        "message": "Review this BPI/process log. It contains a Clear Invoice event. Does that mean this tool has paid or approved the invoice?",
+        "attachments": [
+          "clear_invoice_event_log.md"
+        ],
+        "action_chain": [
+          "call_tool:read_attachment",
+          "call_role:evidence_reviewer",
+          "call_role:case_patch_writer",
+          "write_case_patch",
+          "final_answer"
+        ],
+        "step_count": 5,
+        "model_calls": 9,
+        "errors": [],
+        "reply": "不是。Clear Invoice 事件或 process log 只能作为历史流程证据，不能证明付款、批准、过账、路由或提交动作发生。\n\n当前 case 状态：\n- 已记录证据：BPI/process log 1 份（可信度：中）\n- 仍缺材料：发票原件、采购订单、收货记录、供应商主数据、重复付款检查结果\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_clear_invoice_boundary",
+          "status": "collecting_materials",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "missing"
+            },
+            {
+              "id": "purchase_order",
+              "status": "missing"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 1,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": [
+            "process_log_not_source_document",
+            "missing_core_documents_for_payment_review"
+          ]
+        },
+        "trace_id": "run_fd0231c4450f"
+      }
+    ]
+  },
+  {
+    "scenario": "RAG 问材料",
+    "case_id": "eval_rag_materials",
+    "pass": true,
+    "bug_notes": [],
+    "action_chain": [
+      "call_tool:rag_search",
+      "call_role:materials_advisor",
+      "final_answer"
+    ],
+    "planner_input_raw_leak_check": {
+      "raw_hits": [],
+      "passed": true
+    },
+    "role_context_check": {
+      "hits": [
+        "materials_advisor_rag_context"
+      ],
+      "passed": true
+    },
+    "case_state_delta": {
+      "case_id": "eval_rag_materials",
+      "status": "new",
+      "requirements": [
+        {
+          "id": "invoice",
+          "status": "missing"
+        },
+        {
+          "id": "purchase_order",
+          "status": "missing"
+        },
+        {
+          "id": "goods_receipt",
+          "status": "missing"
+        },
+        {
+          "id": "vendor_record",
+          "status": "missing"
+        },
+        {
+          "id": "duplicate_payment_check",
+          "status": "missing"
+        }
+      ],
+      "evidence_count": 0,
+      "missing_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt",
+        "vendor_record",
+        "duplicate_payment_check"
+      ],
+      "risk_flags": []
+    },
+    "final_reply": "根据本地知识库，发票付款审查至少需要以下五类核心材料：\n\n1. 发票（Invoice）：需包含发票号码、日期、金额、税额、供应商信息、付款条款等关键字段。\n2. 采购订单（Purchase Order, PO）：需包含PO编号、供应商、物料/服务描述、数量、单价、金额、审批状态。\n3. 收货/服务验收记录（GRN/Service Receipt）：证明货物已收或服务已完成，需包含收货日期、数量、质检状态。\n4. 供应商记录（Vendor Record）：含供应商主数据、银行账户信息、付款条款、供应商状态（活跃/冻结）。\n5. 重复付款检查（Duplicate Payment Check）：核对历史付款记录、清账记录，排查同一发票多次付款风险。\n\n当前 case 尚未提交任何材料。请准备上述材料后，可通过粘贴内容或上传附件方式提交审查。\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+    "generated_files": [
+      "case_state.json",
+      "conversation.jsonl",
+      "session.json",
+      "traces/artifacts/run_7fc209156083/art_001_rag_result_rag_search.json",
+      "traces/artifacts/run_7fc209156083/art_002_role_result_materials_advisor.json",
+      "traces/run_7fc209156083.json",
+      "traces/run_7fc209156083/context_manifest_000_planner.json",
+      "traces/run_7fc209156083/context_manifest_001_planner.json",
+      "traces/run_7fc209156083/context_manifest_002_planner.json",
+      "traces/run_7fc209156083/context_manifest_002_role_materials_advisor.json"
+    ],
+    "session": {
+      "session_json_exists": true,
+      "turn_count": 1,
+      "session_summary": "",
+      "compact_history_count": 0
+    },
+    "steps": [
+      {
+        "step": 1,
+        "message": "发票付款审查至少需要哪些材料？请结合本地知识库回答。",
+        "attachments": [],
+        "action_chain": [
+          "call_tool:rag_search",
+          "call_role:materials_advisor",
+          "final_answer"
+        ],
+        "step_count": 3,
+        "model_calls": 4,
+        "errors": [],
+        "reply": "根据本地知识库，发票付款审查至少需要以下五类核心材料：\n\n1. 发票（Invoice）：需包含发票号码、日期、金额、税额、供应商信息、付款条款等关键字段。\n2. 采购订单（Purchase Order, PO）：需包含PO编号、供应商、物料/服务描述、数量、单价、金额、审批状态。\n3. 收货/服务验收记录（GRN/Service Receipt）：证明货物已收或服务已完成，需包含收货日期、数量、质检状态。\n4. 供应商记录（Vendor Record）：含供应商主数据、银行账户信息、付款条款、供应商状态（活跃/冻结）。\n5. 重复付款检查（Duplicate Payment Check）：核对历史付款记录、清账记录，排查同一发票多次付款风险。\n\n当前 case 尚未提交任何材料。请准备上述材料后，可通过粘贴内容或上传附件方式提交审查。\n\n本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_rag_materials",
+          "status": "new",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "missing"
+            },
+            {
+              "id": "purchase_order",
+              "status": "missing"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "missing"
+            },
+            {
+              "id": "vendor_record",
+              "status": "missing"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "missing"
+            }
+          ],
+          "evidence_count": 0,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": []
+        },
+        "trace_id": "run_7fc209156083"
+      }
+    ]
+  }
+]

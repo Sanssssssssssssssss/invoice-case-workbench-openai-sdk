@@ -1,0 +1,146 @@
+[
+  {
+    "scenario": "supplier bank change email risk",
+    "case_id": "eval_bank_change_email",
+    "pass": true,
+    "bug_notes": [],
+    "action_chain": [
+      "call_tool:read_attachment",
+      "call_role:evidence_reviewer",
+      "call_role:case_patch_writer",
+      "write_case_patch",
+      "final_answer"
+    ],
+    "planner_input_raw_leak_check": {
+      "raw_hits": [],
+      "passed": true
+    },
+    "role_context_check": {
+      "hits": [
+        "attachment_context"
+      ],
+      "passed": true
+    },
+    "case_state_delta": {
+      "case_id": "eval_bank_change_email",
+      "status": "collecting_materials",
+      "requirements": [
+        {
+          "id": "invoice",
+          "status": "conflict"
+        },
+        {
+          "id": "purchase_order",
+          "status": "satisfied"
+        },
+        {
+          "id": "goods_receipt",
+          "status": "satisfied"
+        },
+        {
+          "id": "vendor_record",
+          "status": "conflict"
+        },
+        {
+          "id": "duplicate_payment_check",
+          "status": "satisfied"
+        }
+      ],
+      "evidence_count": 6,
+      "missing_materials": [
+        "invoice",
+        "vendor_record"
+      ],
+      "risk_flags": [
+        "BANK_MISMATCH_INVOICE_VS_VENDOR_MASTER",
+        "EMAIL_CLAIM_UNVERIFIED_BANK_CHANGE"
+      ]
+    },
+    "final_reply": "本地审查材料已保存。当前 case 共 6 项证据：发票、采购订单、收货单、供应商主数据、重复付款检查及供应商邮件。风险标记：银行账户信息冲突（发票尾号 9911 vs 主数据 3344），供应商邮件变更请求未经正式审批，可信度为 user_statement。仍缺材料：经正式审批的供应商银行账户变更确认函、发票银行账户一致性核实。建议通过官方渠道独立验证该银行账户变更请求。本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+    "generated_files": [
+      "case_state.json",
+      "conversation.jsonl",
+      "session.json",
+      "traces/artifacts/run_71a8a4ba1a19/art_001_attachment_batch_read_attachment.json",
+      "traces/artifacts/run_71a8a4ba1a19/art_002_role_result_evidence_reviewer.json",
+      "traces/artifacts/run_71a8a4ba1a19/art_003_role_result_case_patch_writer.json",
+      "traces/artifacts/run_71a8a4ba1a19/art_004_tool_result_write_case_patch.json",
+      "traces/case_audit.jsonl",
+      "traces/run_71a8a4ba1a19.json",
+      "traces/run_71a8a4ba1a19/context_manifest_000_planner.json",
+      "traces/run_71a8a4ba1a19/context_manifest_001_planner.json",
+      "traces/run_71a8a4ba1a19/context_manifest_002_planner.json",
+      "traces/run_71a8a4ba1a19/context_manifest_002_role_evidence_reviewer.json",
+      "traces/run_71a8a4ba1a19/context_manifest_003_planner.json",
+      "traces/run_71a8a4ba1a19/context_manifest_003_role_case_patch_writer.json",
+      "traces/run_71a8a4ba1a19/context_manifest_004_planner.json"
+    ],
+    "session": {
+      "session_json_exists": true,
+      "turn_count": 1,
+      "session_summary": "Session compacted at 2026-05-21T13:41:08.932093+00:00 for case eval_bank_change_email. 当前案卷状态为 new；requirements: invoice:missing, purchase_order:missing, goods_receipt:missing, vendor_record:missing, duplicate_payment_check:missing。已接受/可用证据 0 项；被拒绝或不适配证据 0 项。缺口: invoice, purchase_order, goods_receipt, vendor_record, duplicate_payment_check。最近保留 1 轮，较早 0 轮已压缩。",
+      "compact_history_count": 1
+    },
+    "steps": [
+      {
+        "step": 1,
+        "message": "Review these materials. There is an email asking us to use a new bank account. Treat email claims carefully.",
+        "attachments": [
+          "01_invoice_INV-9401.md",
+          "02_purchase_order_PO-9401.md",
+          "03_goods_receipt_GRN-9401.md",
+          "04_vendor_record_Alpine.md",
+          "05_duplicate_payment_check_INV-9401.md",
+          "06_supplier_email_bank_change.md"
+        ],
+        "action_chain": [
+          "call_tool:read_attachment",
+          "call_role:evidence_reviewer",
+          "call_role:case_patch_writer",
+          "write_case_patch",
+          "final_answer"
+        ],
+        "step_count": 5,
+        "model_calls": 9,
+        "errors": [],
+        "reply": "本地审查材料已保存。当前 case 共 6 项证据：发票、采购订单、收货单、供应商主数据、重复付款检查及供应商邮件。风险标记：银行账户信息冲突（发票尾号 9911 vs 主数据 3344），供应商邮件变更请求未经正式审批，可信度为 user_statement。仍缺材料：经正式审批的供应商银行账户变更确认函、发票银行账户一致性核实。建议通过官方渠道独立验证该银行账户变更请求。本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_bank_change_email",
+          "status": "collecting_materials",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "conflict"
+            },
+            {
+              "id": "purchase_order",
+              "status": "satisfied"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "satisfied"
+            },
+            {
+              "id": "vendor_record",
+              "status": "conflict"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "satisfied"
+            }
+          ],
+          "evidence_count": 6,
+          "missing_materials": [
+            "invoice",
+            "vendor_record"
+          ],
+          "risk_flags": [
+            "BANK_MISMATCH_INVOICE_VS_VENDOR_MASTER",
+            "EMAIL_CLAIM_UNVERIFIED_BANK_CHANGE"
+          ]
+        },
+        "trace_id": "run_71a8a4ba1a19"
+      }
+    ]
+  }
+]

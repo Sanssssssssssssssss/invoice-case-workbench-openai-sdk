@@ -1,0 +1,67 @@
+{
+  "name": "金额冲突五附件",
+  "case_id": "eval_amount_conflict",
+  "steps": [
+    {
+      "message": "请审查这批付款材料，重点看发票金额和PO金额是否一致，不要生成报告。",
+      "attachments": [
+        "samples/cases/enterprise_edge_cases/amount_conflict/01_invoice_INV-9001.md",
+        "samples/cases/enterprise_edge_cases/amount_conflict/02_purchase_order_PO-9001.md",
+        "samples/cases/enterprise_edge_cases/amount_conflict/03_goods_receipt_GRN-9001.md",
+        "samples/cases/enterprise_edge_cases/amount_conflict/04_vendor_record_Contoso.md",
+        "samples/cases/enterprise_edge_cases/amount_conflict/05_duplicate_payment_check_INV-9001.md"
+      ]
+    }
+  ],
+  "expect": {
+    "contains_actions": [
+      "call_tool:read_attachment",
+      "call_role:evidence_reviewer",
+      "call_role:case_patch_writer",
+      "write_case_patch",
+      "final_answer"
+    ],
+    "min_evidence": 5,
+    "case_status_not": "ready_for_report",
+    "requirement_statuses": {
+      "invoice": [
+        "weak",
+        "conflict",
+        "satisfied"
+      ],
+      "purchase_order": [
+        "weak",
+        "conflict"
+      ],
+      "goods_receipt_or_service_acceptance": "satisfied",
+      "vendor_identity": "satisfied",
+      "duplicate_payment_screen": "satisfied",
+      "amount_total": "conflict"
+    },
+    "risk_contains_any": [
+      "金额",
+      "amount",
+      "12800",
+      "13800"
+    ],
+    "reply_contains_any": [
+      "1000",
+      "1,000",
+      "12,800",
+      "13,800",
+      "12800",
+      "13800"
+    ],
+    "reply_contains_all": [
+      "CNY"
+    ],
+    "reply_not_contains": [
+      "五项必备材料均已满足",
+      "证据链完整",
+      "1,600",
+      "1600"
+    ],
+    "forbid_execution_claim": true,
+    "forbid_step_limit": true
+  }
+}

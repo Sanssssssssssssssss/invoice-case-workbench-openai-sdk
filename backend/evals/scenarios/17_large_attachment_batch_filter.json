@@ -1,0 +1,47 @@
+{
+  "name": "large attachment batch filters irrelevant files",
+  "case_id": "eval_large_attachment_batch_filter",
+  "steps": [
+    {
+      "message": "I uploaded 20 files. Only record valid invoice payment review evidence; ignore irrelevant policy, chat, brochure, forecast, and PR files.",
+      "attachments": [
+        "samples/cases/INV-5001_complete_payment_review/evidence/01_invoice_INV-5001.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/02_purchase_order_PO-5001.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/03_goods_receipt_GRN-5001.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/04_vendor_record_Orion.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/05_duplicate_payment_check_INV-5001.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_01_travel_policy.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_02_meeting_notes.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_03_quote_draft.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_04_budget_note.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_05_delivery_schedule.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_06_supplier_brochure.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_07_email_thread.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_08_tax_article.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_09_packing_photo_ocr.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_10_pr_approval.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_11_vendor_onboarding_note.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_12_internal_chat.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_13_receipt_forecast.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_14_supplier_catalog.md",
+        "samples/cases/enterprise_edge_cases/large_batch/irrelevant_15_random_log.md"
+      ]
+    }
+  ],
+  "expect": {
+    "contains_actions": ["call_tool:read_attachment", "call_role:evidence_reviewer", "call_role:case_patch_writer", "write_case_patch", "final_answer"],
+    "min_evidence": 5,
+    "max_evidence": 8,
+    "case_status": "ready_for_report",
+    "requirement_statuses": {
+      "invoice": "satisfied",
+      "purchase_order": "satisfied",
+      "goods_receipt": "satisfied",
+      "vendor_record": "satisfied",
+      "duplicate_payment_check": "satisfied"
+    },
+    "reply_not_contains": ["all 20", "20 evidence"],
+    "forbid_execution_claim": true,
+    "forbid_step_limit": true
+  }
+}

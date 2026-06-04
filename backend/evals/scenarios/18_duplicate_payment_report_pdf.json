@@ -1,0 +1,46 @@
+{
+  "name": "重复付款风险前置最终报告PDF",
+  "case_id": "eval_duplicate_payment_report_pdf",
+  "steps": [
+    {
+      "message": "请审查这批材料，重点看重复付款检查是否有命中。",
+      "attachments": [
+        "samples/cases/enterprise_edge_cases/duplicate_found/01_invoice_INV-9201.md",
+        "samples/cases/enterprise_edge_cases/duplicate_found/02_purchase_order_PO-9201.md",
+        "samples/cases/enterprise_edge_cases/duplicate_found/03_goods_receipt_GRN-9201.md",
+        "samples/cases/enterprise_edge_cases/duplicate_found/04_vendor_record_Apex.md",
+        "samples/cases/enterprise_edge_cases/duplicate_found/05_duplicate_payment_check_INV-9201.md"
+      ]
+    },
+    {
+      "message": "请用中文生成最终报告和 PDF，把重复付款风险写在最前面，并把原文件截图放进 PDF。"
+    }
+  ],
+  "expect": {
+    "contains_actions": [
+      "call_tool:read_attachment",
+      "call_role:evidence_reviewer",
+      "call_role:case_patch_writer",
+      "write_case_patch",
+      "call_role:report_writer",
+      "call_tool:write_case_file",
+      "call_tool:render_pdf",
+      "final_answer"
+    ],
+    "min_evidence": 5,
+    "case_status_not": "ready_for_report",
+    "requirement_statuses": {
+      "duplicate_payment_check": "conflict"
+    },
+    "risk_contains_any": ["duplicate", "PAY-2026-4431", "CLR-2026-4431", "重复付款"],
+    "generated_files": [
+      "reports/final_report.md",
+      "reports/final_report.pdf",
+      "reports/assets/evidence_snapshots/05_05_duplicate_payment_check_INV-9201.png"
+    ],
+    "report_content_contains": ["本轮请求与审查范围", "提交材料总览", "风险速览", "重复付款", "证据截图索引", "ev_005"],
+    "report_content_not_contains": ["主管复核", "人工复核", "本工具只生成本地审查材料", "已付款", "已支付", "可付款", "可支付", "无保留", "✓", "✗"],
+    "forbid_execution_claim": true,
+    "forbid_step_limit": true
+  }
+}

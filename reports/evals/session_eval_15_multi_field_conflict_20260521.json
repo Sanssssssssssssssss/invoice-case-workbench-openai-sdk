@@ -1,0 +1,224 @@
+[
+  {
+    "scenario": "multi-field conflict with report matrix",
+    "case_id": "eval_multi_field_conflict_report",
+    "pass": true,
+    "bug_notes": [],
+    "action_chain": [
+      "call_tool:read_attachment",
+      "call_role:evidence_reviewer",
+      "call_role:case_patch_writer",
+      "write_case_patch",
+      "final_answer",
+      "call_role:report_writer",
+      "call_tool:write_case_file",
+      "final_answer"
+    ],
+    "planner_input_raw_leak_check": {
+      "raw_hits": [],
+      "passed": true
+    },
+    "role_context_check": {
+      "hits": [
+        "attachment_context"
+      ],
+      "passed": true
+    },
+    "case_state_delta": {
+      "case_id": "eval_multi_field_conflict_report",
+      "status": "collecting_materials",
+      "requirements": [
+        {
+          "id": "invoice",
+          "status": "conflict"
+        },
+        {
+          "id": "purchase_order",
+          "status": "conflict"
+        },
+        {
+          "id": "goods_receipt",
+          "status": "conflict"
+        },
+        {
+          "id": "vendor_record",
+          "status": "conflict"
+        },
+        {
+          "id": "duplicate_payment_check",
+          "status": "conflict"
+        }
+      ],
+      "evidence_count": 5,
+      "missing_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt",
+        "vendor_record",
+        "duplicate_payment_check"
+      ],
+      "risk_flags": [
+        "金额冲突：发票12800.00 CNY超PO批准12000.00 CNY，需价格变更审批",
+        "单价冲突：发票单价800.00 CNY高于PO单价750.00 CNY，需核实调价依据",
+        "数量冲突：收货15件少于发票/PO 16件，需核实分批收货或发票未按实收开具",
+        "银行账户冲突：发票银行末四位6621与主数据7799不一致，需核实账户变更授权或欺诈风险",
+        "三项匹配失败：金额、单价、数量、银行账号均存在冲突，不建议付款"
+      ]
+    },
+    "final_reply": "报告已生成，文件路径：reports/manager_report.md。报告已避免执行性表述，仅用于本地人工复核。当前 case 状态为 collecting_materials，五项材料均存在字段冲突待澄清。本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+    "generated_files": [
+      "case_state.json",
+      "conversation.jsonl",
+      "reports/manager_report.md",
+      "session.json",
+      "traces/artifacts/run_d4b21ca09d6d/art_001_attachment_batch_read_attachment.json",
+      "traces/artifacts/run_d4b21ca09d6d/art_002_role_result_evidence_reviewer.json",
+      "traces/artifacts/run_d4b21ca09d6d/art_003_role_result_case_patch_writer.json",
+      "traces/artifacts/run_d4b21ca09d6d/art_004_tool_result_write_case_patch.json",
+      "traces/artifacts/run_f32fa0fd7960/art_001_report_markdown_report_writer.json",
+      "traces/artifacts/run_f32fa0fd7960/art_002_tool_result_write_case_file.json",
+      "traces/case_audit.jsonl",
+      "traces/run_d4b21ca09d6d.json",
+      "traces/run_d4b21ca09d6d/context_manifest_000_planner.json",
+      "traces/run_d4b21ca09d6d/context_manifest_001_planner.json",
+      "traces/run_d4b21ca09d6d/context_manifest_002_planner.json",
+      "traces/run_d4b21ca09d6d/context_manifest_002_role_evidence_reviewer.json",
+      "traces/run_d4b21ca09d6d/context_manifest_003_planner.json",
+      "traces/run_d4b21ca09d6d/context_manifest_003_role_case_patch_writer.json",
+      "traces/run_d4b21ca09d6d/context_manifest_004_planner.json",
+      "traces/run_f32fa0fd7960.json",
+      "traces/run_f32fa0fd7960/context_manifest_000_planner.json",
+      "traces/run_f32fa0fd7960/context_manifest_001_planner.json",
+      "traces/run_f32fa0fd7960/context_manifest_001_role_report_writer.json",
+      "traces/run_f32fa0fd7960/context_manifest_002_planner.json"
+    ],
+    "session": {
+      "session_json_exists": true,
+      "turn_count": 2,
+      "session_summary": "Session compacted at 2026-05-21T13:40:29.268023+00:00 for case eval_multi_field_conflict_report. 当前案卷状态为 collecting_materials；requirements: invoice:conflict, purchase_order:conflict, goods_receipt:conflict, vendor_record:conflict, duplicate_payment_check:conflict。已接受/可用证据 5 项；被拒绝或不适配证据 0 项。缺口: invoice, purchase_order, goods_receipt, vendor_record, duplicate_payment_check。最近保留 2 轮，较早 0 轮已压缩。",
+      "compact_history_count": 3
+    },
+    "steps": [
+      {
+        "step": 1,
+        "message": "Review this payable packet. Amount, quantity, and vendor bank details may not match. Then generate a manager report with a conflict matrix.",
+        "attachments": [
+          "01_invoice_INV-9301.md",
+          "02_purchase_order_PO-9301.md",
+          "03_goods_receipt_GRN-9301.md",
+          "04_vendor_record_Northwind.md",
+          "05_duplicate_payment_check_INV-9301.md"
+        ],
+        "action_chain": [
+          "call_tool:read_attachment",
+          "call_role:evidence_reviewer",
+          "call_role:case_patch_writer",
+          "write_case_patch",
+          "final_answer"
+        ],
+        "step_count": 5,
+        "model_calls": 9,
+        "errors": [],
+        "reply": "本轮回复与 case_state 不一致，已按 truth source 改写。当前 case 状态为 collecting_materials；evidence_count=5；requirements: invoice=conflict, purchase_order=conflict, goods_receipt=conflict, vendor_record=conflict, duplicate_payment_check=conflict；仍缺材料：invoice, purchase_order, goods_receipt, vendor_record, duplicate_payment_check。本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。 本轮已先完成证据审查和本地 case 更新；报告生成请在下一轮明确请求后执行。",
+        "case_state": {
+          "case_id": "eval_multi_field_conflict_report",
+          "status": "collecting_materials",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "conflict"
+            },
+            {
+              "id": "purchase_order",
+              "status": "conflict"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "conflict"
+            },
+            {
+              "id": "vendor_record",
+              "status": "conflict"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "conflict"
+            }
+          ],
+          "evidence_count": 5,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": [
+            "金额冲突：发票12800.00 CNY超PO批准12000.00 CNY，需价格变更审批",
+            "单价冲突：发票单价800.00 CNY高于PO单价750.00 CNY，需核实调价依据",
+            "数量冲突：收货15件少于发票/PO 16件，需核实分批收货或发票未按实收开具",
+            "银行账户冲突：发票银行末四位6621与主数据7799不一致，需核实账户变更授权或欺诈风险",
+            "三项匹配失败：金额、单价、数量、银行账号均存在冲突，不建议付款"
+          ]
+        },
+        "trace_id": "run_d4b21ca09d6d"
+      },
+      {
+        "step": 2,
+        "message": "Generate the manager report. It must be for human review only and must not say payable or approved.",
+        "attachments": [],
+        "action_chain": [
+          "call_role:report_writer",
+          "call_tool:write_case_file",
+          "final_answer"
+        ],
+        "step_count": 3,
+        "model_calls": 4,
+        "errors": [],
+        "reply": "报告已生成，文件路径：reports/manager_report.md。报告已避免执行性表述，仅用于本地人工复核。当前 case 状态为 collecting_materials，五项材料均存在字段冲突待澄清。本工具只生成本地审查材料；如需进入 ERP 流程，请由人工在 ERP 中处理。",
+        "case_state": {
+          "case_id": "eval_multi_field_conflict_report",
+          "status": "collecting_materials",
+          "requirements": [
+            {
+              "id": "invoice",
+              "status": "conflict"
+            },
+            {
+              "id": "purchase_order",
+              "status": "conflict"
+            },
+            {
+              "id": "goods_receipt",
+              "status": "conflict"
+            },
+            {
+              "id": "vendor_record",
+              "status": "conflict"
+            },
+            {
+              "id": "duplicate_payment_check",
+              "status": "conflict"
+            }
+          ],
+          "evidence_count": 5,
+          "missing_materials": [
+            "invoice",
+            "purchase_order",
+            "goods_receipt",
+            "vendor_record",
+            "duplicate_payment_check"
+          ],
+          "risk_flags": [
+            "金额冲突：发票12800.00 CNY超PO批准12000.00 CNY，需价格变更审批",
+            "单价冲突：发票单价800.00 CNY高于PO单价750.00 CNY，需核实调价依据",
+            "数量冲突：收货15件少于发票/PO 16件，需核实分批收货或发票未按实收开具",
+            "银行账户冲突：发票银行末四位6621与主数据7799不一致，需核实账户变更授权或欺诈风险",
+            "三项匹配失败：金额、单价、数量、银行账号均存在冲突，不建议付款"
+          ]
+        },
+        "trace_id": "run_f32fa0fd7960"
+      }
+    ]
+  }
+]

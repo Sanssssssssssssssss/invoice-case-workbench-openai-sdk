@@ -1,0 +1,71 @@
+@baseUrl = http://127.0.0.1:8010
+
+### Health
+GET {{baseUrl}}/health
+
+### Create a case
+POST {{baseUrl}}/api/agent/turn
+Content-Type: application/json
+
+{
+  "case_id": "case_http_001",
+  "message": "帮我新建一个发票付款审查 case。",
+  "attachments": []
+}
+
+### Ask required materials
+POST {{baseUrl}}/api/agent/turn
+Content-Type: application/json
+
+{
+  "case_id": "case_http_001",
+  "message": "我现在需要准备什么？",
+  "attachments": []
+}
+
+### Submit invoice text
+POST {{baseUrl}}/api/agent/turn
+Content-Type: application/json
+
+{
+  "case_id": "case_http_001",
+  "message": "这是发票 INV-001，金额 10000 CNY，供应商 ABC。",
+  "attachments": []
+}
+
+### Submit invoice attachment
+POST {{baseUrl}}/api/cases/case_http_001/attachments
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="01_invoice_INV-2026-001.md"
+Content-Type: text/markdown
+
+< ../samples/cases/invoice_payment_case_001/evidence/01_invoice_INV-2026-001.md
+--WebAppBoundary--
+
+### Review uploaded attachment
+POST {{baseUrl}}/api/agent/turn
+Content-Type: application/json
+
+{
+  "case_id": "case_http_001",
+  "message": "请审查我提交的材料文件：01_invoice_INV-2026-001.md",
+  "attachments": [
+    {
+      "name": "01_invoice_INV-2026-001.md",
+      "path": "E:\\GPTProject2\\NewERPAgnent\\samples\\cases\\invoice_payment_case_001\\evidence\\01_invoice_INV-2026-001.md",
+      "content_type": "text/markdown"
+    }
+  ]
+}
+
+### Generate report
+POST {{baseUrl}}/api/agent/turn
+Content-Type: application/json
+
+{
+  "case_id": "case_http_001",
+  "message": "生成报告。",
+  "attachments": []
+}

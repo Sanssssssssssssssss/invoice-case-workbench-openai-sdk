@@ -1,0 +1,34 @@
+{
+  "name": "报告生成 content_ref",
+  "case_id": "eval_report_content_ref",
+  "raw_leak_phrases": ["# Manager Invoice Payment Review Report", "完整报告正文"],
+  "steps": [
+    {
+      "message": "请审查这一批完整材料。",
+      "attachments": [
+        "samples/cases/INV-5001_complete_payment_review/evidence/01_invoice_INV-5001.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/02_purchase_order_PO-5001.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/03_goods_receipt_GRN-5001.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/04_vendor_record_Orion.md",
+        "samples/cases/INV-5001_complete_payment_review/evidence/05_duplicate_payment_check_INV-5001.md"
+      ]
+    },
+    {"message": "请生成最终报告，并渲染 PDF。"}
+  ],
+  "expect": {
+    "contains_actions": ["call_role:report_writer", "call_tool:write_case_file", "call_tool:render_pdf"],
+    "write_case_file_uses_content_ref": true,
+    "generated_files": ["reports/final_report.md", "reports/final_report.pdf"],
+    "min_evidence": 5,
+    "case_status": "ready_for_report",
+    "requirement_statuses": {
+      "invoice": "satisfied",
+      "purchase_order": "satisfied",
+      "goods_receipt": "satisfied",
+      "vendor_record": "satisfied",
+      "duplicate_payment_check": "satisfied"
+    },
+    "report_content_not_contains": ["状态不一致风险", "Derived conflict signal"],
+    "forbid_step_limit": true
+  }
+}

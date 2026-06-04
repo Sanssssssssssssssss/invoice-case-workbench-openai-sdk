@@ -1,0 +1,436 @@
+{
+  "created_at": "2026-05-21T12:33:50.477179+00:00",
+  "embedding_channel": "fused/vector+lexical",
+  "metrics": {
+    "query_count": 12,
+    "hit_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_4": 1.0,
+    "mrr": 1.0
+  },
+  "rows": [
+    {
+      "id": "Q01",
+      "query": "What materials are required for invoice payment review: invoice, PO, goods receipt, vendor record, duplicate payment check?",
+      "gold": [
+        "required_materials.md"
+      ],
+      "status": "success",
+      "hits": [
+        "required_materials.md",
+        "required_materials.md",
+        "report_template.md",
+        "clear_invoice_boundary.md"
+      ],
+      "scores": [
+        7.0135,
+        5.4704,
+        5.4338,
+        5.2267
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "- Invoice: invoice number, supplier name, invoice date, currency, total amount, tax amount if relevant, payment terms, bank or remittance details, and line descriptions.\n- Purchase order: PO number, supplier, approved bu",
+        "1. Invoice should tie to PO by supplier, PO number, currency, and line-level amount where available.\n2. PO should tie to GRN or service receipt by PO number, item/service, quantity, and receipt or acceptance date.\n3. Ven"
+      ]
+    },
+    {
+      "id": "Q02",
+      "query": "Which fields should be extracted from an invoice, purchase order, goods receipt, vendor record and duplicate payment check?",
+      "gold": [
+        "required_materials.md"
+      ],
+      "status": "success",
+      "hits": [
+        "required_materials.md",
+        "required_materials.md",
+        "report_template.md",
+        "bpi_process_review.md"
+      ],
+      "scores": [
+        5.5192,
+        5.3341,
+        4.9596,
+        4.9148
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "- Invoice: invoice number, supplier name, invoice date, currency, total amount, tax amount if relevant, payment terms, bank or remittance details, and line descriptions.\n- Purchase order: PO number, supplier, approved bu",
+        "1. Invoice should tie to PO by supplier, PO number, currency, and line-level amount where available.\n2. PO should tie to GRN or service receipt by PO number, item/service, quantity, and receipt or acceptance date.\n3. Ven"
+      ]
+    },
+    {
+      "id": "Q03",
+      "query": "If a user pasted invoice text, is it weaker than an original ERP export or PDF?",
+      "gold": [
+        "required_materials.md"
+      ],
+      "status": "success",
+      "hits": [
+        "required_materials.md",
+        "clear_invoice_boundary.md",
+        "report_template.md",
+        "bpi_process_review.md"
+      ],
+      "scores": [
+        4.9335,
+        4.3181,
+        3.7467,
+        3.5444
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "User-pasted text can be useful, but it is weaker than an original PDF, ERP export, or system record because provenance and completeness are not directly verifiable.",
+        "In ERP and process-mining contexts, a Clear Invoice event is historical evidence that an invoice was cleared in a source system or event log. It is not a local permission for this workbench agent to claim payment or appr"
+      ]
+    },
+    {
+      "id": "Q04",
+      "query": "Does a Clear Invoice event prove that this agent paid or approved the invoice?",
+      "gold": [
+        "clear_invoice_boundary.md"
+      ],
+      "status": "success",
+      "hits": [
+        "clear_invoice_boundary.md",
+        "bpi_process_review.md",
+        "report_template.md",
+        "required_materials.md"
+      ],
+      "scores": [
+        7.1904,
+        5.0369,
+        4.754,
+        4.0816
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "In ERP and process-mining contexts, a Clear Invoice event is historical evidence that an invoice was cleared in a source system or event log. It is not a local permission for this workbench agent to claim payment or appr",
+        "Process evidence cannot by itself prove that the local agent has approved, paid, routed, posted, or submitted anything. It also cannot replace source business materials such as invoice, PO, GRN, vendor record, or duplica"
+      ]
+    },
+    {
+      "id": "Q05",
+      "query": "Allowed and disallowed wording for Clear Invoice event and ERP payment approval claims",
+      "gold": [
+        "clear_invoice_boundary.md"
+      ],
+      "status": "success",
+      "hits": [
+        "clear_invoice_boundary.md",
+        "required_materials.md",
+        "bpi_process_review.md",
+        "report_template.md"
+      ],
+      "scores": [
+        6.7548,
+        4.3236,
+        4.2709,
+        4.0811
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "In ERP and process-mining contexts, a Clear Invoice event is historical evidence that an invoice was cleared in a source system or event log. It is not a local permission for this workbench agent to claim payment or appr",
+        "- Invoice: invoice number, supplier name, invoice date, currency, total amount, tax amount if relevant, payment terms, bank or remittance details, and line descriptions.\n- Purchase order: PO number, supplier, approved bu"
+      ]
+    },
+    {
+      "id": "Q06",
+      "query": "Clear Invoice appears without invoice PO GRN vendor duplicate check, what should the review do?",
+      "gold": [
+        "clear_invoice_boundary.md",
+        "required_materials.md"
+      ],
+      "status": "success",
+      "hits": [
+        "clear_invoice_boundary.md",
+        "required_materials.md",
+        "required_materials.md",
+        "report_template.md"
+      ],
+      "scores": [
+        5.6369,
+        5.2666,
+        5.2643,
+        5.211
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "If Clear Invoice appears without invoice, PO, GRN, vendor, and duplicate-check evidence, the review should still record missing materials and explain the boundary.",
+        "- Invoice: invoice number, supplier name, invoice date, currency, total amount, tax amount if relevant, payment terms, bank or remittance details, and line descriptions.\n- Purchase order: PO number, supplier, approved bu"
+      ]
+    },
+    {
+      "id": "Q07",
+      "query": "How should BPI process mining event logs be used as evidence in invoice review?",
+      "gold": [
+        "bpi_process_review.md"
+      ],
+      "status": "success",
+      "hits": [
+        "bpi_process_review.md",
+        "clear_invoice_boundary.md",
+        "report_template.md",
+        "required_materials.md"
+      ],
+      "scores": [
+        5.9657,
+        5.0038,
+        4.4744,
+        3.5791
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "BPI event logs and process-mining exports are process evidence. They may show a sequence such as Create Purchase Order, Record Goods Receipt, Post Invoice, Clear Invoice, or Change Payment Terms.",
+        "In ERP and process-mining contexts, a Clear Invoice event is historical evidence that an invoice was cleared in a source system or event log. It is not a local permission for this workbench agent to claim payment or appr"
+      ]
+    },
+    {
+      "id": "Q08",
+      "query": "Can process logs replace source business materials like invoice PO GRN vendor record duplicate check?",
+      "gold": [
+        "bpi_process_review.md",
+        "required_materials.md"
+      ],
+      "status": "success",
+      "hits": [
+        "bpi_process_review.md",
+        "required_materials.md",
+        "clear_invoice_boundary.md",
+        "report_template.md"
+      ],
+      "scores": [
+        5.1624,
+        4.3034,
+        4.2158,
+        4.1068
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "Process evidence cannot by itself prove that the local agent has approved, paid, routed, posted, or submitted anything. It also cannot replace source business materials such as invoice, PO, GRN, vendor record, or duplica",
+        "1. Invoice should tie to PO by supplier, PO number, currency, and line-level amount where available.\n2. PO should tie to GRN or service receipt by PO number, item/service, quantity, and receipt or acceptance date.\n3. Ven"
+      ]
+    },
+    {
+      "id": "Q09",
+      "query": "What fields should be distinguished when reviewing BPI process logs: event name timestamp case id actor lifecycle amount vendor?",
+      "gold": [
+        "bpi_process_review.md"
+      ],
+      "status": "success",
+      "hits": [
+        "bpi_process_review.md",
+        "report_template.md",
+        "clear_invoice_boundary.md",
+        "required_materials.md"
+      ],
+      "scores": [
+        5.2378,
+        3.712,
+        3.0084,
+        2.5839
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "- event name and timestamp;\n- case id or invoice id;\n- activity owner or resource;\n- lifecycle transition;\n- amount, vendor, payment term, or company code if present;\n- gaps between process evidence and actual source doc",
+        "1. Case summary: case id, case type, current status, and what the user asked the agent to review.\n2. Materials status: invoice, purchase order, goods receipt, vendor record, duplicate payment check, plus any process evid"
+      ]
+    },
+    {
+      "id": "Q10",
+      "query": "What sections should a manager-facing invoice payment review report contain?",
+      "gold": [
+        "report_template.md"
+      ],
+      "status": "success",
+      "hits": [
+        "report_template.md",
+        "required_materials.md",
+        "clear_invoice_boundary.md",
+        "required_materials.md"
+      ],
+      "scores": [
+        4.6135,
+        3.9378,
+        3.5838,
+        3.2682
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "A manager-facing invoice payment review report should be written in Markdown and include:",
+        "For a local invoice payment review case, the reviewer should normally collect and compare:"
+      ]
+    },
+    {
+      "id": "Q11",
+      "query": "Manager report should include materials status, evidence review, matching gaps, risk flags and next steps",
+      "gold": [
+        "report_template.md"
+      ],
+      "status": "success",
+      "hits": [
+        "report_template.md",
+        "required_materials.md",
+        "clear_invoice_boundary.md",
+        "bpi_process_review.md"
+      ],
+      "scores": [
+        5.2428,
+        3.0079,
+        2.7258,
+        2.6521
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "1. Case summary: case id, case type, current status, and what the user asked the agent to review.\n2. Materials status: invoice, purchase order, goods receipt, vendor record, duplicate payment check, plus any process evid",
+        "For a local invoice payment review case, the reviewer should normally collect and compare:"
+      ]
+    },
+    {
+      "id": "Q12",
+      "query": "Report must not claim the agent approved paid posted routed or submitted anything in ERP",
+      "gold": [
+        "report_template.md",
+        "clear_invoice_boundary.md"
+      ],
+      "status": "success",
+      "hits": [
+        "clear_invoice_boundary.md",
+        "report_template.md",
+        "bpi_process_review.md",
+        "required_materials.md"
+      ],
+      "scores": [
+        5.0341,
+        4.8564,
+        3.3122,
+        3.1621
+      ],
+      "channels": [
+        "fused",
+        "fused",
+        "fused",
+        "fused"
+      ],
+      "rank": 1,
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "hit_at_4": true,
+      "reciprocal_rank": 1.0,
+      "top_snippets": [
+        "- \"The agent paid the invoice.\"\n- \"The invoice is approved.\"\n- \"The invoice has been submitted to ERP by this agent.\"\n- \"Payment has been posted by this agent.\"",
+        "The report must not claim that the workbench agent approved, paid, posted, routed, or submitted anything in ERP."
+      ]
+    }
+  ]
+}

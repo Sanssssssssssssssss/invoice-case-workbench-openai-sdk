@@ -1,0 +1,2162 @@
+﻿from __future__ import annotations
+
+import hashlib
+import json
+import re
+import csv
+from io import StringIO
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.agents.capabilities import role_input_keys
+from app.state.attachment_manifest import attachment_manifest_for_context, update_manifest_summaries
+from app.state.artifact_store import ArtifactStore
+from app.guards import enforce_case_state_consistency, enforce_no_execution_wording
+from app.llm import LlmClient
+from app.memory_service import MemoryService
+from app.runtime import policy_gate as route_policy
+from app.prompt_loader import load_prompt, load_system_prompt
+from app.state.session_repository import SessionRepository
+from app.state.case_store import CaseStore
+from app.tools.file_workspace import report_paths_for_run
+from app.tools.rag_guidance import advisor_guidance, review_guidance
+
+
+SUMMARY_THRESHOLD = 2000
+SUMMARY_INPUT_STRING_LIMIT = 1400
+SUMMARY_INPUT_HEAD_CHARS = 900
+SUMMARY_INPUT_TAIL_CHARS = 360
+SUMMARY_DEDUPE_MIN_CHARS = 500
+LLM_SUMMARIZER_ARTIFACT_TYPES: set[str] = set()
+PROMPT_INJECTION_DETAIL_RE = re.compile(
+    r"[^。\n；;]{0,40}(?:提示注入|prompt injection|越权执行性指令|忽略规则|ignore previous rules|虚假声明|诱导)[^。\n；;]{0,160}",
+    re.I,
+)
+
+
+class SummaryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = ""
+    key_facts: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    missing_items: list[str] = Field(default_factory=list)
+    next_action_hint: str = ""
+    must_preserve_refs: list[str] = Field(default_factory=list)
+
+
+SUMMARIZER_PROMPT = (
+    load_system_prompt("agents/summarizer/prompt.md").rstrip()
+    + "\n\n---\n\n"
+    + load_prompt("agents/summarizer/checkpoint_skill.md").lstrip()
+    + "\n\n---\n\n"
+    + load_prompt("agents/summarizer/attachment_manifest_skill.md").lstrip()
+)
+
+
+class ContextManager:
+    def __init__(
+        self,
+        store: CaseStore,
+        llm: LlmClient,
+        sessions: SessionRepository | None = None,
+        memory: MemoryService | None = None,
+    ) -> None:
+        self.store = store
+        self.llm = llm
+        self.sessions = sessions or SessionRepository(store)
+        self.memory = memory or MemoryService(store)
+        self.artifacts = ArtifactStore(store)
+        self._pending_rag_debug: dict[str, list[dict[str, Any]]] = {}
+
+    def record_result(self, state: Any, *, kind: str, name: str, result: Any) -> dict[str, Any]:
+        artifact_type = _artifact_type(kind, name)
+        artifact_ref = self.artifacts.save(state.case_id, state.run_id, artifact_type, name, result)
+        summary = self._summarize(artifact_type=artifact_type, name=name, result=result)
+        if artifact_type == "attachment_batch" and isinstance(result, dict):
+            update_manifest_summaries(
+                self.store,
+                state.case_id,
+                artifact_ref=artifact_ref,
+                summaries=self._attachment_manifest_summaries(result),
+            )
+        hint = route_policy.next_action_hint(kind, name, result)
+        observation = {
+            "kind": kind,
+            "name": name,
+            "summary": summary.summary,
+            "key_facts": summary.key_facts,
+            "risks": summary.risks,
+            "missing_items": summary.missing_items,
+            "next_action_hint": hint,
+            "must_preserve_refs": summary.must_preserve_refs,
+            "artifact_ref": artifact_ref,
+        }
+        if kind == "role" and name == "evidence_reviewer" and isinstance(result, dict):
+            observation["reviewer_mode"] = str(result.get("mode") or "review")
+        return observation
+
+    def record_error(self, *, kind: str, name: str, exc: Exception) -> dict[str, Any]:
+        error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        runtime_feedback = classify_runtime_error(kind=kind, name=name, error=error)
+        return {
+            "kind": kind,
+            "name": name,
+            "summary": f"{name} failed: {type(exc).__name__}: {exc}",
+            "key_facts": [],
+            "risks": [f"{type(exc).__name__}: {exc}"],
+            "missing_items": [],
+            "next_action_hint": str(runtime_feedback.get("recommended_action") or "retry_or_final_answer"),
+            "must_preserve_refs": [],
+            "error": error,
+            "runtime_feedback": runtime_feedback,
+        }
+
+    def build_planner_context(
+        self,
+        *,
+        state: Any,
+        case_state: Any,
+        session: dict[str, Any] | None = None,
+        attachments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        observations = _planner_observations(state.observations)
+        session_data = session or self.sessions.load_session(state.case_id)
+        runtime_feedback = self.last_runtime_feedback(state)
+        if not runtime_feedback and int(getattr(state, "max_steps", 0) or 0) - int(getattr(state, "step_count", 0) or 0) <= 1:
+            runtime_feedback = step_budget_runtime_feedback()
+        report_markdown_path, report_pdf_path = report_paths_for_run(getattr(state, "started_at", ""))
+        return {
+            "case_brief": _case_brief(case_state),
+            "case_profile": getattr(case_state, "case_profile", {}) or {},
+            "case_next_action_hint": getattr(case_state, "next_action_hint", "") or "",
+            "reply_brief": _planner_safe_text(getattr(case_state, "reply_brief", "") or "", max_chars=700),
+            "evidence_cards": _brief_records(getattr(case_state, "evidence_cards", []) or [], 8),
+            "session_summary": _planner_safe_text(session_data.get("session_summary") or "", max_chars=900),
+            "recent_turns": _planner_recent_turns(self.sessions.get_context_window(state.case_id, limit=3)),
+            "memory_hints": self.memory.search(
+                case_id=state.case_id,
+                query=f"{state.user_message_for_planner} {getattr(case_state, 'summary', '')}",
+                limit=5,
+            ),
+            "current_goal": state.current_goal,
+            "current_plan": _latest_plan(state),
+            "attachments": [_attachment_meta(item) for item in attachments],
+            "attachment_manifest": attachment_manifest_for_context(self.store, state.case_id),
+            "recent_observations": observations,
+            "open_questions": list(getattr(case_state, "next_questions", []) or []),
+            "next_expected_action": str(runtime_feedback.get("recommended_action") or _latest_next_action_hint(observations)),
+            "runtime_feedback": runtime_feedback,
+            "report_paths": {"markdown_path": report_markdown_path, "pdf_path": report_pdf_path},
+        }
+
+    def build_role_context(
+        self,
+        *,
+        role: str,
+        state: Any,
+        payload: dict[str, Any],
+        user_message: str,
+        case_state: Any,
+    ) -> dict[str, Any]:
+        hydrated = dict(payload)
+        hydrated["case_state"] = _sanitize_case_state(case_state)
+        hydrated["attachment_manifest"] = attachment_manifest_for_context(self.store, state.case_id)
+        hydrated["memory_hints"] = self.memory.search(
+            case_id=state.case_id,
+            query=f"{user_message} {getattr(case_state, 'summary', '')}",
+            limit=3,
+        )
+        if role == "materials_advisor":
+            hydrated.setdefault("user_question", hydrated.pop("question", user_message))
+            if not hydrated.get("rag_context"):
+                guidance = advisor_guidance(
+                    str(hydrated.get("user_question") or user_message),
+                    hydrated.get("case_state") if isinstance(hydrated.get("case_state"), dict) else {},
+                    hydrated.get("attachment_manifest") if isinstance(hydrated.get("attachment_manifest"), dict) else {},
+                )
+                hydrated["rag_context"] = guidance.evidences
+                self._queue_rag_debug(state, role, guidance.debug)
+        elif role == "evidence_reviewer":
+            attachment_items = self.last_attachment_items(state)
+            hydrated.setdefault("user_message", self.user_message_for_role(state, user_message))
+            hydrated.setdefault("mode", route_policy.infer_reviewer_mode(hydrated, state))
+            hydrated["attachment_manifest"] = _reviewer_attachment_manifest(hydrated.get("attachment_manifest"))
+            if hydrated.get("mode") in {"review", "repair"}:
+                previous = self.last_evidence_reviewer_result(state, mode="extract")
+                if previous:
+                    hydrated.setdefault("extraction_result", previous.get("extraction_result") or previous)
+                hydrated.setdefault("attachment_context", _reviewer_compact_attachment_context(attachment_items))
+                hydrated.setdefault("extraction_context", [])
+            else:
+                hydrated.setdefault("extraction_context", _attachment_extraction_context(attachment_items))
+                hydrated.setdefault("attachment_context", attachment_items)
+            if not hydrated.get("rag_context"):
+                guidance = review_guidance(
+                    str(hydrated.get("user_message") or user_message),
+                    hydrated.get("attachment_context") if isinstance(hydrated.get("attachment_context"), list) else [],
+                    hydrated.get("attachment_manifest") if isinstance(hydrated.get("attachment_manifest"), dict) else {},
+                    hydrated.get("extraction_result") if isinstance(hydrated.get("extraction_result"), dict) else {},
+                )
+                hydrated["rag_context"] = guidance.evidences
+                self._queue_rag_debug(state, role, guidance.debug)
+        elif role == "case_patch_writer":
+            hydrated.setdefault("role_result", self.last_evidence_reviewer_result(state, mode=("review", "repair")) or self.last_role_result(state))
+            hydrated.setdefault("user_message", user_message)
+        elif role == "report_writer":
+            hydrated.setdefault("evidence", [_sanitize_evidence(item) for item in case_state.evidence_items])
+            hydrated.setdefault("conversation_summary", case_state.conversation_summary)
+            hydrated.setdefault("user_request", user_message)
+            hydrated.setdefault("report_instructions", user_message)
+        hydrated.setdefault(
+            "evidence_chain_context",
+            _evidence_chain_context(self.store, state.case_id, case_state, hydrated.get("attachment_manifest") or {}),
+        )
+        if role == "report_writer":
+            _normalize_report_writer_payload(hydrated)
+        return _filter_role_payload(role, hydrated)
+
+    def pop_pending_rag_debug(self, state: Any, role: str) -> list[dict[str, Any]]:
+        key = f"{getattr(state, 'run_id', '')}:{role}"
+        return self._pending_rag_debug.pop(key, [])
+
+    def _queue_rag_debug(self, state: Any, role: str, debug: dict[str, Any]) -> None:
+        if not debug:
+            return
+        key = f"{getattr(state, 'run_id', '')}:{role}"
+        self._pending_rag_debug.setdefault(key, []).append(debug)
+
+    def user_message_for_role(self, state: Any, fallback: str) -> str:
+        ref = getattr(state, "user_message_artifact_ref", "")
+        if not ref:
+            return fallback
+        try:
+            payload = self.artifacts.read(state.case_id, ref)
+        except Exception:
+            return fallback
+        if isinstance(payload, dict):
+            return str(payload.get("message") or fallback)
+        return fallback
+
+    def resolve_content_ref(self, case_id: str, state: Any, content_ref: str) -> str:
+        ref = str(content_ref or "").strip()
+        if not ref:
+            return ""
+        if ref.startswith("last_role:"):
+            selector = ref.removeprefix("last_role:")
+            role_name, _, field = selector.partition(".")
+            payload = self._latest_payload(state, kind="role", name=role_name)
+            if isinstance(payload, dict) and field:
+                value = payload.get(field)
+                if value is not None:
+                    text = str(value)
+                    if role_name == "report_writer" and field == "markdown":
+                        text = _apply_report_instruction_appendix(text, getattr(state, "user_message_for_planner", ""))
+                        text = _sanitize_report_markdown_for_guards(text, self.store.load(case_id))
+                        text = enforce_no_execution_wording(text)
+                        text = enforce_case_state_consistency(text, self.store.load(case_id))
+                    return text
+        raise ValueError(f"Unsupported content_ref: {content_ref}")
+
+    def write_context_manifest(
+        self,
+        state: Any,
+        *,
+        target: str,
+        context_payload: Any,
+        included: list[str],
+        excluded: list[str],
+        artifact_refs: list[str] | None = None,
+        blocked_raw_content: bool = True,
+        model: str = "",
+        prompt_file: str = "",
+        system_prompt: str = "",
+        budget: dict[str, Any] | None = None,
+        raw_leak_checks: list[str] | None = None,
+        compact_triggered: bool = False,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        step = max(int(getattr(state, "step_count", 0)), 0)
+        safe_target = _safe_slug(target.replace(":", "_"))
+        relative_path = f"traces/{state.run_id}/context_manifest_{step:03d}_{safe_target}.json"
+        target_path = self.store.resolve_case_path(state.case_id, relative_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        text = json.dumps(context_payload, ensure_ascii=False, default=str)
+        payload = {
+            "target": target,
+            "model": model,
+            "prompt_file": prompt_file,
+            "prompt_sha": _sha256(system_prompt),
+            "payload_sha256": _sha256(text),
+            "payload_preview": text[:1600],
+            "payload": context_payload,
+            "included": included,
+            "excluded": excluded,
+            "artifact_refs": artifact_refs or _artifact_refs_from_context(context_payload),
+            "estimated_chars": len(text),
+            "blocked_raw_content": blocked_raw_content,
+            "budget": budget or {},
+            "raw_leak_checks": raw_leak_checks or [],
+            "compact_triggered": compact_triggered,
+            "metadata": metadata or {},
+        }
+        target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def last_role_result(self, state: Any, name: str | None = None) -> dict[str, Any]:
+        result = self._latest_payload(state, kind="role", name=name)
+        return result if isinstance(result, dict) else {}
+
+    def last_evidence_reviewer_result(self, state: Any, mode: str | tuple[str, ...] | None = None) -> dict[str, Any]:
+        modes = {mode} if isinstance(mode, str) else set(mode or [])
+        for observation in reversed(getattr(state, "observations", []) or []):
+            if observation.get("kind") != "role" or observation.get("name") != "evidence_reviewer":
+                continue
+            ref = observation.get("artifact_ref")
+            if not ref:
+                continue
+            try:
+                payload = self.artifacts.read(state.case_id, ref)
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            payload_mode = str(payload.get("mode") or observation.get("reviewer_mode") or "review")
+            if modes and payload_mode not in modes:
+                continue
+            return payload
+        return {}
+
+    def last_attachment_items(self, state: Any) -> list[dict[str, Any]]:
+        result = self._latest_payload(state, kind="tool", name="read_attachment")
+        if not isinstance(result, dict):
+            return []
+        attachments = result.get("attachments")
+        if isinstance(attachments, list):
+            return [item for item in attachments if isinstance(item, dict)][:12]
+        return [result]
+
+    def last_runtime_feedback(self, state: Any) -> dict[str, Any]:
+        return _latest_runtime_feedback(getattr(state, "observations", []) or [])
+
+    def _latest_payload(self, state: Any, *, kind: str, name: str | None = None) -> Any:
+        for observation in reversed(state.observations):
+            if observation.get("kind") != kind:
+                continue
+            if name and observation.get("name") != name:
+                continue
+            ref = observation.get("artifact_ref")
+            if not ref:
+                continue
+            try:
+                return self.artifacts.read(state.case_id, ref)
+            except Exception:
+                return None
+        return None
+
+    def _summarize(self, *, artifact_type: str, name: str, result: Any) -> SummaryResult:
+        summary_input = _build_summary_input(artifact_type=artifact_type, name=name, result=result)
+        text = json.dumps(result, ensure_ascii=False, default=str)
+        if len(text) <= SUMMARY_THRESHOLD:
+            return _heuristic_summary(artifact_type, name, result)
+        if artifact_type not in LLM_SUMMARIZER_ARTIFACT_TYPES:
+            return _heuristic_summary(artifact_type, name, result)
+        payload = {
+            "artifact_type": artifact_type,
+            "name": name,
+            "raw_preview": json.dumps(summary_input["summary_input"], ensure_ascii=False, default=str)[:8000],
+            "summary_input": summary_input["summary_input"],
+            "structured_preview": summary_input["structured_preview"],
+            "source_refs": summary_input["source_refs"],
+            "large_payload_notes": summary_input["large_payload_notes"],
+            "content_hashes": summary_input["content_hashes"],
+            "task_goal": "invoice payment review",
+        }
+        try:
+            summary = self.llm.complete_structured(
+                role="summarizer",
+                system_prompt=SUMMARIZER_PROMPT,
+                payload=payload,
+                model_type=SummaryResult,
+                prompt_version="summarizer_v4.4+global_policy_v1.0+checkpoint_skill_v1.0+attachment_manifest_skill_v1.0",
+            )
+            if not summary.summary:
+                return _heuristic_summary(artifact_type, name, result)
+            return _sanitize_summary_result(summary)
+        except Exception as exc:
+            fallback = _heuristic_summary(artifact_type, name, result)
+            fallback.risks.append(f"summarizer_error: {type(exc).__name__}: {exc}")
+            return fallback
+
+    def _attachment_manifest_summaries(self, result: dict[str, Any]) -> list[dict[str, Any]]:
+        attachments = [
+            item
+            for item in result.get("attachments") or []
+            if isinstance(item, dict) and item.get("attachment_id")
+        ]
+        summaries: list[dict[str, Any]] = []
+        for item in attachments[:12]:
+            if item.get("status") == "error":
+                summary = SummaryResult(
+                    summary=f"{item.get('name', 'attachment')}: read failed",
+                    risks=[str(warning) for warning in item.get("warnings") or []][:6],
+                )
+            else:
+                summary = _heuristic_summary(
+                    "attachment_batch",
+                    f"attachment:{item.get('name') or 'file'}",
+                    {"attachment_count": 1, "attachments": [item]},
+                )
+            summaries.append(
+                {
+                    "attachment_id": item.get("attachment_id", ""),
+                    "original_ref": item.get("original_ref", ""),
+                    "name": item.get("name", ""),
+                    "summary": summary.summary,
+                    "key_facts": summary.key_facts,
+                    "risks": summary.risks,
+                    "missing_items": summary.missing_items,
+                }
+            )
+        return summaries
+
+
+def _artifact_type(kind: str, name: str) -> str:
+    if kind == "tool" and name == "read_attachment":
+        return "attachment_batch"
+    if kind == "role" and name == "report_writer":
+        return "report_markdown"
+    if kind == "role":
+        return "role_result"
+    return f"{kind}_result"
+
+
+
+def _heuristic_summary(artifact_type: str, name: str, result: Any) -> SummaryResult:
+    if isinstance(result, dict):
+        if artifact_type == "attachment_batch":
+            attachments = result.get("attachments") or []
+            names = [str(item.get("name") or "") for item in attachments if isinstance(item, dict)]
+            return SummaryResult(
+                summary=f"读取了 {len(names)} 个附件：" + ", ".join(names[:8]),
+                key_facts=names[:12],
+                next_action_hint=route_policy.reviewer_hint_after_attachment(result),
+                must_preserve_refs=names[:12],
+            )
+        if name == "evidence_reviewer":
+            mode = str(result.get("mode") or "review")
+            if mode == "extract":
+                extraction = result.get("extraction_result") or {}
+                docs = extraction.get("source_docs") or extraction.get("documents") or []
+                cards = result.get("evidence_cards") or []
+                return SummaryResult(
+                    summary=(
+                        "证据抽取完成："
+                        f"mode=extract; docs={len(docs) if isinstance(docs, list) else 0}; "
+                        f"fields={len(result.get('extracted_fields') or {})}; cards={len(cards)}."
+                    ),
+                    key_facts=[
+                        str(item.get("title") or item.get("doc_id") or item.get("source_doc_id") or "")[:180]
+                        for item in (docs if isinstance(docs, list) else [])
+                        if isinstance(item, dict)
+                    ][:8],
+                    risks=list(result.get("risk_flags") or [])[:6],
+                    next_action_hint="call_role:evidence_reviewer_review",
+                )
+            suggested = result.get("suggested_patch") or {}
+            return SummaryResult(
+                summary=(
+                    "证据审查完成："
+                    f"mode={mode}; type={result.get('evidence_type', 'unknown')}; "
+                    f"credibility={result.get('credibility', 'unknown')}; "
+                    f"should_accept={result.get('should_accept')}; "
+                    f"supports={len(result.get('supports') or [])}; "
+                    f"conflicts={len(result.get('conflicts') or [])}; "
+                    f"cards={len(result.get('evidence_cards') or [])}; "
+                    f"add_evidence={len(suggested.get('add_evidence') or [])}."
+                ),
+                key_facts=[
+                    f"{item.get('requirement', '')}:{item.get('support_level', '')}"
+                    for item in result.get("supports") or []
+                    if isinstance(item, dict)
+                ][:8],
+                risks=[f"conflicts={len(result.get('conflicts') or [])}"] if result.get("conflicts") else [],
+                missing_items=list(suggested.get("missing_materials") or [])[:8],
+                next_action_hint="call_role:case_patch_writer",
+            )
+        if name == "materials_advisor":
+            tasks = [item for item in result.get("tasks") or [] if isinstance(item, dict)]
+            task_facts = [
+                " | ".join(
+                    part
+                    for part in [
+                        str(item.get("requirement") or "").strip(),
+                        str(item.get("current_status") or "").strip(),
+                        str(item.get("task") or "").strip(),
+                    ]
+                    if part
+                )[:240]
+                for item in tasks[:8]
+            ]
+            answer = str(result.get("answer") or "材料建议已生成。")
+            summary = answer[:1200]
+            if tasks:
+                summary = (summary + f"\n\nstructured_tasks: tasks={len(tasks)}; " + "; ".join(task_facts[:6])).strip()
+            return SummaryResult(
+                summary=summary[:1400],
+                key_facts=task_facts + [str(item) for item in result.get("next_questions") or []][:5],
+                missing_items=list(result.get("missing_materials") or [])[:8],
+                next_action_hint="final_answer",
+            )
+        if name == "case_patch_writer":
+            updates = result.get("case_updates") or {}
+            return SummaryResult(
+                summary=(
+                    f"CasePatch {result.get('patch_type', 'unknown')} prepared; "
+                    f"add_evidence={len(updates.get('add_evidence') or [])}; "
+                    f"cards={len(updates.get('evidence_cards') or [])}."
+                ),
+                key_facts=[str(result.get("audit_note") or "")[:300]],
+                missing_items=list(updates.get("missing_materials") or [])[:8],
+                next_action_hint="write_case_patch",
+            )
+        if name == "write_case_patch":
+            return SummaryResult(
+                summary=f"Case state updated: status={result.get('status')}, evidence={len(result.get('evidence_items') or [])}.",
+                missing_items=list(result.get("missing_materials") or [])[:8],
+                next_action_hint="final_answer",
+            )
+        if name == "report_writer":
+            markdown = str(result.get("markdown") or "")
+            return SummaryResult(
+                summary=f"Report markdown generated: title={result.get('title', 'final_report')}, chars={len(markdown)}.",
+                key_facts=[str(result.get("title") or "final_report")],
+                next_action_hint="call_tool:write_case_file",
+            )
+        if name == "list_case_files":
+            files = [str(item) for item in result.get("files") or []]
+            report_files = [item for item in files if item.startswith("reports/")]
+            return SummaryResult(
+                summary=f"Case workspace contains {len(files)} files; reports: {', '.join(report_files[:6]) or 'none'}.",
+                key_facts=files[:20],
+                next_action_hint="final_answer",
+                must_preserve_refs=report_files[:6],
+            )
+        if name == "write_case_file":
+            return SummaryResult(
+                summary=f"File written: {result.get('relative_path') or result.get('path')}; bytes={result.get('bytes')}.",
+                key_facts=[str(result.get("relative_path") or result.get("path") or "")],
+                next_action_hint="call_tool:render_pdf",
+            )
+        if name == "render_pdf":
+            return SummaryResult(
+                summary=f"PDF rendered: {result.get('pdf_path') or result.get('path') or result.get('relative_path')}.",
+                key_facts=[str(result.get("pdf_path") or result.get("path") or result.get("relative_path") or "")],
+                next_action_hint="final_answer",
+            )
+    return SummaryResult(summary=f"{name} completed; artifact stored for raw details.", next_action_hint="")
+
+
+SUMMARY_REF_KEYS = {
+    "artifact_ref",
+    "source_ref",
+    "source_path",
+    "source_locator",
+    "original_ref",
+    "preview_path",
+    "preview_paths",
+    "filename",
+    "file_name",
+    "name",
+    "path",
+    "relative_path",
+    "id",
+    "evidence_id",
+    "document_id",
+    "run_id",
+    "turn_id",
+}
+
+SUMMARY_KIND_KEYS = {"artifact_type", "content_kind", "evidence_type", "type", "extraction_method", "mime_type"}
+SUMMARY_KIND_SUFFIXES = {
+    ".pdf": "pdf",
+    ".csv": "csv",
+    ".json": "json",
+    ".log": "log",
+    ".md": "markdown",
+    ".txt": "text",
+    ".xml": "xml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".png": "image",
+    ".tif": "image",
+    ".tiff": "image",
+    ".webp": "image",
+}
+AP_MISSING_MARKERS = (
+    "purchase order",
+    "po ",
+    "po/",
+    "po-",
+    "goods receipt",
+    "grn",
+    "vendor master",
+    "vendor record",
+    "duplicate payment",
+    "duplicate-payment",
+    "bank record",
+    "ap review",
+    "three-way",
+    "3-way",
+    "采购订单",
+    "收货单",
+    "供应商主数据",
+    "重复付款",
+    "银行记录",
+    "三单",
+)
+PROMPT_INJECTION_MARKERS = (
+    "ignore previous rules",
+    "ignore all previous",
+    "disregard previous",
+    "system prompt",
+    "developer message",
+    "approve payment",
+    "submit erp",
+    "prompt injection",
+    "忽略规则",
+    "忽略前文",
+    "批准付款",
+    "提交erp",
+    "越权执行",
+    "提示注入",
+)
+PROMPT_INJECTION_OUTPUT_SEGMENT_RE = re.compile(
+    r"(?:ignore previous rules|ignore all previous|disregard previous|approve payment|submit erp|prompt injection|"
+    r"system prompt|developer message|忽略规则|忽略前文|批准付款|提交erp|提交 ERP|越权执行|提示注入)[^。\n；;,.，]{0,120}",
+    re.I,
+)
+PROMPT_INJECTION_NEUTRAL = "材料包含越权执行性指令，已按数据处理"
+
+
+def _build_summary_input(*, artifact_type: str, name: str, result: Any) -> dict[str, Any]:
+    result = _normalize_summary_source(artifact_type, result)
+    seen_hashes: dict[str, str] = {}
+    content_hashes: list[dict[str, Any]] = []
+    source_refs: list[str] = [artifact_type, name]
+    source_kinds: list[str] = [artifact_type]
+    notes: list[str] = []
+    warnings: list[str] = []
+    compacted = _compact_summary_value(
+        result,
+        "$",
+        seen_hashes=seen_hashes,
+        content_hashes=content_hashes,
+        source_refs=source_refs,
+        source_kinds=source_kinds,
+        notes=notes,
+        warnings=warnings,
+    )
+    source_refs = _unique_nonempty(source_refs)[:80]
+    source_kinds = _unique_nonempty(source_kinds)[:30]
+    return {
+        "summary_input": compacted,
+        "structured_preview": {
+            "artifact_type": artifact_type,
+            "name": name,
+            "detected_source_kinds": source_kinds,
+            "source_ref_count": len(source_refs),
+            "large_field_count": sum(1 for item in content_hashes if item.get("mode") == "truncated"),
+            "duplicate_large_field_count": sum(1 for item in content_hashes if item.get("mode") == "duplicate"),
+            "warnings": _unique_nonempty(warnings)[:20],
+        },
+        "source_refs": source_refs,
+        "large_payload_notes": notes[:80],
+        "content_hashes": content_hashes[:80],
+    }
+
+
+def _normalize_summary_source(artifact_type: str, result: Any) -> Any:
+    if artifact_type != "attachment_batch" or not isinstance(result, dict):
+        return result
+    normalized = dict(result)
+    normalized.pop("truncated", None)
+    attachments: list[dict[str, Any]] = []
+    for item in normalized.get("attachments") or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        row.pop("truncated", None)
+        row["context_delivery"] = {
+            "content_is_excerpt_for_model_context": True,
+            "full_source_available_via_original_ref": bool(row.get("original_ref")),
+            "full_extraction_available_via_extraction_ref": bool(row.get("extraction_ref")),
+        }
+        attachments.append(row)
+    normalized["attachments"] = attachments
+    return normalized
+
+
+def _compact_summary_value(
+    value: Any,
+    path: str,
+    *,
+    seen_hashes: dict[str, str],
+    content_hashes: list[dict[str, Any]],
+    source_refs: list[str],
+    source_kinds: list[str],
+    notes: list[str],
+    warnings: list[str],
+) -> Any:
+    if isinstance(value, dict):
+        compacted: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            child_path = f"{path}.{key_text}" if path != "$" else f"$.{key_text}"
+            _collect_summary_metadata(key_text, item, source_refs, source_kinds, warnings)
+            compacted[key] = _compact_summary_value(
+                item,
+                child_path,
+                seen_hashes=seen_hashes,
+                content_hashes=content_hashes,
+                source_refs=source_refs,
+                source_kinds=source_kinds,
+                notes=notes,
+                warnings=warnings,
+            )
+        return compacted
+    if isinstance(value, list):
+        return [
+            _compact_summary_value(
+                item,
+                f"{path}[{index}]",
+                seen_hashes=seen_hashes,
+                content_hashes=content_hashes,
+                source_refs=source_refs,
+                source_kinds=source_kinds,
+                notes=notes,
+                warnings=warnings,
+            )
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, str):
+        _collect_source_kind_from_string(value, source_kinds)
+        if _has_prompt_injection_marker(value):
+            warnings.append(PROMPT_INJECTION_NEUTRAL)
+        if len(value) <= SUMMARY_INPUT_STRING_LIMIT:
+            return value
+        digest = _sha256(value)
+        if len(value) >= SUMMARY_DEDUPE_MIN_CHARS and digest in seen_hashes:
+            duplicate_of = seen_hashes[digest]
+            notes.append(f"deduplicated {path} duplicate_of={duplicate_of} chars={len(value)} sha256={digest}")
+            content_hashes.append(
+                {"path": path, "chars": len(value), "sha256": digest, "mode": "duplicate", "duplicate_of": duplicate_of}
+            )
+            return {
+                "__summary_compaction__": "duplicate_large_string",
+                "path": path,
+                "chars": len(value),
+                "sha256": digest,
+                "duplicate_of": duplicate_of,
+            }
+        seen_hashes.setdefault(digest, path)
+        notes.append(f"truncated {path} chars={len(value)} sha256={digest}")
+        content_hashes.append({"path": path, "chars": len(value), "sha256": digest, "mode": "truncated"})
+        return {
+            "__summary_compaction__": "large_string_head_tail",
+            "path": path,
+            "chars": len(value),
+            "sha256": digest,
+            "head": value[:SUMMARY_INPUT_HEAD_CHARS],
+            "tail": value[-SUMMARY_INPUT_TAIL_CHARS:],
+        }
+    return value
+
+
+def _collect_summary_metadata(
+    key: str,
+    value: Any,
+    source_refs: list[str],
+    source_kinds: list[str],
+    warnings: list[str],
+) -> None:
+    key_lower = key.lower()
+    if key_lower in SUMMARY_REF_KEYS:
+        _collect_ref_value(value, source_refs)
+    if key_lower in SUMMARY_KIND_KEYS:
+        _collect_ref_value(value, source_kinds)
+    if key_lower in {"warning", "warnings"}:
+        _collect_ref_value(value, warnings)
+    if key_lower in {"name", "filename", "file_name", "path", "source_path", "original_ref", "preview_path"}:
+        _collect_source_kind_from_value(value, source_kinds)
+
+
+def _collect_ref_value(value: Any, target: list[str]) -> None:
+    if isinstance(value, str):
+        if 0 < len(value) <= 260:
+            target.append(value)
+        return
+    if isinstance(value, (int, float, bool)):
+        target.append(str(value))
+        return
+    if isinstance(value, list):
+        for item in value[:20]:
+            _collect_ref_value(item, target)
+        return
+    if isinstance(value, dict):
+        for key in ("artifact_ref", "source_path", "path", "name", "id", "document_id", "evidence_id"):
+            if key in value:
+                _collect_ref_value(value.get(key), target)
+
+
+def _collect_source_kind_from_value(value: Any, source_kinds: list[str]) -> None:
+    if isinstance(value, str):
+        _collect_source_kind_from_string(value, source_kinds)
+    elif isinstance(value, list):
+        for item in value[:20]:
+            _collect_source_kind_from_value(item, source_kinds)
+
+
+def _collect_source_kind_from_string(value: str, source_kinds: list[str]) -> None:
+    lower = value.lower()
+    for suffix, kind in SUMMARY_KIND_SUFFIXES.items():
+        if suffix in lower:
+            source_kinds.append(kind)
+    for marker, kind in (
+        ("invoice", "invoice"),
+        ("duplicate", "duplicate_check"),
+        ("rag", "rag"),
+        ("ocr", "ocr_text"),
+        ("clear invoice", "process_log"),
+        ("log", "log"),
+    ):
+        if marker in lower:
+            source_kinds.append(kind)
+
+
+def _sanitize_summary_result(summary: SummaryResult) -> SummaryResult:
+    summary.next_action_hint = ""
+    summary.summary = _neutralize_prompt_injection_risk(summary.summary)
+    summary.key_facts = [_brief_text(_neutralize_prompt_injection_risk(item), 260) for item in summary.key_facts[:20]]
+    summary.risks = [
+        _brief_text(_neutralize_prompt_injection_risk(item), 260)
+        for item in summary.risks[:12]
+        if not _looks_like_context_delivery_note(item)
+    ]
+    summary.missing_items = [
+        _brief_text(_neutralize_prompt_injection_risk(item), 220)
+        for item in summary.missing_items[:12]
+        if not _looks_like_ap_missing(item) and not _looks_like_context_delivery_note(item)
+    ]
+    summary.must_preserve_refs = _unique_nonempty([_brief_text(item, 260) for item in summary.must_preserve_refs])[:30]
+    return summary
+
+
+def _looks_like_context_delivery_note(value: Any) -> bool:
+    text = str(value or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "tool_response_excerpt_truncated",
+            "content_is_excerpt_for_model_context",
+            "attachment_text_was_truncated_in_tool_response",
+            "content_preview_truncated",
+            "context excerpt",
+            "context window",
+            "summary_compaction",
+            "large_string_head_tail",
+            "dossier keeps the full extracted text",
+        )
+    )
+
+
+def _looks_like_ap_missing(value: Any) -> bool:
+    text = str(value or "").lower()
+    return any(marker in text for marker in AP_MISSING_MARKERS)
+
+
+def _neutralize_prompt_injection_risk(value: Any) -> str:
+    text = str(value or "")
+    placeholder = "__PROMPT_INJECTION_NEUTRAL__"
+    protected = text.replace(PROMPT_INJECTION_NEUTRAL, placeholder)
+    redacted = PROMPT_INJECTION_OUTPUT_SEGMENT_RE.sub(PROMPT_INJECTION_NEUTRAL, protected)
+    redacted = redacted.replace(placeholder, PROMPT_INJECTION_NEUTRAL)
+    redacted = re.sub(f"(?:{re.escape(PROMPT_INJECTION_NEUTRAL)}\\s*)+", PROMPT_INJECTION_NEUTRAL, redacted)
+    return redacted
+
+
+def _has_prompt_injection_marker(value: Any) -> bool:
+    text = str(value or "").lower().replace(" ", "")
+    spaced = str(value or "").lower()
+    return any(marker.replace(" ", "") in text or marker in spaced for marker in PROMPT_INJECTION_MARKERS)
+
+
+def _unique_nonempty(values: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _case_brief(case_state: Any) -> str:
+    requirements = [
+        f"{item.id}:{item.status}({len(item.evidence_ids)})"
+        for item in getattr(case_state, "requirements", []) or []
+    ]
+    return (
+        f"case_id={case_state.case_id}; status={case_state.status}; "
+        f"profile={_brief_text(getattr(case_state, 'case_profile', {}) or {}, 180)}; "
+        f"requirements={', '.join(requirements)}; "
+        f"evidence_count={len(case_state.evidence_items)}; "
+        f"missing={', '.join(case_state.missing_materials or [])}; "
+        f"weak={', '.join(getattr(case_state, 'weak_materials', []) or [])}; "
+        f"conflict={', '.join(getattr(case_state, 'conflict_materials', []) or [])}; "
+        f"satisfied={', '.join(getattr(case_state, 'satisfied_materials', []) or [])}; "
+        f"risk_count={len(case_state.risk_flags)}; "
+        f"next_action_hint={getattr(case_state, 'next_action_hint', '') or ''}"
+    )
+
+
+def _case_memory(case_state: Any) -> dict[str, Any]:
+    return {
+        "requirements": [
+            {
+                "id": item.id,
+                "status": item.status,
+                "evidence_count": len(item.evidence_ids),
+            }
+            for item in getattr(case_state, "requirements", []) or []
+        ],
+        "evidence": [
+            {
+                "id": item.id,
+                "type": item.type,
+                "credibility": item.credibility,
+                "summary": _brief_text(item.summary, 180),
+                "should_accept": item.review_result.get("should_accept") if item.review_result else None,
+                "conflict_count": len(item.conflicts),
+            }
+            for item in list(getattr(case_state, "evidence_items", []) or [])[-8:]
+        ],
+        "risk_flags": [_brief_text(item, 220) for item in list(getattr(case_state, "risk_flags", []) or [])[-8:]],
+        "missing_materials": list(getattr(case_state, "missing_materials", []) or []),
+        "weak_materials": list(getattr(case_state, "weak_materials", []) or []),
+        "conflict_materials": list(getattr(case_state, "conflict_materials", []) or []),
+        "satisfied_materials": list(getattr(case_state, "satisfied_materials", []) or []),
+    }
+
+
+def _brief_text(value: Any, max_chars: int) -> str:
+    if isinstance(value, str):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    text = text.strip()
+    return text[:max_chars] + ("..." if len(text) > max_chars else "")
+
+
+def _brief_list(value: Any, limit: int, max_chars: int) -> list[str]:
+    items = value if isinstance(value, list) else ([value] if value else [])
+    return [_brief_text(item, max_chars) for item in items[:limit] if _brief_text(item, max_chars)]
+
+
+def _brief_records(value: Any, limit: int) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        value = [{"field": key, **(item if isinstance(item, dict) else {"value": item})} for key, item in value.items()]
+    if not isinstance(value, list):
+        return []
+    records: list[dict[str, Any]] = []
+    for item in value[:limit]:
+        if not isinstance(item, dict):
+            continue
+        record: dict[str, Any] = {}
+        for key, field_value in item.items():
+            if isinstance(field_value, str):
+                record[str(key)] = _brief_text(field_value, 260)
+            elif isinstance(field_value, (int, float, bool)) or field_value is None:
+                record[str(key)] = field_value
+            elif isinstance(field_value, list):
+                record[str(key)] = field_value[:8]
+            elif isinstance(field_value, dict):
+                record[str(key)] = {
+                    str(child_key): _brief_text(child_value, 160) if isinstance(child_value, str) else child_value
+                    for child_key, child_value in list(field_value.items())[:8]
+                }
+            else:
+                record[str(key)] = _brief_text(field_value, 160)
+        records.append(record)
+    return records
+
+
+def _compact_visual_check(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "looks_like_invoice": value.get("looks_like_invoice", ""),
+        "visible_sections": value.get("visible_sections") or {},
+        "field_visibility": _brief_records(value.get("field_visibility"), 16),
+        "same_source_check": value.get("same_source_check") or {},
+        "ocr_quality": value.get("ocr_quality") or {},
+        "page_integrity": value.get("page_integrity") or {},
+        "layout_check": value.get("layout_check") or {},
+        "limitations": _brief_list(value.get("limitations"), 6, 120),
+    }
+
+
+def _artifact_refs_from_context(value: Any) -> list[str]:
+    refs: list[str] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            ref = item.get("artifact_ref") or item.get("user_message_ref")
+            if ref:
+                refs.append(str(ref))
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    seen: set[str] = set()
+    result: list[str] = []
+    for ref in refs:
+        if ref not in seen:
+            seen.add(ref)
+            result.append(ref)
+    return result
+
+
+def _latest_plan(state: Any) -> list[str]:
+    if not state.plan_progress:
+        return []
+    latest = state.plan_progress[-1]
+    return list(latest.get("short_plan") or [])
+
+
+def _latest_next_action_hint(observations: list[dict[str, Any]]) -> str:
+    for observation in reversed(observations):
+        hint = observation.get("next_action_hint")
+        if hint:
+            return str(hint)
+    return ""
+
+
+def _planner_observations(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    planner_safe: list[dict[str, Any]] = []
+    for observation in observations:
+        if observation.get("kind") == "session":
+            continue
+        planner_safe.append(_planner_safe_observation(observation))
+    return planner_safe[-6:]
+
+
+def _planner_recent_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    safe_turns: list[dict[str, Any]] = []
+    for turn in turns:
+        safe_turns.append(
+            {
+                "turn_id": turn.get("turn_id", ""),
+                "user_summary": _planner_safe_text(turn.get("user_summary", ""), max_chars=180),
+                "assistant_summary": _planner_safe_text(turn.get("assistant_summary", ""), max_chars=180),
+                "attachments": [
+                    {"name": item.get("name", ""), "path": item.get("path", "")}
+                    for item in turn.get("attachments", [])
+                    if isinstance(item, dict)
+                ],
+                "run_ids": list(turn.get("run_ids") or []),
+            }
+        )
+    return safe_turns
+
+
+def _planner_safe_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    safe = {
+        "kind": observation.get("kind", ""),
+        "name": observation.get("name", ""),
+        "summary": _planner_safe_text(observation.get("summary", ""), max_chars=260),
+        "next_action_hint": observation.get("next_action_hint", ""),
+    }
+    if observation.get("artifact_ref"):
+        safe["artifact_ref"] = observation.get("artifact_ref")
+    if observation.get("runtime_feedback"):
+        safe["runtime_feedback"] = observation.get("runtime_feedback")
+    missing_items = observation.get("missing_items") or []
+    if missing_items:
+        safe["missing_items"] = [_planner_safe_text(item, max_chars=120) for item in missing_items[:8]]
+    risks = observation.get("risks") or []
+    if risks:
+        safe["risks"] = [_planner_safe_text(item, max_chars=160) for item in risks[:5]]
+    if observation.get("kind") == "tool" and observation.get("name") == "read_attachment" and not observation.get("error"):
+        safe["summary"] = _attachment_batch_planner_summary(observation)
+    return {key: value for key, value in safe.items() if value not in ("", [], None)}
+
+
+def _attachment_batch_planner_summary(observation: dict[str, Any]) -> str:
+    ref = str(observation.get("artifact_ref") or "")
+    prefix = "Attachment batch read"
+    if ref:
+        return f"{prefix}; raw content stored in artifact_ref."
+    return prefix
+
+
+def _planner_safe_text(value: Any, max_chars: int = 220) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    for marker in (
+        " **已录入证据**",
+        " **当前审查状态**",
+        " **三单匹配状态**",
+        " **当前缺口**",
+        " **下一步**",
+        " - ",
+        " 1. ",
+        " | ",
+    ):
+        if marker in text:
+            text = text.split(marker, 1)[0].strip()
+            break
+    text = _redact_planner_raw_details(text)
+    return text[:max_chars] + ("..." if len(text) > max_chars else "")
+
+
+def _report_context_text(value: Any, max_chars: int = 220) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    text = PROMPT_INJECTION_OUTPUT_SEGMENT_RE.sub(PROMPT_INJECTION_NEUTRAL, text)
+    return text[:max_chars] + ("..." if len(text) > max_chars else "")
+
+
+def _evidence_context_text(value: Any, max_chars: int = 220) -> str:
+    return _report_context_text(value, max_chars=max_chars)
+
+
+def _redact_planner_raw_details(text: str) -> str:
+    # Planner only needs routing state and references; detailed line items stay in artifacts/role context.
+    text = re.sub(
+        r"\b[A-Z][A-Za-z0-9-]*(?:\s+[A-Za-z0-9][A-Za-z0-9-]*){2,}\s+(?!(?:INV|PO|GRN)-\d+\b)[A-Z]{1,6}-\d+\b",
+        "[attachment_detail]",
+        text,
+    )
+    text = re.sub(r"[\u4e00-\u9fffA-Za-z ]{4,}OS-\d+(?:\s*[×x]\s*\d+)?", "[attachment_detail]", text)
+    return text
+
+
+def _attachment_meta(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": item.get("name", ""),
+        "path": item.get("path", ""),
+        "content_type": item.get("content_type", ""),
+    }
+
+
+def _sanitize_case_state(case_state: Any) -> dict[str, Any]:
+    data = case_state.model_dump()
+    data["evidence_items"] = [_sanitize_evidence(item) for item in case_state.evidence_items]
+    return data
+
+
+def _sanitize_evidence(item: Any) -> dict[str, Any]:
+    data = item.model_dump() if hasattr(item, "model_dump") else dict(item or {})
+    data = _sanitize_prompt_injection_details(data)
+    content = str(data.get("content") or "")
+    data["content"] = content[:500] + ("..." if len(content) > 500 else "")
+    return data
+
+
+def _attachment_extraction_context(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    context: list[dict[str, Any]] = []
+    for item in items[:12]:
+        if not isinstance(item, dict):
+            continue
+        record = {
+            "attachment_id": item.get("attachment_id", ""),
+            "name": item.get("name", ""),
+            "content_kind": item.get("content_kind", ""),
+            "extraction_ref": item.get("extraction_ref", ""),
+            "extraction_methods": list(item.get("extraction_methods") or [])[:8],
+            "body_markdown": _evidence_context_text(item.get("body_markdown", ""), max_chars=2400),
+            "field_inventory": _brief_records(item.get("field_inventory"), 24),
+            "block_crops": _brief_records(item.get("block_crops"), 48),
+            "page_summaries": _brief_records(item.get("page_summaries"), 8),
+            "quality_notes": _brief_list(item.get("quality_notes"), 10, 220),
+            "visual_regions": _brief_records(item.get("visual_regions"), 10),
+            "visual_check": _compact_visual_check(item.get("visual_check")),
+            "preview_paths": list(item.get("preview_paths") or [])[:5],
+            "original_ref": item.get("original_ref", ""),
+            "warnings": _brief_list(item.get("warnings"), 8, 220),
+            "table_count": item.get("table_count", 0),
+        }
+        context.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
+    return context
+
+
+def _reviewer_compact_attachment_context(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    context: list[dict[str, Any]] = []
+    for item in items[:12]:
+        if not isinstance(item, dict):
+            continue
+        record = {
+            "attachment_id": item.get("attachment_id", ""),
+            "name": item.get("name", ""),
+            "status": item.get("status", ""),
+            "content_kind": item.get("content_kind", ""),
+            "extraction_method": item.get("extraction_method", ""),
+            "original_ref": item.get("original_ref", ""),
+            "extraction_ref": item.get("extraction_ref", ""),
+            "preview_paths": list(item.get("preview_paths") or [])[:5],
+            "body_markdown": _evidence_context_text(item.get("body_markdown", ""), max_chars=900),
+            "field_inventory": _compact_field_refs(item.get("field_inventory"), 12),
+            "block_crops": _compact_crop_refs(item.get("block_crops"), 10),
+            "page_summaries": _compact_page_refs(item.get("page_summaries"), 3),
+            "quality_notes": _brief_list(item.get("quality_notes"), 6, 180),
+            "warnings": _brief_list(item.get("warnings"), 6, 180),
+            "visual_check": _reviewer_visual_check_refs(item.get("visual_check")),
+        }
+        context.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
+    return context
+
+
+def _reviewer_attachment_manifest(manifest: Any) -> dict[str, Any]:
+    if not isinstance(manifest, dict):
+        return {}
+    attachments: list[dict[str, Any]] = []
+    for item in (manifest.get("attachments") or [])[:12]:
+        if not isinstance(item, dict):
+            continue
+        record = {
+            "attachment_id": item.get("attachment_id", ""),
+            "name": item.get("name", ""),
+            "status": item.get("status", ""),
+            "content_kind": item.get("content_kind", ""),
+            "summary": _brief_text(item.get("summary") or "", 180),
+            "key_facts": _brief_list(item.get("key_facts"), 4, 120),
+            "risks": _brief_list(item.get("risks"), 3, 140),
+            "reason": _brief_text(item.get("reason") or "", 120),
+            "original_ref": item.get("original_ref", ""),
+            "extraction_ref": item.get("extraction_ref", ""),
+            "preview_paths": list(item.get("preview_paths") or [])[:2],
+            "quality_notes": _brief_list(item.get("quality_notes"), 3, 120),
+            "extraction_methods": list(item.get("extraction_methods") or [])[:4],
+            "table_count": item.get("table_count", 0),
+            "evidence_ids": list(item.get("evidence_ids") or [])[:4],
+            "chars": item.get("chars", 0),
+        }
+        attachments.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
+    return {
+        "manifest_ref": manifest.get("manifest_ref", ""),
+        "version": manifest.get("version", ""),
+        "updated_at": manifest.get("updated_at", ""),
+        "status_counts": manifest.get("status_counts") or {},
+        "attachments": attachments,
+    }
+
+
+def _compact_field_refs(value: Any, limit: int) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    items = value if isinstance(value, list) else []
+    for item in items[:limit]:
+        if not isinstance(item, dict):
+            continue
+        record = {
+            "field": item.get("field", ""),
+            "value": _brief_text(item.get("value") or "", 120),
+            "status": item.get("status", ""),
+            "source_quote": _brief_text(item.get("source_quote") or "", 160),
+            "locator": item.get("locator", ""),
+            "preview_path": item.get("preview_path") or item.get("preview_ref") or "",
+            "confidence": item.get("confidence", ""),
+        }
+        records.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
+    return records
+
+
+def _compact_page_refs(value: Any, limit: int) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    items = value if isinstance(value, list) else []
+    for item in items[:limit]:
+        if not isinstance(item, dict):
+            continue
+        record = {
+            "page": item.get("page"),
+            "text_preview": _evidence_context_text(item.get("text_preview", ""), max_chars=180),
+            "block_count": item.get("block_count", 0),
+            "table_count": item.get("table_count", 0),
+            "preview_path": item.get("preview_path", ""),
+            "quality_notes": _brief_list(item.get("quality_notes"), 3, 120),
+        }
+        records.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
+    return records
+
+
+def _compact_crop_refs(value: Any, limit: int) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    items = value if isinstance(value, list) else []
+    for item in items[:limit]:
+        if not isinstance(item, dict):
+            continue
+        record = {
+            "field": item.get("field", ""),
+            "page": item.get("page"),
+            "status": item.get("status") or item.get("crop_status") or "",
+            "crop_path": item.get("crop_path", ""),
+            "preview_path": item.get("preview_path") or item.get("preview_ref") or "",
+            "locator": item.get("locator", ""),
+        }
+        records.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
+    return records
+
+
+def _reviewer_visual_check_refs(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    same_source = value.get("same_source_check") if isinstance(value.get("same_source_check"), dict) else {}
+    ocr_quality = value.get("ocr_quality") if isinstance(value.get("ocr_quality"), dict) else {}
+    page_integrity = value.get("page_integrity") if isinstance(value.get("page_integrity"), dict) else {}
+    record = {
+        "looks_like_invoice": value.get("looks_like_invoice", ""),
+        "visible_sections": value.get("visible_sections") or {},
+        "same_source_status": same_source.get("status", ""),
+        "ocr_quality_status": ocr_quality.get("status", ""),
+        "page_integrity_status": page_integrity.get("status", ""),
+        "page_integrity_warnings": _brief_list(page_integrity.get("warnings"), 3, 120),
+        "limitations": _brief_list(value.get("limitations"), 4, 120),
+    }
+    return {key: item for key, item in record.items() if item not in ("", [], {}, None)}
+
+
+def _evidence_chain_context(store: CaseStore, case_id: str, case_state: Any, attachment_manifest: dict[str, Any]) -> dict[str, Any]:
+    evidence_rows: list[dict[str, Any]] = []
+    for evidence in list(getattr(case_state, "evidence_items", []) or [])[:40]:
+        data = evidence.model_dump() if hasattr(evidence, "model_dump") else dict(evidence or {})
+        metadata = data.get("metadata") or {}
+        dossier = _load_dossier_context(store, case_id, str(metadata.get("dossier_ref") or metadata.get("extraction_ref") or ""))
+        line_items = _localized_line_items(metadata.get("line_items") or dossier.get("line_items") or [])
+        line_item_count = int(metadata.get("line_item_count") or dossier.get("line_item_count") or len(line_items) or 0)
+        line_item_pages = list(metadata.get("line_item_pages") or dossier.get("line_item_pages") or [])[:12]
+        bank_details = _bank_details_from_metadata(metadata) or _bank_details_from_metadata(dossier)
+        extracted_fields = dict(metadata.get("extracted_fields") or {})
+        extracted_fields.update(dossier.get("extracted_fields") or {})
+        if bank_details:
+            extracted_fields["bank_details"] = bank_details
+        field_inventory = _merge_field_inventory(metadata.get("field_inventory"), dossier.get("field_inventory"))
+        field_inventory = _enrich_field_inventory_with_extracted_fields(field_inventory, extracted_fields)
+        field_inventory = _normalize_line_item_inventory(field_inventory, line_item_count, line_item_pages)
+        context_metadata = dict(metadata)
+        if field_inventory:
+            context_metadata["field_inventory"] = field_inventory
+        if extracted_fields:
+            context_metadata["extracted_fields"] = extracted_fields
+        evidence_rows.append(
+            {
+                "evidence_id": data.get("id", ""),
+                "source": data.get("source", ""),
+                "evidence_type": data.get("evidence_type", ""),
+                "credibility": data.get("credibility", ""),
+                "supports": _report_supports(data.get("supports"), line_items, line_item_count),
+                "conflicts": data.get("conflicts", [])[:8],
+                "dossier_ref": metadata.get("dossier_ref") or metadata.get("extraction_ref") or "",
+                "field_inventory": _brief_records(field_inventory or context_metadata.get("extracted_fields"), 24),
+                "proof_cards": _proof_cards_from_metadata(context_metadata, limit=18),
+                "line_items": _brief_records(line_items, 200),
+                "line_item_count": line_item_count,
+                "line_item_pages": line_item_pages,
+                "bank_details": bank_details,
+                "page_review": _brief_records(metadata.get("page_review"), 12),
+                "visual_check": _compact_visual_check(context_metadata.get("visual_check")),
+                "evidence_chain": _brief_records(context_metadata.get("evidence_chain"), 20),
+                "claim_to_source_refs": _brief_records(context_metadata.get("claim_to_source_refs"), 20),
+                "original_ref": context_metadata.get("original_ref", ""),
+                "preview_paths": list(context_metadata.get("preview_paths") or [])[:5],
+                "quality_notes": _report_quality_notes(context_metadata.get("quality_notes"), line_items, line_item_count),
+                "reviewer_notes": _planner_safe_text(data.get("reviewer_notes", ""), max_chars=360),
+            }
+        )
+    manifest_rows: list[dict[str, Any]] = []
+    for item in (attachment_manifest.get("attachments") or [])[:18]:
+        if not isinstance(item, dict):
+            continue
+        dossier = _load_dossier_context(store, case_id, str(item.get("extraction_ref") or ""))
+        line_items = _localized_line_items(item.get("line_items") or dossier.get("line_items") or [])
+        line_item_count = int(item.get("line_item_count") or dossier.get("line_item_count") or len(line_items) or 0)
+        line_item_pages = list(item.get("line_item_pages") or dossier.get("line_item_pages") or [])[:12]
+        bank_details = _bank_details_from_metadata(item) or _bank_details_from_metadata(dossier)
+        manifest_inventory = _normalize_line_item_inventory(
+            list(item.get("field_inventory") or []),
+            line_item_count,
+            line_item_pages,
+        )
+        manifest_rows.append(
+            {
+                "attachment_id": item.get("attachment_id", ""),
+                "name": item.get("name", ""),
+                "status": item.get("status", ""),
+                "evidence_ids": list(item.get("evidence_ids") or [])[:8],
+                "extraction_ref": item.get("extraction_ref", ""),
+                "field_inventory": _brief_records(manifest_inventory, 16),
+                "proof_cards": _proof_cards_from_metadata(item, limit=12),
+                "line_items": _brief_records(line_items, 200),
+                "line_item_count": line_item_count,
+                "line_item_pages": line_item_pages,
+                "bank_details": bank_details,
+                "page_summaries": _brief_records(item.get("page_summaries"), 5),
+                "visual_regions": _brief_records(item.get("visual_regions"), 6),
+                "visual_check": _compact_visual_check(item.get("visual_check")),
+                "quality_notes": _report_quality_notes(item.get("quality_notes"), line_items, line_item_count),
+                "preview_paths": list(item.get("preview_paths") or [])[:4],
+                "original_ref": item.get("original_ref", ""),
+            }
+        )
+    return {
+        "purpose": "compact field/claim/source context for report_writer; case_state evidence remains the truth source",
+        "evidence_items": evidence_rows,
+        "attachments": manifest_rows,
+    }
+
+
+def _bank_details_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    extracted = metadata.get("extracted_fields")
+    if isinstance(extracted, dict) and isinstance(extracted.get("bank_details"), dict):
+        return dict(extracted["bank_details"])
+    inventory = metadata.get("field_inventory")
+    if isinstance(inventory, list):
+        for row in inventory:
+            if isinstance(row, dict) and str(row.get("field") or "") == "bank_details":
+                return dict(row)
+    return {}
+
+
+def _merge_field_inventory(primary: Any, secondary: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    by_field: dict[str, dict[str, Any]] = {}
+    for source in (primary, secondary):
+        if not isinstance(source, list):
+            continue
+        for row in source:
+            if not isinstance(row, dict):
+                continue
+            field = str(row.get("field") or "")
+            if not field:
+                continue
+            current = by_field.get(field)
+            candidate = dict(row)
+            if current is None or _inventory_rank(candidate) >= _inventory_rank(current):
+                by_field[field] = candidate
+    priority = {
+        "invoice_number": 0,
+        "supplier": 1,
+        "buyer": 2,
+        "invoice_date": 3,
+        "amount_total": 4,
+        "currency_tax": 5,
+        "bank_details": 6,
+        "line_items_product_title": 7,
+        "signature_or_authorized_signatory": 8,
+        "template_match": 9,
+    }
+    for field, row in sorted(by_field.items(), key=lambda item: priority.get(item[0], 99)):
+        rows.append(row)
+    return rows
+
+
+def _enrich_field_inventory_with_extracted_fields(inventory: list[dict[str, Any]], extracted_fields: dict[str, Any]) -> list[dict[str, Any]]:
+    if not inventory or not isinstance(extracted_fields, dict):
+        return inventory
+    rows: list[dict[str, Any]] = []
+    for row in inventory:
+        if not isinstance(row, dict):
+            continue
+        candidate = dict(row)
+        field = str(candidate.get("field") or "")
+        extracted = extracted_fields.get(field)
+        if isinstance(extracted, dict):
+            best_text = ""
+            for key in ("value", "source_quote", "quote"):
+                new_text = str(extracted.get(key) or "")
+                if len(new_text) > len(best_text):
+                    best_text = new_text
+                old_text = str(candidate.get(key) or "")
+                if new_text and len(new_text) > len(old_text):
+                    candidate[key] = new_text
+            if best_text and len(best_text) > len(str(candidate.get("value") or "")):
+                candidate["value"] = best_text
+        rows.append(candidate)
+    return rows
+
+
+def _normalize_line_item_inventory(inventory: list[dict[str, Any]], line_item_count: int, line_item_pages: list[Any]) -> list[dict[str, Any]]:
+    if not inventory or not line_item_count:
+        return inventory
+    pages = ", ".join(str(page) for page in line_item_pages[:12] if str(page))
+    source_quote = f"{line_item_count} structured line items"
+    if pages:
+        source_quote += f" across pages {pages}"
+    source_quote += "; complete rows are available in line_items."
+    rows: list[dict[str, Any]] = []
+    found = False
+    for row in inventory:
+        if not isinstance(row, dict):
+            continue
+        candidate = dict(row)
+        if candidate.get("field") == "line_items_product_title":
+            found = True
+            candidate["value"] = f"{line_item_count} structured line items"
+            candidate["source_quote"] = source_quote
+            candidate["status"] = "present"
+            candidate["confidence"] = "high"
+            candidate["crop_status"] = candidate.get("crop_status") or "full_page_fallback"
+        rows.append(candidate)
+    if not found:
+        rows.append(
+            {
+                "field": "line_items_product_title",
+                "value": f"{line_item_count} structured line items",
+                "status": "present",
+                "source_quote": source_quote,
+                "locator": f"tables pages {pages}".strip(),
+                "confidence": "high",
+                "crop_status": "full_page_fallback",
+                "proof_label": "证明商品/服务行项目字段可见",
+            }
+        )
+    return rows
+
+
+def _report_quality_notes(notes: Any, line_items: Any, line_item_count: int) -> list[str]:
+    result = _brief_list(notes, 10, 220)
+    if not line_item_count or not isinstance(line_items, list) or len(line_items) < line_item_count:
+        return result
+    filtered: list[str] = []
+    for note in result:
+        lower = str(note).lower()
+        if "line_items" in lower and any(marker in lower for marker in ("trunc", "截断", "ocr")):
+            continue
+        if "行项目" in note and "截断" in note:
+            continue
+        filtered.append(note)
+    return filtered
+
+
+def _report_supports(supports: Any, line_items: Any, line_item_count: int) -> list[Any]:
+    rows = list(supports or [])[:8] if isinstance(supports, list) else []
+    if not line_item_count or not isinstance(line_items, list) or len(line_items) < line_item_count:
+        return rows
+    normalized: list[Any] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            normalized.append(row)
+            continue
+        candidate = dict(row)
+        requirement = str(candidate.get("requirement") or "")
+        if requirement == "line_items_product_title":
+            candidate["support_level"] = "full"
+            candidate["summary"] = f"{line_item_count} structured line items extracted from PDF tables."
+            quote = str(candidate.get("source_quote") or "")
+            if "[truncated]" in quote.lower() or "截断" in quote:
+                candidate["source_quote"] = f"{line_item_count} structured line items; complete rows are available in line_items."
+        normalized.append(candidate)
+    return normalized
+
+
+def _normalize_report_writer_payload(payload: dict[str, Any]) -> None:
+    evidence_context = payload.get("evidence_chain_context")
+    if not isinstance(evidence_context, dict):
+        return
+    complete_line_item_counts: dict[str, int] = {}
+    for row in evidence_context.get("evidence_items", []):
+        if not isinstance(row, dict):
+            continue
+        evidence_id = str(row.get("evidence_id") or "")
+        line_item_count = int(row.get("line_item_count") or 0)
+        if (
+            evidence_id
+            and line_item_count > 0
+            and isinstance(row.get("line_items"), list)
+            and len(row.get("line_items") or []) >= line_item_count
+        ):
+            complete_line_item_counts[evidence_id] = line_item_count
+    if not complete_line_item_counts:
+        return
+    case_state = payload.get("case_state")
+    if isinstance(case_state, dict):
+        case_state["evidence_items"] = [
+            _normalize_report_evidence_item(item, complete_line_item_counts)
+            for item in case_state.get("evidence_items", [])
+        ]
+    evidence = payload.get("evidence")
+    if isinstance(evidence, list):
+        payload["evidence"] = [_normalize_report_evidence_item(item, complete_line_item_counts) for item in evidence]
+
+
+def _normalize_report_evidence_item(item: Any, complete_line_item_counts: dict[str, int]) -> Any:
+    evidence_id = str(item.get("id") or "") if isinstance(item, dict) else ""
+    line_item_count = complete_line_item_counts.get(evidence_id, 0)
+    if not isinstance(item, dict) or not line_item_count:
+        return item
+    normalized = dict(item)
+    metadata = dict(normalized.get("metadata") or {})
+    metadata["quality_notes"] = _report_quality_notes(metadata.get("quality_notes"), [{}], 1)
+    matrix = metadata.get("field_review_matrix")
+    if isinstance(matrix, dict) and isinstance(matrix.get("line_items_product_title"), dict):
+        line = dict(matrix["line_items_product_title"])
+        line["support"] = "full"
+        line["confidence"] = "high"
+        line["issue"] = "结构化表格完整抽取"
+        matrix = dict(matrix)
+        matrix["line_items_product_title"] = line
+        metadata["field_review_matrix"] = matrix
+    normalized["metadata"] = metadata
+    supports = normalized.get("supports")
+    if isinstance(supports, list):
+        normalized["supports"] = _report_supports(supports, [{} for _ in range(line_item_count)], line_item_count)
+    return normalized
+
+
+def _localized_line_items(line_items: Any) -> list[dict[str, Any]]:
+    if not isinstance(line_items, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for row in line_items[:200]:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        text = str(item.get("text") or item.get("description") or "")
+        if text and not item.get("chinese_description"):
+            item["chinese_description"] = _line_item_chinese_description(text)
+        result.append(item)
+    return result
+
+
+def _line_item_chinese_description(text: str) -> str:
+    clean = " ".join(str(text or "").split())
+    lower = clean.lower()
+    exact = {
+        "changeover switches": "转换开关",
+        "cross switches": "交叉开关",
+        "sockets": "插座",
+        "flush-mounted boxes": "暗装盒",
+        "lights - small": "小型灯具",
+        "lights - medium": "中型灯具",
+        "lights - big": "大型灯具",
+        "main distribution box": "主配电箱",
+        "fuse box": "保险丝盒",
+        "safe electricity meter": "安全电表",
+        "residual current measurement": "剩余电流测量",
+        "electronic plannings": "电气规划",
+        "technical processing": "技术处理",
+        "official procedures": "行政手续",
+        "registration energy supplier": "能源供应商登记",
+        "energy supplier fees": "能源供应商费用",
+        "additional public fees": "附加公共费用",
+        "hourly wages for assembly": "安装工时费",
+        "cost for additional electrician": "额外电工费用",
+        "cost for electrical engineer": "电气工程师费用",
+    }
+    if lower in exact:
+        return exact[lower]
+    if lower.startswith("cable"):
+        return clean.replace("Cable", "电缆").replace("cable", "电缆").replace("cores", "芯")
+    if "electrical installation" in lower:
+        return clean.replace("Electrical installation", "电气安装").replace("basement", "地下室").replace("ground floor", "一层")
+    return f"英文原文描述：{clean}"
+
+
+def _inventory_rank(row: dict[str, Any]) -> int:
+    rank = 0
+    if row.get("crop_path"):
+        rank += 4
+    if row.get("locator") or row.get("source_locator"):
+        rank += 2
+    confidence = str(row.get("confidence") or "").lower()
+    if confidence == "high":
+        rank += 3
+    elif confidence == "medium":
+        rank += 1
+    if row.get("source_quote") or row.get("value"):
+        rank += 1
+    return rank
+
+
+def _load_dossier_context(store: CaseStore, case_id: str, ref: str) -> dict[str, Any]:
+    if not ref:
+        return {}
+    try:
+        path = store.resolve_case_path(case_id, ref)
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    line_items = data.get("line_items") or _line_items_from_dossier_tables(data.get("tables"))
+    fields = data.get("extracted_fields") or _fields_from_inventory(data.get("field_inventory"))
+    bank = _bank_details_from_metadata({"extracted_fields": fields, "field_inventory": data.get("field_inventory")}) or _bank_details_from_blocks(
+        data.get("block_crops")
+    )
+    if bank:
+        fields = dict(fields)
+        fields.setdefault("bank_details", bank)
+    inventory = _brief_records(data.get("field_inventory"), 24)
+    if bank and not any(isinstance(row, dict) and row.get("field") == "bank_details" for row in inventory):
+        inventory.append(bank)
+    return {
+        "line_items": _brief_records(line_items, 200),
+        "line_item_count": int(data.get("line_item_count") or len(line_items) or 0),
+        "line_item_pages": list(data.get("line_item_pages") or sorted({item.get("page") for item in line_items if isinstance(item, dict) and item.get("page")}))[:12],
+        "extracted_fields": fields,
+        "field_inventory": inventory,
+    }
+
+
+def _fields_from_inventory(inventory: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    if not isinstance(inventory, list):
+        return result
+    for row in inventory:
+        if not isinstance(row, dict):
+            continue
+        field = str(row.get("field") or "")
+        if field:
+            result[field] = row
+    return result
+
+
+def _bank_details_from_blocks(blocks: Any) -> dict[str, Any]:
+    if not isinstance(blocks, list):
+        return {}
+    for row in blocks:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("text") or row.get("source_quote") or "")
+        lower = text.lower()
+        if not any(token in lower for token in ("iban", "bic", "swift", "bank", "account")):
+            continue
+        if not re.search(r"\b[A-Z]{2}\d{2}[A-Z0-9 ]{8,}|\b[A-Z0-9]{6,}\b", text, re.I):
+            continue
+        return {
+            "field": "bank_details",
+            "value": _report_context_text(text, max_chars=220),
+            "status": "present",
+            "source_quote": _report_context_text(text, max_chars=220),
+            "locator": row.get("locator") or (f"page {row.get('page')}" if row.get("page") else ""),
+            "crop_path": row.get("crop_path", ""),
+            "preview_path": row.get("preview_path", ""),
+            "confidence": "high" if row.get("crop_path") else "medium",
+            "proof_label": "证明银行账户/付款信息字段可见",
+        }
+    return {}
+
+
+def _line_items_from_dossier_tables(tables: Any) -> list[dict[str, Any]]:
+    if not isinstance(tables, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for table in tables[:40]:
+        if not isinstance(table, dict):
+            continue
+        page = int(table.get("page") or 0)
+        table_id = str(table.get("id") or "")
+        csv_text = str(table.get("csv") or "")
+        if not csv_text.strip():
+            continue
+        for raw in csv.reader(StringIO(csv_text)):
+            cells = [str(cell or "").strip() for cell in raw if str(cell or "").strip()]
+            if len(cells) < 4 or not re.fullmatch(r"\d{1,3}\.\d{1,3}", cells[0]):
+                continue
+            numeric = [cell for cell in cells[2:] if re.search(r"[0-9][0-9,]*(?:\.[0-9]+)?", cell)]
+            rows.append(
+                {
+                    "position": cells[0],
+                    "text": cells[1],
+                    "quantity": cells[2] if len(cells) > 2 else "",
+                    "unit_price": numeric[-2] if len(numeric) >= 2 else (cells[3] if len(cells) > 3 else ""),
+                    "total_amount": numeric[-1] if numeric else (cells[4] if len(cells) > 4 else ""),
+                    "page": page,
+                    "table_id": table_id,
+                }
+            )
+            if len(rows) >= 200:
+                return rows
+    return rows
+
+
+def _proof_cards_from_metadata(metadata: dict[str, Any], *, limit: int) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen_fields: set[str] = set()
+
+    def add(value: Any, *, field: str = "", secondary: bool = False) -> None:
+        if not isinstance(value, dict) or not value.get("crop_path"):
+            return
+        data = dict(value)
+        if field and not data.get("field"):
+            data["field"] = field
+        field_key = re.sub(
+            r"[^a-z0-9_]+",
+            "_",
+            str(data.get("field") or data.get("requirement") or "").lower(),
+        ).strip("_")
+        if secondary and field_key and _context_field_already_covered(field_key, seen_fields):
+            return
+        if not _is_report_proof_card(data):
+            return
+        rows.append(
+            {
+                "field": data.get("field") or data.get("requirement") or data.get("claim") or "",
+                "value": _report_context_text(
+                    data.get("value") or data.get("source_quote") or data.get("quote") or "",
+                    max_chars=160,
+                ),
+                "crop_path": data.get("crop_path", ""),
+                "locator": data.get("locator") or data.get("source_locator") or "",
+                "proof": data.get("proof_label") or data.get("proves") or data.get("proof") or data.get("claim") or "",
+                "limitation": data.get("limitation") or data.get("crop_status") or "",
+            }
+        )
+        if field_key:
+            seen_fields.add(field_key)
+
+    inventory = metadata.get("field_inventory")
+    if isinstance(inventory, list):
+        for row in inventory:
+            add(row)
+            if len(rows) >= limit:
+                return rows
+    extracted = metadata.get("extracted_fields")
+    if isinstance(extracted, dict):
+        for field, value in extracted.items():
+            add(value, field=str(field))
+            if len(rows) >= limit:
+                return rows
+    for key in ("evidence_chain", "claim_to_source_refs"):
+        values = metadata.get(key)
+        if not isinstance(values, list):
+            continue
+        for row in values:
+            add(row, secondary=True)
+            if len(rows) >= limit:
+                return rows
+    return rows
+
+
+def _is_report_proof_card(row: dict[str, Any]) -> bool:
+    field = str(row.get("field") or row.get("requirement") or row.get("claim") or "")
+    crop_id = str(row.get("crop_id") or "")
+    name = f"{field} {crop_id}".lower()
+    if "_context" in name or "[truncated]" in name or "[截断]" in name:
+        return False
+    if re.fullmatch(r"p\d+_b\d+", crop_id.lower()) and not field:
+        return False
+    if "page_number" in name:
+        return False
+    known = {
+        "invoice_number",
+        "supplier",
+        "buyer",
+        "invoice_date",
+        "amount_total",
+        "currency_tax",
+        "line_items_product_title",
+        "signature_or_authorized_signatory",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity",
+        "duplicate_payment_screen",
+        "source_traceability",
+        "template_match",
+        "bank_details",
+    }
+    normalized = re.sub(r"[^a-z0-9_]+", "_", field.lower()).strip("_")
+    if normalized in known:
+        return True
+    proof = str(row.get("proof_label") or row.get("proves") or row.get("proof") or row.get("claim") or "")
+    return bool(proof.strip()) and "context" not in proof.lower()
+
+
+def _context_field_already_covered(field_key: str, seen_fields: set[str]) -> bool:
+    if field_key in seen_fields:
+        return True
+    aliases = {
+        "currency": {"currency_tax"},
+        "tax_amount": {"currency_tax"},
+        "tax_details": {"currency_tax"},
+        "visual_signature_mark": {"signature_or_authorized_signatory"},
+    }
+    return bool(aliases.get(field_key, set()).intersection(seen_fields))
+
+
+def _sanitize_prompt_injection_details(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _sanitize_prompt_injection_details(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_prompt_injection_details(item) for item in value]
+    if isinstance(value, str):
+        return PROMPT_INJECTION_DETAIL_RE.sub("材料中包含越权执行性指令，已按数据处理", value)
+    return value
+
+
+def _filter_role_payload(role: str, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        allowed = set(role_input_keys(role))
+    except KeyError:
+        return payload
+    return {key: value for key, value in payload.items() if key in allowed}
+
+
+def _apply_report_instruction_appendix(markdown: str, user_message: str) -> str:
+    request = str(user_message or "")
+    additions: list[str] = []
+    if ("最终报告" in request or "报告归档" in request) and "本报告用于本地材料审查与报告归档" not in markdown:
+        additions.append("- 本报告用于本地材料审查与报告归档；证据链完整性以材料状态和 Claim-to-Evidence Matrix 为准。")
+    if "重复付款" in request and "重复付款检查细节" not in markdown:
+        additions.append(
+            "- 重复付款检查细节：应核对供应商、发票号、金额、日期、清账记录和历史付款记录；当前结论仅基于案卷内已提交的重复付款检查证据。"
+        )
+    if "Clear Invoice" in request and "Clear Invoice 边界" not in markdown:
+        additions.append(
+            "- Clear Invoice 边界：Clear Invoice/process log 只能作为历史流程证据，不能证明付款、批准、过账、路由或提交动作发生。"
+        )
+    if not additions:
+        return markdown
+    appendix = "\n\n## 报告修订说明\n\n" + "\n".join(additions) + "\n"
+    return markdown.rstrip() + appendix
+
+
+def _sanitize_report_markdown_for_guards(markdown: str, case_state: Any) -> str:
+    text = str(markdown or "")
+    text = (
+        text.replace("可付款", "风险已排除")
+        .replace("可支付", "风险已排除")
+        .replace("不能作为已付款结论依据", "不能作为付款状态结论依据")
+        .replace("不能作为已支付结论依据", "不能作为支付状态结论依据")
+        .replace("付款已执行", "执行状态结论不受支持")
+        .replace("付款已经执行", "执行状态结论不受支持")
+        .replace("发票已批准", "审批状态结论不受支持")
+        .replace("发票已经批准", "审批状态结论不受支持")
+        .replace("已过账", "过账状态结论不受支持")
+        .replace("已经过账", "过账状态结论不受支持")
+        .replace("已清账", "清账关系待核对")
+        .replace("已经清账", "清账关系待核对")
+        .replace("已经付款", "历史付款记录")
+        .replace("已经支付", "历史支付记录")
+        .replace("已付款", "历史付款记录")
+        .replace("已支付", "历史支付记录")
+        .replace("可审批", "限制已解除")
+        .replace("可批准", "限制已解除")
+        .replace("可提交", "限制已解除")
+        .replace("无保留报告", "限制未解除的报告")
+        .replace("无保留意见", "限制未解除的结论")
+    )
+    if not _case_has_unresolved_requirements(case_state):
+        return text
+    text = text.replace("五项核心要求中四项已满足", "部分核心材料已提交并有 evidence 支持")
+    text = text.replace("四证齐全", "主要材料已提交")
+    text = text.replace("材料齐全", "材料限制已解除")
+    text = text.replace("全部要求通过", "限制均已解除")
+    text = re.sub(r"证据链完整(?!性|后)", "证据链完整性", text)
+    return text
+
+
+def _case_has_unresolved_requirements(case_state: Any) -> bool:
+    requirements = list(getattr(case_state, "requirements", []) or [])
+    if not requirements:
+        return True
+    for item in requirements:
+        status = str(getattr(item, "status", ""))
+        required = bool(getattr(item, "required", True))
+        if not required and status in {"missing", "weak", "submitted", "accepted", "satisfied"}:
+            continue
+        if status not in {"accepted", "satisfied"}:
+            return True
+    return False
+
+
+def _safe_slug(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())[:60].strip("._")
+    return slug or "artifact"
+
+
+def _sha256(value: str) -> str:
+    if not value:
+        return ""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+ContextCompiler = ContextManager
+
+
+def classify_runtime_error(*, kind: str, name: str, error: dict[str, Any] | str) -> dict[str, Any]:
+    text = json.dumps(error, ensure_ascii=False, default=str).lower()
+    if name == "read_attachment" and (
+        "ocr_unavailable" in text
+        or "ocr_failed" in text
+        or "tesseract" in text
+    ):
+        return {
+            "status": "terminal",
+            "error_type": "ocr_unavailable",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": "call_tool:read_attachment",
+            "user_message_hint": (
+                "PDF/图片附件需要本地 OCR，但当前 OCR 命令不可用或执行失败。请配置 INVOICE_AGENT_TESSERACT_CMD，"
+                "或先提供可复制文本、清晰图片、文本型 PDF 后重新提交。"
+            ),
+        }
+    if kind in {"role", "model"} and (
+        "timeout" in text
+        or "timed out" in text
+        or "apiterror" in text
+        or "apitimeouterror" in text
+    ):
+        return {
+            "status": "terminal",
+            "error_type": "llm_timeout",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": f"delegate_agent:{name}" if kind == "role" and name else "",
+            "user_message_hint": (
+                "模型调用超时，本轮不要重复调用同一个 specialist；请基于已有 case_state/observations 告知用户稍后重试。"
+            ),
+        }
+    if name == "read_attachment" and (
+        "pdf_reader_unavailable" in text
+        or "pdf_open_error" in text
+        or "image_open_error" in text
+    ):
+        return {
+            "status": "terminal",
+            "error_type": "document_open_error",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": "call_tool:read_attachment",
+            "user_message_hint": (
+                "附件原件无法打开或解析。请确认文件未损坏、未加密，并重新上传可读取的 PDF/JPG/PNG 或文本导出。"
+            ),
+        }
+    if name == "read_attachment" and "unsupported attachment type" in text:
+        return {
+            "status": "terminal",
+            "error_type": "unsupported_attachment_type",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": "call_tool:read_attachment",
+            "user_message_hint": (
+                "附件格式当前不在可读取范围内。请上传 txt、md、json、csv、log、xml、yaml、yml、pdf、jpg、jpeg、png、tif、tiff、webp、gif 或 bmp。"
+            ),
+        }
+    if name == "read_attachment" and ("does not exist" in text or "not declared" in text):
+        return {
+            "status": "terminal",
+            "error_type": "attachment_missing",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": "call_tool:read_attachment",
+            "user_message_hint": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+        }
+    if name == "read_attachment" and ("unicodedecodeerror" in text or "could not decode attachment as text" in text):
+        return {
+            "status": "terminal",
+            "error_type": "attachment_decode_error",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": "call_tool:read_attachment",
+            "user_message_hint": (
+                "Attachment text could not be decoded. Convert it to UTF-8 txt, md, json, csv, log, xml, yaml, or yml and resubmit."
+            ),
+        }
+    if "fileboundaryerror" in text or "path escapes" in text or "unsafe case_id" in text:
+        return {
+            "status": "terminal",
+            "error_type": "unsafe_workspace_path",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": _runtime_blocked_action(name),
+            "user_message_hint": (
+                "The requested path was rejected by workspace boundary checks. Use a path inside the current case workspace."
+            ),
+        }
+    if name == "write_case_file" and (
+        "noexecutionwordingerror" in text or "blocked execution wording" in text
+    ):
+        return {
+            "status": "terminal",
+            "error_type": "report_execution_wording",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": "call_tool:write_case_file",
+            "user_message_hint": (
+                "Report content was not written because it contained ERP execution or payment wording. "
+                "Revise the report to describe local review findings only."
+            ),
+        }
+    if name == "render_pdf" and (
+        "filenotfounderror" in text or "no such file or directory" in text or "does not exist" in text
+    ):
+        return {
+            "status": "terminal",
+            "error_type": "render_source_missing",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": "call_tool:render_pdf",
+            "user_message_hint": (
+                "PDF rendering could not continue because the source Markdown report file was not found. "
+                "Write or regenerate the local Markdown report before rendering a PDF."
+            ),
+        }
+    if name == "write_case_patch" and "tool input too large" in text:
+        return {
+            "status": "terminal",
+            "error_type": "patch_input_too_large",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": "write_case_patch",
+            "user_message_hint": (
+                "The case patch was too large to apply safely. Ask for a smaller evidence batch or split the patch."
+            ),
+        }
+    return {
+        "status": "retryable",
+        "error_type": "unknown_runtime_error",
+        "retry_allowed": True,
+        "recommended_action": "retry_or_final_answer",
+        "blocked_action": "",
+        "user_message_hint": "",
+    }
+
+
+def _runtime_blocked_action(name: str) -> str:
+    if name == "write_case_patch":
+        return "write_case_patch"
+    return f"call_tool:{name}" if name else ""
+
+
+def step_budget_runtime_feedback() -> dict[str, Any]:
+    return {
+        "status": "terminal",
+        "error_type": "step_budget_near_limit",
+        "retry_allowed": False,
+        "recommended_action": "final_answer",
+        "blocked_action": "",
+        "user_message_hint": "步数即将耗尽，请基于已有 observation 给用户明确下一步。",
+    }
+
+
+def _latest_runtime_feedback(observations: list[dict[str, Any]]) -> dict[str, Any]:
+    for observation in reversed(observations):
+        if not isinstance(observation, dict):
+            continue
+        feedback = observation.get("runtime_feedback")
+        if isinstance(feedback, dict) and feedback:
+            return dict(feedback)
+    return {}

@@ -1,0 +1,23 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [
+    "backend\\tests"
+  ],
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}\\backend"
+  ],
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true
+  },
+  "rest-client.environmentVariables": {
+    "$shared": {
+      "baseUrl": "http://127.0.0.1:8010"
+    }
+  }
+}
+

@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from pydantic import BaseModel
+
+from app.state.schemas import CasePatch, EvidenceReviewResult, MaterialsAdvisorResult, ReportWriterResult
+
+
+RoleOwner = Literal["planner", "route_policy"]
+RoleSideEffect = Literal["none"]
+
+
+@dataclass(frozen=True)
+class RoleCapability:
+    name: str
+    input_keys: tuple[str, ...]
+    output_model: type[BaseModel]
+    prompt_version: str
+    prompt_file: str
+    context_policy: tuple[str, ...]
+    max_retries: int
+    allowed_tools: tuple[str, ...]
+    side_effects: RoleSideEffect
+    owner: RoleOwner
+    guard_policy: tuple[str, ...]
+    fallback_policy: str
+
+    def trace_metadata(self) -> dict[str, Any]:
+        return {
+            "prompt_version": self.prompt_version,
+            "prompt_file": self.prompt_file,
+            "output_model": self.output_model.__name__,
+            "context_policy": list(self.context_policy),
+            "max_retries": self.max_retries,
+            "allowed_tools": list(self.allowed_tools),
+            "side_effects": self.side_effects,
+            "owner": self.owner,
+            "guard_policy": list(self.guard_policy),
+            "fallback_policy": self.fallback_policy,
+        }
+
+
+ROLE_CAPABILITIES: dict[str, RoleCapability] = {
+    "materials_advisor": RoleCapability(
+        name="materials_advisor",
+        input_keys=("user_question", "case_state", "rag_context", "attachment_manifest", "memory_hints", "supervisor_task"),
+        output_model=MaterialsAdvisorResult,
+        prompt_version="materials_advisor_v4.5+global_policy_v1.2+task_skill_v1.2+rag_guidance_context+supervisor_task+optional_quality_split",
+        prompt_file="backend/app/agents/materials_advisor/prompt.md",
+        context_policy=("case_state_summary", "attachment_manifest", "rag_guidance", "memory_hints"),
+        max_retries=1,
+        allowed_tools=(),
+        side_effects="none",
+        owner="planner",
+        guard_policy=("schema_retry", "rag_guidance_boundary"),
+        fallback_policy="schema_retry_once_then_runtime_error",
+    ),
+    "evidence_reviewer": RoleCapability(
+        name="evidence_reviewer",
+        input_keys=(
+            "mode",
+            "user_message",
+            "case_state",
+            "rag_context",
+            "attachment_context",
+            "attachment_manifest",
+            "extraction_context",
+            "extraction_result",
+            "target_evidence_id",
+            "target_attachment_id",
+            "user_correction",
+            "memory_hints",
+            "supervisor_task",
+        ),
+        output_model=EvidenceReviewResult,
+        prompt_version="evidence_reviewer_v4.3+global_policy_v1.2+review_skill_v1.7+pdf_image_skill_v1.4+attachment_skill_v1.0+supervisor_task",
+        prompt_file="backend/app/agents/evidence_reviewer/prompt.md",
+        context_policy=(
+            "case_state_summary",
+            "current_attachment_or_manifest",
+            "extraction_result",
+            "rag_guidance",
+            "memory_hints",
+        ),
+        max_retries=1,
+        allowed_tools=(),
+        side_effects="none",
+        owner="route_policy",
+        guard_policy=("schema_retry", "source_boundary", "prompt_injection_boundary"),
+        fallback_policy="schema_retry_once_then_runtime_error",
+    ),
+    "case_patch_writer": RoleCapability(
+        name="case_patch_writer",
+        input_keys=("role_result", "case_state", "user_message", "memory_hints", "supervisor_task"),
+        output_model=CasePatch,
+        prompt_version="case_patch_writer_v4.8+global_policy_v1.2",
+        prompt_file="backend/app/agents/patch_builder/prompt.md",
+        context_policy=("case_state_summary", "role_result", "memory_hints"),
+        max_retries=1,
+        allowed_tools=(),
+        side_effects="none",
+        owner="route_policy",
+        guard_policy=("schema_retry", "patch_normalizer", "quote_preservation"),
+        fallback_policy="schema_retry_once_then_runtime_error",
+    ),
+    "report_writer": RoleCapability(
+        name="report_writer",
+        input_keys=(
+            "case_state",
+            "evidence",
+            "conversation_summary",
+            "user_request",
+            "report_instructions",
+            "attachment_manifest",
+            "evidence_chain_context",
+            "memory_hints",
+            "supervisor_task",
+        ),
+        output_model=ReportWriterResult,
+        prompt_version="report_writer_v5.1+global_policy_v1.2+pdf_skill_v2.1",
+        prompt_file="backend/app/agents/report_writer/prompt.md",
+        context_policy=("case_state_summary", "evidence_chain_context", "attachment_manifest", "memory_hints"),
+        max_retries=1,
+        allowed_tools=(),
+        side_effects="none",
+        owner="route_policy",
+        guard_policy=("schema_retry", "no_execution_wording", "case_state_consistency"),
+        fallback_policy="schema_retry_once_then_runtime_error",
+    ),
+}
+
+
+def role_capability(role: str) -> RoleCapability:
+    try:
+        return ROLE_CAPABILITIES[role]
+    except KeyError as exc:
+        raise KeyError(f"Unknown role capability: {role}") from exc
+
+
+def role_input_keys(role: str) -> tuple[str, ...]:
+    return role_capability(role).input_keys
+
+
+def role_prompt_version(role: str) -> str:
+    return role_capability(role).prompt_version

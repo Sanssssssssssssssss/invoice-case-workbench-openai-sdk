@@ -1,0 +1,9 @@
+{"message":"帮我新建一个发票付款审查 case。"}
+{"message":"我现在需要准备什么？"}
+{"file":"evidence/01_invoice_INV-2026-001.md"}
+{"file":"evidence/02_purchase_order_PO-2026-7788.md"}
+{"file":"evidence/03_goods_receipt_GRN-2026-8899.md"}
+{"file":"evidence/04_vendor_record_Aurora.md"}
+{"file":"evidence/05_duplicate_payment_check_INV-2026-001.md"}
+{"message":"生成报告。"}
+

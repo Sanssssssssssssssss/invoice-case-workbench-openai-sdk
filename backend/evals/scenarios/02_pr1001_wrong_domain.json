@@ -1,0 +1,24 @@
+{
+  "name": "PR-1001 错域六附件",
+  "case_id": "eval_pr1001_wrong_domain",
+  "raw_leak_phrases": ["Request items: 10 laptops", "FA-ACME-2026 covers office equipment"],
+  "steps": [
+    {
+      "message": "这些文件可以用于当前发票付款审查吗？请仔细审核并说明缺口。",
+      "attachments": [
+        "samples/cases/PR-1001_complete_submission/01_approval_request.md",
+        "samples/cases/PR-1001_complete_submission/02_budget_evidence.md",
+        "samples/cases/PR-1001_complete_submission/03_vendor_onboarding_and_risk.md",
+        "samples/cases/PR-1001_complete_submission/04_quote_price_basis.md",
+        "samples/cases/PR-1001_complete_submission/05_framework_agreement.md",
+        "samples/cases/PR-1001_complete_submission/06_procurement_policy_excerpt.md"
+      ]
+    }
+  ],
+  "expect": {
+    "contains_actions": ["call_tool:read_attachment", "call_role:evidence_reviewer"],
+    "reply_contains_any": ["PR", "采购申请", "不适合", "缺失", "发票"],
+    "forbid_report": true,
+    "forbid_step_limit": true
+  }
+}

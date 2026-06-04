@@ -1,0 +1,29 @@
+{
+  "name": "重复付款检查命中历史付款",
+  "case_id": "eval_duplicate_payment_found",
+  "steps": [
+    {
+      "message": "请审查这批材料，重点看重复付款检查是否有命中。",
+      "attachments": [
+        "samples/cases/enterprise_edge_cases/duplicate_found/01_invoice_INV-9201.md",
+        "samples/cases/enterprise_edge_cases/duplicate_found/02_purchase_order_PO-9201.md",
+        "samples/cases/enterprise_edge_cases/duplicate_found/03_goods_receipt_GRN-9201.md",
+        "samples/cases/enterprise_edge_cases/duplicate_found/04_vendor_record_Apex.md",
+        "samples/cases/enterprise_edge_cases/duplicate_found/05_duplicate_payment_check_INV-9201.md"
+      ]
+    }
+  ],
+  "expect": {
+    "contains_actions": ["call_tool:read_attachment", "call_role:evidence_reviewer", "call_role:case_patch_writer", "write_case_patch", "final_answer"],
+    "min_evidence": 5,
+    "case_status_not": "ready_for_report",
+    "requirement_statuses": {
+      "duplicate_payment_screen": ["weak", "conflict"]
+    },
+    "risk_contains_any": ["重复", "duplicate", "PAY-2026-4431", "CLR-2026-4431"],
+    "reply_contains_any": ["重复", "历史付款", "清账", "PAY-2026-4431", "CLR-2026-4431"],
+    "reply_not_contains": ["五项必备材料均已满足", "证据链完整"],
+    "forbid_execution_claim": true,
+    "forbid_step_limit": true
+  }
+}

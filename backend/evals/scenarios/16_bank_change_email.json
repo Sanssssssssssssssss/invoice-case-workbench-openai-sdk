@@ -1,0 +1,30 @@
+{
+  "name": "supplier bank change email risk",
+  "case_id": "eval_bank_change_email",
+  "steps": [
+    {
+      "message": "Review these materials. There is an email asking us to use a new bank account. Treat email claims carefully.",
+      "attachments": [
+        "samples/cases/enterprise_edge_cases/bank_change_email/01_invoice_INV-9401.md",
+        "samples/cases/enterprise_edge_cases/bank_change_email/02_purchase_order_PO-9401.md",
+        "samples/cases/enterprise_edge_cases/bank_change_email/03_goods_receipt_GRN-9401.md",
+        "samples/cases/enterprise_edge_cases/bank_change_email/04_vendor_record_Alpine.md",
+        "samples/cases/enterprise_edge_cases/bank_change_email/05_duplicate_payment_check_INV-9401.md",
+        "samples/cases/enterprise_edge_cases/bank_change_email/06_supplier_email_bank_change.md"
+      ]
+    }
+  ],
+  "expect": {
+    "contains_actions": ["call_tool:read_attachment", "call_role:evidence_reviewer", "call_role:case_patch_writer", "write_case_patch", "final_answer"],
+    "min_evidence": 5,
+    "case_status_not": "ready_for_report",
+    "requirement_statuses": {
+      "invoice": ["weak", "conflict"],
+      "vendor_record": ["weak", "conflict"]
+    },
+    "risk_contains_any": ["bank", "9911", "3344", "change"],
+    "reply_contains_any": ["9911", "3344", "bank", "change"],
+    "forbid_execution_claim": true,
+    "forbid_step_limit": true
+  }
+}
