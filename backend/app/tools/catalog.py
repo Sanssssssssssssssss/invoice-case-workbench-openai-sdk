@@ -28,8 +28,8 @@ DEFAULT_APPROVAL: dict[str, ApprovalMode] = {
     "list_case_files": "never",
     "read_attachment": "never",
     "write_case_patch": "never",
-    "write_case_file": "never",
-    "render_pdf": "never",
+    "write_case_file": "always",
+    "render_pdf": "always",
 }
 
 INTERNAL_ONLY = {"write_case_patch"}
