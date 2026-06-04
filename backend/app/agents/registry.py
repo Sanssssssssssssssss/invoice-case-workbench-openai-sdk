@@ -46,6 +46,7 @@ class RoleRegistry:
         model = self.llm.settings.llm_model
         timeout_seconds = self.llm.settings.timeout_for_role(role)
         started = time.perf_counter()
+        runtime = "agent_as_tool"
         trace_metadata = {
             "role": role,
             "prompt_version": prompt_version,
@@ -53,7 +54,8 @@ class RoleRegistry:
             "provider": self.llm.settings.llm_provider,
             "base_url": self.llm.settings.llm_base_url,
             "schema": capability.output_model.__name__,
-            "runtime": "openai_agents_sdk_agent_as_tool",
+            "runtime": runtime,
+            "agent_as_tool": True,
             "timeout_seconds": timeout_seconds,
             **generation_hash_metadata(system_prompt, payload),
         }
@@ -70,7 +72,8 @@ class RoleRegistry:
                 "role": role,
                 "prompt_version": prompt_version,
                 "payload_sha256": trace_metadata["payload_sha256"],
-                "runtime": "agent_as_tool",
+                "runtime": runtime,
+                "agent_as_tool": True,
                 "timeout_seconds": timeout_seconds,
             },
             timeout_seconds=timeout_seconds,
@@ -93,11 +96,12 @@ class RoleRegistry:
                     system_prompt=system_prompt,
                     payload=payload,
                     latency_ms=_elapsed_ms(started),
+                    runtime=runtime,
                 )
                 self.llm.calls.append(record)
                 generation.update(
                     output=generation_output("", error="llm_unavailable", mode=self.llm.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms, "runtime": "agent_as_tool"},
+                    metadata={"latency_ms": record.latency_ms, "runtime": runtime, "agent_as_tool": True},
                     level="ERROR",
                     status_message="llm_unavailable",
                 )
@@ -124,11 +128,12 @@ class RoleRegistry:
                     system_prompt=system_prompt,
                     payload=payload,
                     latency_ms=_elapsed_ms(started),
+                    runtime=runtime,
                 )
                 self.llm.calls.append(record)
                 generation.update(
                     output=generation_output("", error=record.error, mode=self.llm.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms, "schema": capability.output_model.__name__, "runtime": "agent_as_tool"},
+                    metadata={"latency_ms": record.latency_ms, "schema": capability.output_model.__name__, "runtime": runtime, "agent_as_tool": True},
                     level="ERROR",
                     status_message=record.error,
                 )
@@ -167,6 +172,7 @@ class RoleRegistry:
                 usage=usage,
                 latency_ms=_elapsed_ms(started),
                 content_chars=len(raw_response),
+                runtime="agent_as_tool",
             )
             self.llm.calls.append(record)
             generation.update(
@@ -178,7 +184,7 @@ class RoleRegistry:
                     output_cost_per_1m=self.llm.settings.llm_output_cost_per_1m,
                     cached_input_cost_per_1m=self.llm.settings.llm_cached_input_cost_per_1m,
                 ),
-                metadata={"latency_ms": record.latency_ms, "runtime": "agent_as_tool"},
+                metadata={"latency_ms": record.latency_ms, "runtime": "agent_as_tool", "agent_as_tool": True},
             )
             return raw_response
 
@@ -225,6 +231,7 @@ class RoleRegistry:
     def trace_metadata(self, role: str) -> dict[str, Any]:
         metadata = self.capability(role).trace_metadata()
         metadata["runtime"] = "agent_as_tool"
+        metadata["agent_as_tool"] = True
         return metadata
 
     @property
