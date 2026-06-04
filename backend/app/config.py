@@ -10,8 +10,6 @@ from pydantic import BaseModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = PROJECT_ROOT / "backend"
-LEGACY_BACKEND_DIR = Path(r"E:\GPTProject2\ERPagent\rfp-security-rag\backend")
-LEGACY_KNOWLEDGE_ROOT = Path(r"E:\GPTProject2\ERPagent\rfp-security-rag\knowledge\ERP Approval")
 DEFAULT_KNOWLEDGE_ROOT = PROJECT_ROOT / "knowledge" / "invoice_payment"
 
 
@@ -22,7 +20,6 @@ class Settings(BaseModel):
     storage_root: Path = BACKEND_DIR / "storage"
     session_db_path: Path = BACKEND_DIR / "storage" / "sessions.sqlite"
     memory_db_path: Path = BACKEND_DIR / "storage" / "memory.sqlite"
-    legacy_env_file: Path = LEGACY_BACKEND_DIR / ".env"
     knowledge_roots: list[Path] = [DEFAULT_KNOWLEDGE_ROOT]
     llm_provider: str = "openai"
     llm_model: str = "gpt-4.1-mini"
@@ -65,14 +62,11 @@ class Settings(BaseModel):
 
 def _load_env_files() -> None:
     explicit = os.getenv("INVOICE_AGENT_ENV_FILE", "").strip()
-    candidates = [
-        Path(explicit) if explicit else None,
-        BACKEND_DIR / ".env",
-        LEGACY_BACKEND_DIR / ".env",
-    ]
+    candidates = [Path(explicit) if explicit else None, BACKEND_DIR / ".env"]
     for candidate in candidates:
         if candidate and candidate.exists():
             load_dotenv(candidate, override=False)
+
 
 def _first_env(*names: str) -> str | None:
     for name in names:
@@ -129,33 +123,22 @@ def _paths_env(name: str, default: list[Path]) -> list[Path]:
     return paths or default
 
 
-def _default_knowledge_roots() -> list[Path]:
-    roots = [DEFAULT_KNOWLEDGE_ROOT]
-    include_legacy = os.getenv("INVOICE_AGENT_INCLUDE_LEGACY_KNOWLEDGE", "").strip().lower()
-    if include_legacy in {"1", "true", "yes", "on"} and LEGACY_KNOWLEDGE_ROOT.exists():
-        roots.append(LEGACY_KNOWLEDGE_ROOT)
-    return roots
-
-
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     _load_env_files()
     provider = (_first_env("LLM_PROVIDER") or "openai").lower()
-    model = _first_env("LLM_MODEL", f"{provider.upper()}_MODEL") or "gpt-4.1-mini"
-    api_key = _first_env("LLM_API_KEY", f"{provider.upper()}_API_KEY", "OPENAI_API_KEY")
-    base_url = (
-        _first_env("LLM_BASE_URL", f"{provider.upper()}_BASE_URL", "OPENAI_BASE_URL")
-        or "https://api.openai.com/v1"
-    )
-    embedding_key = _first_env("EMBEDDING_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY")
-    embedding_base = _first_env("EMBEDDING_BASE_URL", "OPENAI_BASE_URL", "LLM_BASE_URL") or base_url
+    model = _first_env("LLM_MODEL") or "gpt-4.1-mini"
+    api_key = _first_env("LLM_API_KEY")
+    base_url = _first_env("LLM_BASE_URL") or "https://api.openai.com/v1"
+    embedding_key = _first_env("EMBEDDING_API_KEY", "LLM_API_KEY")
+    embedding_base = _first_env("EMBEDDING_BASE_URL", "LLM_BASE_URL") or base_url
     storage_root = Path(os.getenv("INVOICE_AGENT_STORAGE_ROOT", BACKEND_DIR / "storage"))
     return Settings(
         workspace_root=Path(os.getenv("INVOICE_AGENT_WORKSPACE_ROOT", PROJECT_ROOT / "workspace" / "cases")),
         storage_root=storage_root,
         session_db_path=Path(os.getenv("INVOICE_AGENT_SESSION_DB", storage_root / "sessions.sqlite")),
         memory_db_path=Path(os.getenv("INVOICE_AGENT_MEMORY_DB", storage_root / "memory.sqlite")),
-        knowledge_roots=_paths_env("INVOICE_AGENT_KNOWLEDGE_ROOTS", _default_knowledge_roots()),
+        knowledge_roots=_paths_env("INVOICE_AGENT_KNOWLEDGE_ROOTS", [DEFAULT_KNOWLEDGE_ROOT]),
         llm_provider=provider,
         llm_model=model,
         llm_api_key=api_key,
