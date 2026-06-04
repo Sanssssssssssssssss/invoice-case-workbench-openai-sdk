@@ -37,6 +37,25 @@ def test_llm_client_has_no_legacy_tool_call_compatibility_layer() -> None:
     assert hits == []
 
 
+def test_specialists_are_native_agent_as_tool_runtime() -> None:
+    registry_text = _read(BACKEND_APP / "agents" / "registry.py")
+    assert ".as_tool(" in registry_text
+    assert "runtime\": \"agent_as_tool\"" in registry_text
+    assert "MaterialsAdvisor(" not in registry_text
+    assert "EvidenceReviewer(" not in registry_text
+    assert "CasePatchWriter(" not in registry_text
+    assert "ReportWriter(" not in registry_text
+    for path in (
+        BACKEND_APP / "agents" / "materials_advisor" / "agent.py",
+        BACKEND_APP / "agents" / "evidence_reviewer" / "agent.py",
+        BACKEND_APP / "agents" / "patch_builder" / "agent.py",
+        BACKEND_APP / "agents" / "report_writer" / "agent.py",
+    ):
+        text = _read(path)
+        assert "class " not in text
+        assert "complete_structured" not in text
+
+
 def test_tool_catalog_keeps_patch_internal_and_report_writes_approval_gated() -> None:
     catalog = ToolCatalog()
     visible_names = {item["name"] for item in catalog.visible_tools()}
