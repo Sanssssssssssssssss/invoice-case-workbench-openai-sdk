@@ -5,7 +5,7 @@ import { api, createEventSource } from '@/lib/api'
 import { createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic } from '@/lib/chat'
 import { parseLiveStatusMessage, parseTraceEventMessage } from '@/lib/eventStream'
 import { mergeEvents } from '@/lib/trace'
-import type { AttachmentUpload, ConversationItem, LiveStatus, TraceEvent } from '@/types'
+import type { AgentTurnResponse, ApprovalInterrupt, AttachmentUpload, ConversationItem, LiveStatus, TraceEvent } from '@/types'
 import { useUiStore } from '@/store/uiStore'
 import { TitleBar } from '@/components/TitleBar'
 import { CaseRail } from '@/components/CaseRail'
@@ -18,6 +18,7 @@ export default function App() {
   const [liveEvents, setLiveEvents] = useState<TraceEvent[]>([])
   const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null)
   const [optimisticMessages, setOptimisticMessages] = useState<ConversationItem[]>([])
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalInterrupt[]>([])
   const liveEventsRef = useRef<TraceEvent[]>([])
   const selectedRunIdRef = useRef<string>('')
   const selectedCaseId = useUiStore((state) => state.selectedCaseId)
@@ -171,6 +172,7 @@ export default function App() {
     onSuccess: (created) => {
       queryClient.setQueryData(['cases'], (current: unknown) => [created, ...((current as typeof casesQuery.data) ?? [])])
       setSelectedCaseId(created.case_id)
+      setPendingApprovals([])
     }
   })
 
@@ -181,6 +183,7 @@ export default function App() {
       if (selectedCaseId === caseId) {
         const next = (casesQuery.data ?? []).find((item) => item.case_id !== caseId)
         setSelectedCaseId(next?.case_id ?? '')
+        setPendingApprovals([])
       }
     }
   })
@@ -190,8 +193,35 @@ export default function App() {
       setOptimisticMessages([])
       setLiveEvents([])
       setLiveStatus(null)
+      setPendingApprovals([])
     }
     setSelectedCaseId(caseId)
+  }
+
+  const refreshCaseData = async (caseId: string, runId = '') => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['cases'] }),
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] }),
+      queryClient.invalidateQueries({ queryKey: ['conversation', caseId] }),
+      queryClient.invalidateQueries({ queryKey: ['runs', caseId] }),
+      queryClient.invalidateQueries({ queryKey: ['liveStatus', caseId] }),
+      queryClient.invalidateQueries({ queryKey: ['artifacts', caseId] }),
+      queryClient.invalidateQueries({ queryKey: ['evidence', caseId] }),
+      runId ? queryClient.invalidateQueries({ queryKey: ['runEvents', caseId, runId] }) : Promise.resolve()
+    ])
+  }
+
+  const applyResponse = async (response: AgentTurnResponse) => {
+    const approvals = approvalInterruptsFromTrace(response.case_id, response.trace)
+    setPendingApprovals(approvals)
+    const runId = approvals[0]?.run_id || stringValue(response.trace.run_id)
+    if (runId) {
+      setSelectedRunId(runId)
+    }
+    if (response.case_id !== selectedCaseId) {
+      setSelectedCaseId(response.case_id)
+    }
+    await refreshCaseData(response.case_id, runId)
   }
 
   const sendTurn = async (message: string, files: File[]) => {
@@ -199,6 +229,7 @@ export default function App() {
     if (!caseId) return
     const userText = message || '请复核已上传的材料。'
     setRunning(true)
+    setPendingApprovals([])
     setLiveEvents([])
     setLiveStatus(null)
     setOptimisticMessages((current) => [
@@ -215,18 +246,7 @@ export default function App() {
         uploads.push(await api.uploadAttachment(caseId, file))
       }
       const response = await api.sendTurn(caseId, userText, uploads)
-      if (response.case_id !== selectedCaseId) {
-        setSelectedCaseId(response.case_id)
-      }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['cases'] }),
-        queryClient.invalidateQueries({ queryKey: ['case', response.case_id] }),
-        queryClient.invalidateQueries({ queryKey: ['conversation', response.case_id] }),
-        queryClient.invalidateQueries({ queryKey: ['runs', response.case_id] }),
-        queryClient.invalidateQueries({ queryKey: ['liveStatus', response.case_id] }),
-        queryClient.invalidateQueries({ queryKey: ['artifacts', response.case_id] }),
-        queryClient.invalidateQueries({ queryKey: ['evidence', response.case_id] })
-      ])
+      await applyResponse(response)
       completed = true
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
@@ -235,6 +255,23 @@ export default function App() {
       if (completed) {
         setOptimisticMessages([])
       }
+      setRunning(false)
+    }
+  }
+
+  const resumeApproval = async (approved: boolean) => {
+    const approval = pendingApprovals[0]
+    const caseId = approval?.case_id || selectedCaseId
+    const runId = approval?.run_id || selectedRunId
+    if (!caseId || !runId) return
+    setRunning(true)
+    try {
+      const response = await api.resumeApproval(caseId, runId, approved, approved ? 'approved_from_desktop' : 'rejected_from_desktop')
+      await applyResponse(response)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      setOptimisticMessages((current) => [...current, createOptimisticSystemMessage(`审批恢复失败：${detail}`)])
+    } finally {
       setRunning(false)
     }
   }
@@ -262,8 +299,10 @@ export default function App() {
             liveStatus={liveStatus}
             running={running}
             agentRunning={agentRunning}
+            pendingApprovals={pendingApprovals}
             onOpenRequirements={() => setInspectorTab('requirements')}
             onSend={(message, files) => void sendTurn(message, files)}
+            onApprovalDecision={(approved) => void resumeApproval(approved)}
           />
         </Panel>
         <PanelResizeHandle className="resize-handle" />
@@ -285,4 +324,27 @@ export default function App() {
       </PanelGroup>
     </div>
   )
+}
+
+function approvalInterruptsFromTrace(caseId: string, trace: Record<string, unknown>): ApprovalInterrupt[] {
+  const interrupts = Array.isArray(trace.interrupts) ? trace.interrupts : []
+  const runId = stringValue(trace.run_id)
+  return interrupts.filter(isRecord).map((item) => ({
+    type: stringValue(item.type) || 'tool_approval',
+    case_id: stringValue(item.case_id) || caseId,
+    run_id: stringValue(item.run_id) || runId,
+    tool: stringValue(item.tool) || 'tool',
+    risk_level: stringValue(item.risk_level) || 'read',
+    input_preview: stringValue(item.input_preview),
+    input_sha256: stringValue(item.input_sha256),
+    reason: stringValue(item.reason) || 'This action requires approval.'
+  }))
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : value == null ? '' : String(value)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
