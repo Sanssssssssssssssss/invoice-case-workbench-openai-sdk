@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Bot, CheckCircle2, ChevronDown, ChevronUp, CloudUpload, FileText, Paperclip, Send, Settings2, UserRound, X } from 'lucide-react'
+import { Bot, CheckCircle2, ChevronDown, ChevronUp, CloudUpload, FileText, Paperclip, Send, Settings2, ShieldAlert, UserRound, X } from 'lucide-react'
 import { Virtuoso } from 'react-virtuoso'
-import type { CaseState, ConversationItem, LiveStatus, TraceEvent } from '@/types'
+import type { ApprovalInterrupt, CaseState, ConversationItem, LiveStatus, TraceEvent } from '@/types'
 import { requirementProgress, statusLabel } from '@/lib/requirements'
 import { shortTime } from '@/lib/trace'
 import { shouldShowThinking, thinkingLineClass, thinkingRaw, thinkingSummary, thinkingTitle } from '@/lib/thinking'
@@ -16,11 +16,24 @@ interface CaseChatProps {
   liveStatus: LiveStatus | null
   running: boolean
   agentRunning: boolean
+  pendingApprovals: ApprovalInterrupt[]
   onOpenRequirements: () => void
   onSend: (message: string, files: File[]) => void
+  onApprovalDecision: (approved: boolean) => void
 }
 
-export function CaseChat({ caseState, messages, liveEvents, liveStatus, running, agentRunning, onOpenRequirements, onSend }: CaseChatProps) {
+export function CaseChat({
+  caseState,
+  messages,
+  liveEvents,
+  liveStatus,
+  running,
+  agentRunning,
+  pendingApprovals,
+  onOpenRequirements,
+  onSend,
+  onApprovalDecision
+}: CaseChatProps) {
   const [message, setMessage] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [dragActive, setDragActive] = useState(false)
@@ -29,6 +42,7 @@ export function CaseChat({ caseState, messages, liveEvents, liveStatus, running,
   const dragDepth = useRef(0)
   const requirements = caseState?.requirements ?? []
   const progress = requirementProgress(requirements)
+  const waitingApproval = pendingApprovals.length > 0
   const virtuosoComponents = useMemo(() => ({ Footer: MessageFooter }), [])
   const rows = useMemo<ChatRow[]>(() => {
     const base: ChatRow[] = messages.map((item) => ({ type: 'message', id: `${item.ts}:${item.role}:${item.content}`, item }))
@@ -39,7 +53,7 @@ export function CaseChat({ caseState, messages, liveEvents, liveStatus, running,
   }, [agentRunning, liveStatus, messages])
 
   const submit = () => {
-    if ((!message.trim() && files.length === 0) || running) return
+    if ((!message.trim() && files.length === 0) || running || waitingApproval) return
     onSend(message.trim(), files)
     setMessage('')
     setFiles([])
@@ -52,14 +66,14 @@ export function CaseChat({ caseState, messages, liveEvents, liveStatus, running,
   }
 
   const handleDragEnter = (event: DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer)) return
+    if (!dataTransferHasFiles(event.dataTransfer) || waitingApproval) return
     event.preventDefault()
     dragDepth.current += 1
     setDragActive(true)
   }
 
   const handleDragOver = (event: DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer)) return
+    if (!dataTransferHasFiles(event.dataTransfer) || waitingApproval) return
     event.preventDefault()
     event.dataTransfer.dropEffect = 'copy'
   }
@@ -72,7 +86,7 @@ export function CaseChat({ caseState, messages, liveEvents, liveStatus, running,
   }
 
   const handleDrop = (event: DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer)) return
+    if (!dataTransferHasFiles(event.dataTransfer) || waitingApproval) return
     event.preventDefault()
     dragDepth.current = 0
     setDragActive(false)
@@ -97,8 +111,8 @@ export function CaseChat({ caseState, messages, liveEvents, liveStatus, running,
           </div>
           <div className={`agent-card ${agentRunning ? 'running' : ''}`}>
             <span className="running-dot" />
-            <strong>{agentRunning ? 'Agent 运行中' : 'Agent 就绪'}</strong>
-            <span>{agentRunning ? liveStatus?.latestSummary || liveEvents.at(-1)?.summary || '规划器正在判断下一步' : '等待指令'}</span>
+            <strong>{agentRunning ? 'Agent 运行中' : waitingApproval ? '等待确认' : 'Agent 就绪'}</strong>
+            <span>{agentRunning ? liveStatus?.latestSummary || liveEvents.at(-1)?.summary || '规划器正在判断下一步' : waitingApproval ? '有工具调用需要人工确认' : '等待指令'}</span>
           </div>
         </div>
       </header>
@@ -126,8 +140,10 @@ export function CaseChat({ caseState, messages, liveEvents, liveStatus, running,
         </motion.div>
       )}
 
+      {waitingApproval && <ApprovalPanel approvals={pendingApprovals} running={running} onDecision={onApprovalDecision} />}
+
       <footer
-        className={`composer ${dragActive ? 'drag-active' : ''}`}
+        className={`composer ${dragActive ? 'drag-active' : ''} ${waitingApproval ? 'approval-locked' : ''}`}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -145,6 +161,7 @@ export function CaseChat({ caseState, messages, liveEvents, liveStatus, running,
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -8 }}
                   onClick={() => setFiles((current) => current.filter((item) => item !== file))}
+                  disabled={waitingApproval}
                 >
                   <FileText size={14} />
                   <span>{file.name}</span>
@@ -153,7 +170,7 @@ export function CaseChat({ caseState, messages, liveEvents, liveStatus, running,
               ))}
             </AnimatePresence>
           </div>
-          <button className="dashed-add" onClick={() => fileInputRef.current?.click()}>
+          <button className="dashed-add" onClick={() => fileInputRef.current?.click()} disabled={waitingApproval}>
             <Paperclip size={15} />
             添加
           </button>
@@ -176,17 +193,18 @@ export function CaseChat({ caseState, messages, liveEvents, liveStatus, running,
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') submit()
             }}
-            placeholder="询问缺失材料、上传发票，或让 Agent 复核当前案件"
+            placeholder={waitingApproval ? '请先处理上方工具确认。' : '询问缺失材料、上传发票，或让 Agent 复核当前案件'}
+            disabled={waitingApproval}
           />
           <div className="composer-tools">
-            <button onClick={() => fileInputRef.current?.click()} aria-label="Attach files">
+            <button onClick={() => fileInputRef.current?.click()} aria-label="Attach files" disabled={waitingApproval}>
               <Paperclip size={19} />
             </button>
-            <button onClick={() => fileInputRef.current?.click()} aria-label="Upload files">
+            <button onClick={() => fileInputRef.current?.click()} aria-label="Upload files" disabled={waitingApproval}>
               <CloudUpload size={20} />
             </button>
           </div>
-          <button className="send-button" disabled={running || (!message.trim() && files.length === 0)} onClick={submit}>
+          <button className="send-button" disabled={running || waitingApproval || (!message.trim() && files.length === 0)} onClick={submit}>
             <Send size={19} />
           </button>
         </div>
@@ -217,6 +235,26 @@ function MessageItem({ item }: { item: ConversationItem }) {
         <p>{item.content}</p>
       </div>
     </motion.article>
+  )
+}
+
+function ApprovalPanel({ approvals, running, onDecision }: { approvals: ApprovalInterrupt[]; running: boolean; onDecision: (approved: boolean) => void }) {
+  const approval = approvals[0]
+  if (!approval) return null
+  return (
+    <motion.section className="approval-panel" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+      <div className="approval-icon"><ShieldAlert size={18} /></div>
+      <div className="approval-copy">
+        <strong>工具调用需要确认</strong>
+        <span>{approval.tool} · {approval.risk_level}</span>
+        <p>{approval.reason}</p>
+        {approval.input_preview ? <pre>{approval.input_preview}</pre> : null}
+      </div>
+      <div className="approval-actions">
+        <button className="approval-reject" disabled={running} onClick={() => onDecision(false)}>拒绝</button>
+        <button className="approval-approve" disabled={running} onClick={() => onDecision(true)}>确认执行</button>
+      </div>
+    </motion.section>
   )
 }
 
