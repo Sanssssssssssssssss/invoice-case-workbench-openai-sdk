@@ -38,12 +38,14 @@ class ModelCallRecord:
     retry_of: str = ""
     content_chars: int = 0
     recovered_by: str = ""
+    runtime: str = "openai_agents_sdk"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "role": self.role,
             "model": self.model,
             "prompt_version": self.prompt_version,
+            "runtime": self.runtime,
             "input_preview": self.input_preview,
             "output_preview": self.output_preview,
             "schema_validation_error": self.schema_validation_error,
@@ -59,6 +61,7 @@ class ModelCallRecord:
             "role": self.role,
             "model": self.model,
             "prompt_version": self.prompt_version,
+            "runtime": self.runtime,
             "system_prompt": self.system_prompt,
             "payload": self.payload,
             "raw_response": self.raw_response,
@@ -120,7 +123,7 @@ class LlmClient:
             "provider": self.settings.llm_provider,
             "base_url": self.settings.llm_base_url,
             "schema": model_type.__name__,
-            "runtime": "openai_agents_sdk",
+            "runtime": "openai_agents_sdk_direct",
             "timeout_seconds": timeout_seconds,
             **generation_hash_metadata(system_prompt, payload),
         }
@@ -148,11 +151,12 @@ class LlmClient:
                     system_prompt=system_prompt,
                     payload=payload,
                     latency_ms=_elapsed_ms(started),
+                    runtime="openai_agents_sdk_direct",
                 )
                 self.calls.append(record)
                 generation.update(
                     output=generation_output("", error="llm_unavailable", mode=self.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms},
+                    metadata={"latency_ms": record.latency_ms, "runtime": record.runtime},
                     level="ERROR",
                     status_message="llm_unavailable",
                 )
@@ -179,6 +183,7 @@ class LlmClient:
                             "role": role,
                             "prompt_version": prompt_version,
                             "payload_sha256": trace_metadata["payload_sha256"],
+                            "runtime": "openai_agents_sdk_direct",
                             "timeout_seconds": timeout_seconds,
                         },
                         timeout_seconds=timeout_seconds,
@@ -201,6 +206,7 @@ class LlmClient:
                     usage=usage,
                     latency_ms=_elapsed_ms(started),
                     content_chars=len(raw_response),
+                    runtime="openai_agents_sdk_direct",
                 )
                 self.calls.append(record)
                 generation.update(
@@ -216,7 +222,7 @@ class LlmClient:
                         output_cost_per_1m=self.settings.llm_output_cost_per_1m,
                         cached_input_cost_per_1m=self.settings.llm_cached_input_cost_per_1m,
                     ),
-                    metadata={"latency_ms": record.latency_ms, "runtime": "openai_agents_sdk"},
+                    metadata={"latency_ms": record.latency_ms, "runtime": record.runtime},
                 )
                 return parsed
             except Exception as exc:
@@ -230,11 +236,12 @@ class LlmClient:
                     system_prompt=system_prompt,
                     payload=payload,
                     latency_ms=_elapsed_ms(started),
+                    runtime="openai_agents_sdk_direct",
                 )
                 self.calls.append(record)
                 generation.update(
                     output=generation_output("", error=record.error, mode=self.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms, "schema": model_type.__name__},
+                    metadata={"latency_ms": record.latency_ms, "schema": model_type.__name__, "runtime": record.runtime},
                     level="ERROR",
                     status_message=record.error,
                 )
