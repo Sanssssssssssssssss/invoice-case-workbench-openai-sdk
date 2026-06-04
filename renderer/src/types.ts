@@ -129,6 +129,17 @@ export interface TraceEvent {
   raw: Record<string, unknown>
 }
 
+export interface ApprovalInterrupt {
+  type: string
+  case_id: string
+  run_id: string
+  tool: string
+  risk_level: string
+  input_preview: string
+  input_sha256: string
+  reason: string
+}
+
 export interface AgentTurnResponse {
   case_id: string
   reply: string
