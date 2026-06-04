@@ -40,7 +40,8 @@ def test_llm_client_has_no_legacy_tool_call_compatibility_layer() -> None:
 def test_specialists_are_native_agent_as_tool_runtime() -> None:
     registry_text = _read(BACKEND_APP / "agents" / "registry.py")
     assert ".as_tool(" in registry_text
-    assert "runtime\": \"agent_as_tool\"" in registry_text
+    assert "runtime = \"agent_as_tool\"" in registry_text
+    assert "agent_as_tool" in registry_text
     assert "MaterialsAdvisor(" not in registry_text
     assert "EvidenceReviewer(" not in registry_text
     assert "CasePatchWriter(" not in registry_text
