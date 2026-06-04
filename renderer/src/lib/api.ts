@@ -63,6 +63,11 @@ export const api = {
         attachments: attachments.map((item) => ({ name: item.name, path: item.path, content_type: item.content_type }))
       })
     }),
+  resumeApproval: (caseId: string, runId: string, approved: boolean, reason = '') =>
+    requestJson<AgentTurnResponse>(`/api/cases/${encodeURIComponent(caseId)}/runs/${encodeURIComponent(runId)}/approval`, {
+      method: 'POST',
+      body: JSON.stringify({ approved, reason })
+    }),
   uploadAttachment: async (caseId: string, file: File) => {
     const data = new FormData()
     data.append('file', file)
