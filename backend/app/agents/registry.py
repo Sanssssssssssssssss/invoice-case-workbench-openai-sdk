@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from agents import Agent, AgentOutputSchema, FunctionTool, ModelSettings
+from agents.run_context import RunContextWrapper
 
 from app.agents.capabilities import ROLE_CAPABILITIES, RoleCapability, role_capability
 from app.agents.patch_builder.agent import SYSTEM_PROMPT as CASE_PATCH_WRITER_PROMPT
@@ -102,9 +103,10 @@ class RoleRegistry:
                 )
                 raise RuntimeError("LLM_API_KEY is required for specialist agent-as-tool output.")
             try:
+                tool = self.as_tool(role, run_config=run_config, started=started, input_preview=input_preview, payload=payload, generation=generation)
                 output_text = _await(
-                    self.as_tool(role, run_config=run_config, started=started, input_preview=input_preview, payload=payload, generation=generation).on_invoke_tool(
-                        {},
+                    tool.on_invoke_tool(
+                        RunContextWrapper(context={"role": role}),
                         json.dumps({"input": input_text}, ensure_ascii=False),
                     )
                 )
@@ -182,7 +184,7 @@ class RoleRegistry:
 
         return agent.as_tool(
             tool_name=role,
-            tool_description=capability.trace_metadata().get("prompt_file", role),
+            tool_description=f"Run specialist agent {role} and return {capability.output_model.__name__}.",
             custom_output_extractor=output_extractor,
             run_config=run_config,
             max_turns=2,
