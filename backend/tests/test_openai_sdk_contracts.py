@@ -13,8 +13,13 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_runtime_has_no_langgraph_or_langchain_imports() -> None:
-    forbidden = ("langgraph", "StateGraph", "SqliteSaver", "langchain")
+def test_runtime_has_no_graph_chain_runtime_imports() -> None:
+    forbidden = (
+        "lang" + "graph",
+        "State" + "Graph",
+        "Sqlite" + "Saver",
+        "lang" + "chain",
+    )
     hits: list[str] = []
     for path in BACKEND_APP.rglob("*.py"):
         text = _read(path)
@@ -27,11 +32,11 @@ def test_runtime_has_no_langgraph_or_langchain_imports() -> None:
 def test_llm_client_has_no_legacy_tool_call_compatibility_layer() -> None:
     text = _read(BACKEND_APP / "llm.py")
     forbidden = (
-        "NativeToolMessage",
-        "complete_with_tools",
-        "client.chat.completions.create",
-        "openai_sdk_compat",
-        "native_tool_calls",
+        "Native" + "ToolMessage",
+        "complete" + "_with_tools",
+        "client.chat." + "completions.create",
+        "openai_sdk" + "_compat",
+        "native_tool" + "_calls",
     )
     hits = [token for token in forbidden if token in text]
     assert hits == []

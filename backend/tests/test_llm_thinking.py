@@ -1,61 +1,21 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-from app.llm import LlmClient
-
-
-def test_streaming_completion_collects_reasoning_content(monkeypatch) -> None:
-    client = LlmClient()
-    recorded: list[dict[str, object]] = []
-    client.set_thinking_recorder(recorded.append)
-    content, reasoning, chunks, usage, finish_reason = client._complete_streaming(
-        client=_fake_openai_client(
-            [
-                _chunk(reasoning="先检查金额。"),
-                _chunk(reasoning="再核对税率。"),
-                _chunk(content='{"ok": true}', finish_reason="stop"),
-            ]
-        ),
-        kwargs={"model": "kimi-k2.5", "messages": []},
-        role="evidence_reviewer",
-        model="kimi-k2.5",
-        prompt_version="test",
-    )
-
-    assert content == '{"ok": true}'
-    assert reasoning == "先检查金额。再核对税率。"
-    assert chunks == 2
-    assert usage == {}
-    assert finish_reason == "stop"
-    assert recorded[-1]["status"] == "completed"
-    assert recorded[-1]["reasoning_chunks"] == 2
+from app.config import Settings
+from app.llm import LlmClient, _model_extra_body
 
 
-def test_streaming_completion_allows_content_without_reasoning() -> None:
-    client = LlmClient()
-    recorded: list[dict[str, object]] = []
-    client.set_thinking_recorder(recorded.append)
-    content, reasoning, chunks, _usage, _finish_reason = client._complete_streaming(
-        client=_fake_openai_client([_chunk(content='{"ok": true}', finish_reason="stop")]),
-        kwargs={"model": "gpt-test", "messages": []},
-        role="planner",
-        model="gpt-test",
-        prompt_version="test",
-    )
+def test_kimi_agents_sdk_settings_keep_thinking_toggle() -> None:
+    disabled = LlmClient(Settings(llm_model="kimi-k2.5", llm_temperature=0.1, llm_thinking_type="disabled"))
+    enabled = LlmClient(Settings(llm_model="kimi-k2.5", llm_temperature=0.1, llm_thinking_type="enabled"))
 
-    assert content == '{"ok": true}'
-    assert reasoning == ""
-    assert chunks == 0
-    assert recorded == []
+    assert disabled._temperature("kimi-k2.5") == 0.6  # noqa: SLF001
+    assert enabled._temperature("kimi-k2.5") == 1.0  # noqa: SLF001
+    assert _model_extra_body("kimi-k2.5", "disabled") == {"thinking": {"type": "disabled"}}
+    assert _model_extra_body("kimi-k2.5", "enabled") == {"thinking": {"type": "enabled"}}
 
 
-def _fake_openai_client(chunks: list[object]) -> object:
-    return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_kwargs: iter(chunks))))
+def test_non_kimi_agents_sdk_settings_use_plain_model_temperature() -> None:
+    client = LlmClient(Settings(llm_model="gpt-4.1-mini", llm_temperature=0.2, llm_thinking_type="enabled"))
 
-
-def _chunk(*, reasoning: str = "", content: str = "", finish_reason: str = "") -> object:
-    delta = SimpleNamespace(content=content)
-    if reasoning:
-        setattr(delta, "reasoning_content", reasoning)
-    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)])
+    assert client._temperature("gpt-4.1-mini") == 0.2  # noqa: SLF001
+    assert _model_extra_body("gpt-4.1-mini", "enabled") is None

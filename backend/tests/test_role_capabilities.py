@@ -23,7 +23,11 @@ def test_all_roles_have_capability_metadata() -> None:
         assert registry.capability(name) == capability
         assert registry.prompt_file(name) == capability.prompt_file
         assert registry.prompt_version(name) == capability.prompt_version
-        assert registry.trace_metadata(name) == metadata
+        trace_metadata = registry.trace_metadata(name)
+        for key, value in metadata.items():
+            assert trace_metadata[key] == value
+        assert trace_metadata["runtime"] == "agent_as_tool"
+        assert trace_metadata["agent_as_tool"] is True
         assert metadata["output_model"] == capability.output_model.__name__
         assert metadata["prompt_version"] == capability.prompt_version
         assert metadata["context_policy"]
@@ -51,67 +55,13 @@ def test_role_capability_input_keys_are_context_filter_source(tmp_path) -> None:
 
 
 def test_role_agents_use_manifest_prompt_versions() -> None:
-    class CaptureLlm(LlmClient):
-        @property
-        def available(self) -> bool:
-            return True
-
-        def complete_structured(
-            self,
-            *,
-            role: str,
-            system_prompt: str,
-            payload: dict[str, Any],
-            model_type,
-            prompt_version: str = "v1",
-            model: str | None = None,
-        ):
-            self.calls.append(
-                type(
-                    "Call",
-                    (),
-                    {
-                        "role": role,
-                        "prompt_version": prompt_version,
-                        "to_debug_dict": lambda self: {"role": role, "prompt_version": prompt_version},
-                    },
-                )()
-            )
-            if role == "materials_advisor":
-                return model_type.model_validate({"answer": "ok", "missing_materials": [], "next_questions": [], "tasks": []})
-            if role == "evidence_reviewer":
-                return model_type.model_validate(
-                    {
-                        "mode": "review",
-                        "evidence_type": "unknown",
-                        "credibility": "low",
-                        "supports": [],
-                        "conflicts": [],
-                        "risk_flags": [],
-                        "should_accept": False,
-                        "extracted_fields": {},
-                        "source_traceability": "unclear",
-                        "suggested_patch": {},
-                    }
-                )
-            if role == "case_patch_writer":
-                return model_type.model_validate({"patch_type": "no_change", "case_updates": {}, "audit_note": ""})
-            if role == "report_writer":
-                return model_type.model_validate({"markdown": "# ok", "title": "ok"})
-            raise AssertionError(role)
-
-    llm = CaptureLlm()
-    registry = RoleRegistry(llm)
-    common_case_state = {"case_id": "case_prompt_version", "requirements": [], "evidence_items": []}
-
-    registry.call("materials_advisor", {"user_question": "q", "case_state": common_case_state})
-    registry.call("evidence_reviewer", {"user_message": "q", "case_state": common_case_state})
-    registry.call("case_patch_writer", {"role_result": {}, "case_state": common_case_state})
-    registry.call("report_writer", {"case_state": common_case_state})
-
-    versions = {call.role: call.prompt_version for call in llm.calls}
+    registry = RoleRegistry(LlmClient())
     for role in ROLE_CAPABILITIES:
-        assert versions[role] == role_prompt_version(role)
+        agent = registry.agent(role)
+        assert agent.name == role
+        assert registry.prompt(role)
+        assert registry.prompt_version(role) == role_prompt_version(role)
+        assert registry.trace_metadata(role)["prompt_version"] == role_prompt_version(role)
 
 
 def test_role_trace_metadata_can_be_recorded_in_role_call_and_context_manifest(tmp_path) -> None:

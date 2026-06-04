@@ -1,3 +1,3 @@
-from app.agents.materials_advisor.agent import MaterialsAdvisor
+from app.agents.materials_advisor.agent import SYSTEM_PROMPT
 
-__all__ = ["MaterialsAdvisor"]
+__all__ = ["SYSTEM_PROMPT"]

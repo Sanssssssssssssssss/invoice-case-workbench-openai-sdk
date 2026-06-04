@@ -214,8 +214,6 @@ class TurnRunner:
 
     def resume_approval(self, case_id: str, run_id: str, approved: bool, reason: str = "") -> AgentTurnResponse:
         state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
-        if not sdk_state:
-            raise FileNotFoundError(run_id)
         with self.observability.start_turn(
             case_id=state.case_id,
             run_id=state.run_id,
@@ -229,6 +227,8 @@ class TurnRunner:
         ) as turn:
             state.observability.update(turn.to_dict())
             self._record_approval_decision(state, interruptions, approved=approved, reason=reason)
+            if not sdk_state:
+                return self._resume_runtime_policy_approval(request, state, approved=approved, reason=reason)
             if hasattr(self.manager_runner, "resume"):
                 outcome = self.manager_runner.resume(  # type: ignore[attr-defined]
                     runner=self,
@@ -240,6 +240,23 @@ class TurnRunner:
                 )
                 return self._handle_manager_outcome(request, state, outcome)
             return self._run_until_final(request, state)
+
+    def _resume_runtime_policy_approval(
+        self,
+        request: AgentTurnRequest,
+        state: HarnessRunState,
+        *,
+        approved: bool,
+        reason: str,
+    ) -> AgentTurnResponse:
+        if approved:
+            return self._run_until_final(request, state)
+        tool = _latest_approval_tool(state)
+        if tool:
+            self.harness.finalize_run(state, f"已取消执行 {tool}，未写入或渲染被拒绝的报告文件。")
+        else:
+            self.harness.finalize_run(state, "已取消执行该操作。")
+        return self.trace_recorder.finalize_turn(state)
 
     def resume_run(self, case_id: str, run_id: str) -> dict[str, Any]:
         state, _request, _sdk_state, _interruptions = self.checkpoints.load(case_id, run_id)
@@ -280,6 +297,9 @@ class TurnRunner:
             runtime_final = self._deterministic_final_after_patch(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
+            runtime_final = self._deterministic_final_after_report(request, state)
+            if runtime_final:
+                return self._finalize_runtime_policy_answer(request, state, runtime_final)
             manager_input = self._manager_input(request, state, planner_context)
             try:
                 outcome = self.manager_runner.run(
@@ -318,6 +338,13 @@ class TurnRunner:
         if self.context.last_role_result(state, name="case_patch_writer"):
             if not _latest_observation(state, kind="tool", name="write_case_patch"):
                 return "write_case_patch", {}
+        if _report_requested_message(request.message) and self.store.load(state.case_id).status == "ready_for_report":
+            if not self.context.last_role_result(state, name="report_writer"):
+                return "report_writer", {"report_instructions": request.message}
+            if not _latest_observation(state, kind="tool", name="write_case_file"):
+                return "write_case_file", {}
+            if not _markdown_only_report_message(request.message) and not _latest_observation(state, kind="tool", name="render_pdf"):
+                return "render_pdf", {}
         return None
 
     def _deterministic_final_after_patch(self, request: AgentTurnRequest, state: HarnessRunState) -> str:
@@ -326,6 +353,18 @@ class TurnRunner:
         if _report_requested_message(request.message) or requires_materials_advice(request.message):
             return ""
         return _runtime_final_answer(self.store.load(state.case_id), state)
+
+    def _deterministic_final_after_report(self, request: AgentTurnRequest, state: HarnessRunState) -> str:
+        if not _report_requested_message(request.message):
+            return ""
+        if not _latest_observation(state, kind="tool", name="write_case_file"):
+            return ""
+        markdown_path, pdf_path = report_paths_for_run(state.started_at)
+        if _markdown_only_report_message(request.message):
+            return f"报告 Markdown 已生成：{markdown_path}"
+        if not _latest_observation(state, kind="tool", name="render_pdf"):
+            return ""
+        return f"报告已生成：Markdown {markdown_path}；PDF {pdf_path}"
 
     def _handle_manager_outcome(
         self,
@@ -1174,6 +1213,18 @@ def _parse_tool_input(raw_input: str, model: type[BaseModel]) -> dict[str, Any]:
 
 def _approval_payload(item: Any) -> dict[str, Any]:
     if isinstance(item, dict):
+        policy_check = item.get("policy_check")
+        if isinstance(policy_check, dict) and isinstance(policy_check.get("approval_payload"), dict):
+            approval = dict(policy_check.get("approval_payload") or {})
+            input_preview = str(approval.get("input_preview") or "{}")[:800]
+            return {
+                "type": "tool_approval",
+                "tool": str(approval.get("tool") or item.get("tool") or item.get("name") or "tool"),
+                "risk_level": str(approval.get("risk_level") or policy_check.get("risk_level") or "read"),
+                "input_preview": input_preview,
+                "input_sha256": str(approval.get("input_sha256") or hashlib.sha256(input_preview.encode("utf-8")).hexdigest()),
+                "reason": str(approval.get("reason") or policy_check.get("approval_reason") or "This action requires approval."),
+            }
         tool = str(item.get("tool") or item.get("name") or "tool")
         args = item.get("input") if isinstance(item.get("input"), dict) else {}
         input_preview = json.dumps(args, ensure_ascii=False, default=str)[:800]
@@ -1427,7 +1478,44 @@ def _case_updates_have_content(updates: dict[str, Any]) -> bool:
 
 def _report_requested_message(message: str) -> bool:
     text = str(message or "").lower()
+    if any(
+        term in text
+        for term in (
+            "不要生成报告",
+            "不要报告",
+            "不生成报告",
+            "不需要报告",
+            "无需生成报告",
+            "无需报告",
+            "不用生成报告",
+            "不用报告",
+            "别生成报告",
+            "no report",
+            "without report",
+            "do not generate report",
+            "don't generate report",
+        )
+    ):
+        return False
     return any(term in text for term in ("生成报告", "最终报告", "导出报告", "渲染pdf", "生成 pdf", "pdf report", "report", "final report"))
+
+
+def _markdown_only_report_message(message: str) -> bool:
+    text = str(message or "").lower()
+    return any(term in text for term in ("只要 markdown", "只要md", "不要 pdf", "不用 pdf", "markdown only", "md only"))
+
+
+def _latest_approval_tool(state: HarnessRunState) -> str:
+    for observation in reversed(getattr(state, "observations", []) or []):
+        if not isinstance(observation, dict):
+            continue
+        if observation.get("kind") != "approval":
+            continue
+        for fact in observation.get("key_facts") or []:
+            text = str(fact)
+            if text.startswith("tool="):
+                return text.split("=", 1)[1]
+    return ""
 
 
 def _mark_latest_model_call_recovered(

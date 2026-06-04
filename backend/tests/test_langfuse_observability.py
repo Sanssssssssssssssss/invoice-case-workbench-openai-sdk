@@ -16,6 +16,7 @@ from app.observability.langfuse_tracer import (
     generation_input,
     generation_output,
 )
+from app.state.schemas import SupervisorDecision
 
 
 class FakeObservation:
@@ -271,7 +272,13 @@ def test_llm_unavailable_records_generation_error() -> None:
     llm.set_tracer(tracer)
 
     with pytest.raises(RuntimeError):
-        llm.complete_with_tools(role="planner", system_prompt="system", payload={"x": 1}, tools=[], prompt_version="v1")
+        llm.complete_structured(
+            role="planner",
+            system_prompt="system",
+            payload={"x": 1},
+            model_type=SupervisorDecision,
+            prompt_version="v1",
+        )
 
     assert [obs.name for obs in client.started] == ["llm.planner"]
     serialized = json.dumps([obs.updates for obs in client.started], ensure_ascii=False, default=str)

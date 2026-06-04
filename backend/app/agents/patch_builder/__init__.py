@@ -1,3 +1,3 @@
-from app.agents.patch_builder.agent import CasePatchWriter
+from app.agents.patch_builder.agent import SYSTEM_PROMPT
 
-__all__ = ["CasePatchWriter"]
+__all__ = ["SYSTEM_PROMPT"]

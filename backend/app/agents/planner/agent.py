@@ -3,8 +3,9 @@
 from typing import Any
 
 from app.llm import LlmClient
-from app.runtime.supervisor_contract import CAPABILITY_CARDS, supervisor_openai_tools
 from app.prompt_loader import load_system_prompt
+from app.runtime.supervisor_contract import CAPABILITY_CARDS
+from app.state.schemas import SupervisorDecision
 
 
 class Planner:
@@ -35,10 +36,10 @@ class Planner:
             "step_count": step_count,
             "capability_cards": capability_cards,
         }
-        return self.llm.complete_with_tools(
+        return self.llm.complete_structured(
             role="planner",
             system_prompt=self.prompt,
             payload=payload,
-            tools=supervisor_openai_tools(tool_cards or []),
+            model_type=SupervisorDecision,
             prompt_version="supervisor_planner_v1.2+policy_gate_v1.1",
         )

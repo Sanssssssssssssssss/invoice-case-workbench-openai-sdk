@@ -1,3 +1,3 @@
-from app.agents.report_writer.agent import ReportWriter
+from app.agents.report_writer.agent import SYSTEM_PROMPT
 
-__all__ = ["ReportWriter"]
+__all__ = ["SYSTEM_PROMPT"]

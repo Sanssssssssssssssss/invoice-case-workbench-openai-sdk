@@ -78,6 +78,114 @@ def test_evidence_without_requirements_does_not_make_case_ready(tmp_path) -> Non
     assert updated.status == "collecting_materials"
 
 
+def test_accepted_core_documents_backfill_supports_to_ready(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    updated = store.apply_patch(
+        "case_core_support_backfill",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": [
+                    {"id": "invoice", "kind": "document"},
+                    {"id": "purchase_order", "kind": "document"},
+                    {"id": "goods_receipt_or_service_acceptance", "kind": "document"},
+                    {"id": "vendor_identity", "kind": "document"},
+                    {"id": "duplicate_payment_screen", "kind": "document"},
+                ],
+                "add_evidence": [
+                    {
+                        "id": "ev_001",
+                        "type": "invoice",
+                        "summary": "Invoice INV-5001 accepted.",
+                        "review_result": {"should_accept": True, "evidence_type": "invoice"},
+                        "supports": [{"requirement": "invoice", "support_level": "partial", "quoted_text": "INV-5001"}],
+                    },
+                    {
+                        "id": "ev_002",
+                        "type": "purchase_order",
+                        "summary": "PO-5001 accepted.",
+                        "review_result": {"should_accept": True, "evidence_type": "purchase_order"},
+                    },
+                    {
+                        "id": "ev_003",
+                        "type": "goods_receipt",
+                        "summary": "GRN-5001 accepted.",
+                        "review_result": {"should_accept": True, "evidence_type": "goods_receipt"},
+                    },
+                    {
+                        "id": "ev_004",
+                        "type": "vendor_record",
+                        "summary": "Vendor record accepted.",
+                        "review_result": {"should_accept": True, "evidence_type": "vendor_record"},
+                    },
+                    {
+                        "id": "ev_005",
+                        "type": "duplicate_payment_check",
+                        "summary": "Duplicate payment screen shows no duplicate.",
+                        "review_result": {"should_accept": True, "evidence_type": "duplicate_payment_check"},
+                    },
+                ],
+            },
+            "audit_note": "core support backfill",
+        },
+    )
+
+    statuses = {item.id: item.status for item in updated.requirements}
+    supports = {
+        support.requirement: support.support_level
+        for evidence in updated.evidence_items
+        for support in evidence.supports
+    }
+    assert updated.status == "ready_for_report"
+    assert statuses["invoice"] == "satisfied"
+    assert statuses["purchase_order"] == "satisfied"
+    assert statuses["goods_receipt_or_service_acceptance"] == "satisfied"
+    assert statuses["vendor_identity"] == "satisfied"
+    assert statuses["duplicate_payment_screen"] == "satisfied"
+    assert supports["invoice"] == "full"
+    assert supports["purchase_order"] == "full"
+    assert supports["goods_receipt_or_service_acceptance"] == "full"
+    assert supports["vendor_identity"] == "full"
+    assert supports["duplicate_payment_screen"] == "full"
+
+
+def test_duplicate_payment_conflict_support_is_not_upgraded_to_satisfied(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    updated = store.apply_patch(
+        "case_duplicate_conflict_backfill",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": [{"id": "duplicate_payment_screen", "kind": "document"}],
+                "add_evidence": [
+                    {
+                        "id": "ev_001",
+                        "type": "duplicate_payment_check",
+                        "summary": "Duplicate payment hit found.",
+                        "review_result": {"should_accept": True, "evidence_type": "duplicate_payment_check"},
+                        "conflicts": [
+                            json.dumps(
+                                {
+                                    "requirement": "duplicate_payment_screen",
+                                    "description": "Prior payment PAY-2026-4431 found.",
+                                }
+                            )
+                        ],
+                    }
+                ],
+            },
+            "audit_note": "duplicate conflict remains conflict",
+        },
+    )
+
+    requirement = updated.requirements[0]
+    support = updated.evidence_items[0].supports[0]
+    assert requirement.status == "conflict"
+    assert support.requirement == "duplicate_payment_screen"
+    assert support.support_level == "partial"
+    assert updated.status == "collecting_materials"
+
+
 def test_prompt_injection_evidence_is_quarantined_before_state_write(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(

@@ -492,12 +492,12 @@ def test_retry_predicates_only_allow_transient_failures() -> None:
     assert not is_transient_tool_error(ValueError("policy block"))
 
 
-def test_kimi_structured_output_disables_thinking_for_function_calling() -> None:
+def test_kimi_structured_output_uses_agents_sdk_model_settings() -> None:
     disabled = LlmClient(Settings(llm_model="kimi-k2.5", llm_temperature=0.6, llm_thinking_type="disabled"))
     enabled = LlmClient(Settings(llm_model="kimi-k2.5", llm_temperature=0.6, llm_thinking_type="enabled"))
 
-    assert disabled._native_structured_temperature("kimi-k2.5") == 0.6  # noqa: SLF001
-    assert enabled._native_structured_temperature("kimi-k2.5") == 0.6  # noqa: SLF001
+    assert disabled._temperature("kimi-k2.5") == 0.6  # noqa: SLF001
+    assert enabled._temperature("kimi-k2.5") == 1.0  # noqa: SLF001
 
 
 def test_evidence_reviewer_has_long_role_timeout_by_default(monkeypatch) -> None:

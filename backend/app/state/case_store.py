@@ -467,6 +467,9 @@ def _normalize_evidence_data(raw: Any) -> dict[str, Any]:
         _quarantine_prompt_injection_evidence(data)
     else:
         data["conflicts"] = _unique_strings(data["conflicts"] + derived_conflicts(data))
+    _backfill_conflict_requirement_support(data)
+    if not _is_cross_case_evidence(data) and not _is_prompt_injection_evidence(data):
+        _backfill_accepted_core_document_support(data)
     return data
 
 
@@ -697,6 +700,122 @@ def _normalize_support_records(value: Any) -> list[Any]:
     return normalized
 
 
+def _backfill_conflict_requirement_support(data: dict[str, Any]) -> None:
+    conflicts = list(data.get("conflicts") or [])
+    if not conflicts:
+        return
+    supports = _normalize_support_records(data.get("supports"))
+    existing = {str(item.get("requirement") or "") for item in supports}
+    changed = False
+    for conflict in conflicts:
+        requirement_id = _conflict_requirement_id(conflict)
+        if not requirement_id or requirement_id in existing:
+            continue
+        supports.append(
+            {
+                "requirement": requirement_id,
+                "support_level": "partial",
+                "quoted_text": _conflict_quote(conflict) or _support_quote(data),
+            }
+        )
+        existing.add(requirement_id)
+        changed = True
+    if changed:
+        data["supports"] = supports
+
+
+def _conflict_requirement_id(conflict: Any) -> str:
+    data = _conflict_data(conflict)
+    if isinstance(data, dict):
+        requirement_id = _safe_requirement_id(data.get("requirement"))
+        if requirement_id:
+            return requirement_id
+        affected = data.get("affected_fields") or data.get("affected_requirements") or []
+        for item in affected if isinstance(affected, list) else [affected]:
+            requirement_id = _safe_requirement_id(item)
+            if requirement_id:
+                return requirement_id
+    text = _jsonish_text(conflict).lower()
+    if "duplicate_payment_screen" in text or "duplicate_payment_check" in text:
+        return "duplicate_payment_screen"
+    return ""
+
+
+def _conflict_quote(conflict: Any) -> str:
+    data = _conflict_data(conflict)
+    if isinstance(data, dict):
+        for key in ("quoted_text", "description", "details", "required_follow_up"):
+            text = str(data.get(key) or "").strip()
+            if text:
+                return text[:600]
+    return _jsonish_text(conflict)[:600]
+
+
+def _conflict_data(conflict: Any) -> Any:
+    if isinstance(conflict, dict):
+        return conflict
+    if isinstance(conflict, str):
+        try:
+            return json.loads(conflict)
+        except json.JSONDecodeError:
+            return conflict
+    if hasattr(conflict, "model_dump"):
+        return conflict.model_dump(exclude_none=True)
+    return conflict
+
+
+def _safe_requirement_id(value: Any) -> str:
+    try:
+        return _normalize_requirement_id(value)
+    except ValueError:
+        return ""
+
+
+def _backfill_accepted_core_document_support(data: dict[str, Any]) -> None:
+    if data.get("conflicts"):
+        return
+    review = data.get("review_result") if isinstance(data.get("review_result"), dict) else {}
+    if not bool(review.get("should_accept")):
+        return
+    requirement_id = _core_requirement_for_evidence(data)
+    if not requirement_id:
+        return
+    supports = _normalize_support_records(data.get("supports"))
+    quote = _support_quote(data)
+    for support in supports:
+        if support.get("requirement") != requirement_id:
+            continue
+        support["support_level"] = "full"
+        if not support.get("quoted_text"):
+            support["quoted_text"] = quote
+        data["supports"] = supports
+        return
+    supports.append({"requirement": requirement_id, "support_level": "full", "quoted_text": quote})
+    data["supports"] = supports
+
+
+def _core_requirement_for_evidence(data: dict[str, Any]) -> str:
+    review = data.get("review_result") if isinstance(data.get("review_result"), dict) else {}
+    evidence_type = str(data.get("type") or review.get("evidence_type") or "").strip()
+    return {
+        "invoice": "invoice",
+        "purchase_order": "purchase_order",
+        "goods_receipt": "goods_receipt_or_service_acceptance",
+        "service_acceptance": "goods_receipt_or_service_acceptance",
+        "vendor_record": "vendor_identity",
+        "duplicate_payment_check": "duplicate_payment_screen",
+    }.get(evidence_type, "")
+
+
+def _support_quote(data: dict[str, Any]) -> str:
+    review = data.get("review_result") if isinstance(data.get("review_result"), dict) else {}
+    for value in (data.get("summary"), review.get("reason"), data.get("content")):
+        text = str(value or "").strip()
+        if text:
+            return text[:600]
+    return "Accepted core document evidence."
+
+
 def _support_requirement_ids(raw_items: list[Any]) -> list[str]:
     result: list[str] = []
     for raw in raw_items:
@@ -754,6 +873,9 @@ def _backfill_existing_invoice_supports(state: CaseState) -> bool:
         data = item.model_dump()
         before = data.get("supports") or []
         _backfill_supports_from_extracted_fields(state, data)
+        _backfill_conflict_requirement_support(data)
+        if not _is_cross_case_evidence(data) and not _is_prompt_injection_evidence(data):
+            _backfill_accepted_core_document_support(data)
         after = data.get("supports") or []
         if after != before:
             state.evidence_items[index] = EvidenceItem.model_validate(data)

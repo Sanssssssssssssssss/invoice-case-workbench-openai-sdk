@@ -284,4 +284,8 @@ def _await(value: Any) -> Any:
 def _close_run_config_client(run_config: Any) -> None:
     client = getattr(run_config, "_invoice_openai_client", None)
     if client is not None:
-        _await(client.close())
+        try:
+            _await(client.close())
+        except RuntimeError as exc:
+            if "Event loop is closed" not in str(exc):
+                raise

@@ -7,7 +7,7 @@ from typing import Any
 from app.config import get_settings
 from app.harness import HarnessRuntime
 from app.llm import ModelCallRecord
-from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, TurnRunner, _runtime_final_answer
+from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, TurnRunner, _report_requested_message, _runtime_final_answer
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, Attachment, CaseState, EvidenceItem, Requirement
 
@@ -82,6 +82,77 @@ def _runtime(tmp_path, monkeypatch, manager: ScriptedManagerRunner) -> AgentRunt
     monkeypatch.setenv("INVOICE_AGENT_STORAGE_ROOT", str(tmp_path / "storage"))
     get_settings.cache_clear()
     return AgentRuntime(store=CaseStore(tmp_path / "cases"), manager_runner=manager)
+
+
+def _seed_ready_case(store: CaseStore, case_id: str) -> None:
+    store.save(
+        CaseState(
+            case_id=case_id,
+            status="ready_for_report",
+            requirements=[
+                Requirement(id="invoice", status="satisfied", evidence_ids=["ev_001"], kind="document"),
+                Requirement(id="purchase_order", status="satisfied", evidence_ids=["ev_002"], kind="document"),
+                Requirement(
+                    id="goods_receipt_or_service_acceptance",
+                    status="satisfied",
+                    evidence_ids=["ev_003"],
+                    kind="document",
+                ),
+                Requirement(id="vendor_identity", status="satisfied", evidence_ids=["ev_004"], kind="document"),
+                Requirement(id="duplicate_payment_screen", status="satisfied", evidence_ids=["ev_005"], kind="document"),
+            ],
+            evidence_items=[
+                EvidenceItem(
+                    id="ev_001",
+                    type="invoice",
+                    summary="Invoice INV-5001 amount 12800.00 CNY.",
+                    review_result={"should_accept": True},
+                    supports=[{"requirement": "invoice", "support_level": "full"}],
+                ),
+                EvidenceItem(
+                    id="ev_002",
+                    type="purchase_order",
+                    summary="PO-5001 matches supplier and amount.",
+                    review_result={"should_accept": True},
+                    supports=[{"requirement": "purchase_order", "support_level": "full"}],
+                ),
+                EvidenceItem(
+                    id="ev_003",
+                    type="goods_receipt",
+                    summary="GRN-5001 received 16 of 16 units.",
+                    review_result={"should_accept": True},
+                    supports=[{"requirement": "goods_receipt_or_service_acceptance", "support_level": "full"}],
+                ),
+                EvidenceItem(
+                    id="ev_004",
+                    type="vendor_record",
+                    summary="Vendor is active and bank tail matches.",
+                    review_result={"should_accept": True},
+                    supports=[{"requirement": "vendor_identity", "support_level": "full"}],
+                ),
+                EvidenceItem(
+                    id="ev_005",
+                    type="duplicate_payment_check",
+                    summary="No duplicate payment found.",
+                    review_result={"should_accept": True},
+                    supports=[{"requirement": "duplicate_payment_screen", "support_level": "full"}],
+                ),
+            ],
+        )
+    )
+
+
+def _fake_report_writer(role: str, role_input: dict[str, Any]) -> dict[str, Any]:
+    assert role == "report_writer"
+    assert role_input["case_state"]["status"] == "ready_for_report"
+    return {"title": "INV-5001 审核报告", "markdown": "# INV-5001 审核报告\n\n五项核心材料均已满足。\n"}
+
+
+def test_report_intent_respects_negative_generation_request() -> None:
+    assert not _report_requested_message("请审查这一批材料，判断证据链是否完整，不要生成报告。")
+    assert not _report_requested_message("review the evidence without report generation")
+    assert _report_requested_message("请生成报告并渲染 PDF")
+    assert _report_requested_message("final report and render PDF")
 
 
 def test_agent_runtime_uses_manager_policy_loop(tmp_path, monkeypatch) -> None:
@@ -469,3 +540,46 @@ def test_agent_runtime_rejected_approval_does_not_execute_tool(tmp_path, monkeyp
     assert resumed.trace["tool_calls"] == []
     assert resumed.reply == "已取消查看文件，未执行该工具。"
     assert any(observation["kind"] == "approval" and observation["name"] == "rejected" for observation in resumed.trace["observations"])
+
+
+def test_report_request_runs_file_and_pdf_approval_pipeline(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    _seed_ready_case(runtime.runner.store, "case_report_approval")
+    monkeypatch.setattr(runtime.runner.roles, "call", _fake_report_writer)
+
+    response = runtime.run_turn(AgentTurnRequest(case_id="case_report_approval", message="final report and render PDF"))
+
+    assert response.trace["status"] == "waiting_approval"
+    assert response.trace["interrupts"][0]["tool"] == "write_case_file"
+    assert response.trace["role_calls"][0]["role"] == "report_writer"
+    assert not list((tmp_path / "cases" / "case_report_approval" / "reports").glob("*.md"))
+
+    resumed = runtime.resume_approval("case_report_approval", response.trace["run_id"], approved=True, reason="ok")
+
+    assert resumed.trace["status"] == "waiting_approval"
+    assert resumed.trace["interrupts"][0]["tool"] == "render_pdf"
+    assert list((tmp_path / "cases" / "case_report_approval" / "reports").glob("*.md"))
+    assert not list((tmp_path / "cases" / "case_report_approval" / "reports").glob("*.pdf"))
+
+    final = runtime.resume_approval("case_report_approval", resumed.trace["run_id"], approved=True, reason="ok")
+
+    assert final.trace["phase"] == "finalized"
+    assert "PDF reports/final_report_" in final.reply
+    assert {call["tool"] for call in final.trace["tool_calls"]} >= {"write_case_file", "render_pdf"}
+    assert list((tmp_path / "cases" / "case_report_approval" / "reports").glob("*.pdf"))
+    assert any(event["kind"] == "approval" and event["name"] == "approved" for event in final.trace["observations"])
+
+
+def test_report_request_rejected_approval_does_not_write_file(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    _seed_ready_case(runtime.runner.store, "case_report_rejected")
+    monkeypatch.setattr(runtime.runner.roles, "call", _fake_report_writer)
+
+    response = runtime.run_turn(AgentTurnRequest(case_id="case_report_rejected", message="final report and render PDF"))
+    final = runtime.resume_approval("case_report_rejected", response.trace["run_id"], approved=False, reason="no")
+
+    assert final.trace["phase"] == "finalized"
+    assert "已取消执行 write_case_file" in final.reply
+    assert not list((tmp_path / "cases" / "case_report_rejected" / "reports").glob("*.md"))
+    assert "write_case_file" not in {call["tool"] for call in final.trace["tool_calls"]}
+    assert any(event["kind"] == "approval" and event["name"] == "rejected" for event in final.trace["observations"])

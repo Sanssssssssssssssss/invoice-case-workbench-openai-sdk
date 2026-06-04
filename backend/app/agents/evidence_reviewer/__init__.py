@@ -1,3 +1,3 @@
-from app.agents.evidence_reviewer.agent import EvidenceReviewer
+from app.agents.evidence_reviewer.agent import SYSTEM_PROMPT
 
-__all__ = ["EvidenceReviewer"]
+__all__ = ["SYSTEM_PROMPT"]
