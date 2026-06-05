@@ -120,6 +120,8 @@ def test_review_guidance_provider_retrieves_rag_guidance(monkeypatch) -> None:
     assert guidance.evidences[0]["fields"]["profile_id"] == "flipkart_retail_invoice_bill"
     assert guidance.debug["role"] == "evidence_reviewer"
     assert guidance.debug["source_ids"] == ["rag_flipkart"]
+    assert guidance.debug["source_paths"] == ["knowledge/invoice_payment/invoice_reference_profiles.md"]
+    assert guidance.debug["scores"] == [0.9]
 
 
 def test_evidence_reviewer_signature_template_query_loads_local_profiles() -> None:
@@ -170,3 +172,31 @@ def test_advisor_guidance_provider_retrieves_rag_guidance(monkeypatch) -> None:
     assert guidance.evidences[0]["fields"]["profile_id"] == "invoice_only"
     assert guidance.debug["role"] == "materials_advisor"
     assert guidance.debug["source_ids"] == ["rag_invoice_rules"]
+    assert guidance.debug["source_paths"] == ["knowledge/invoice_payment/required_materials.md"]
+    assert guidance.debug["scores"] == [0.8]
+
+
+def test_real_guidance_debug_exposes_rag_references_for_specialist_tools(monkeypatch) -> None:
+    monkeypatch.setenv("INVOICE_AGENT_ENABLE_VECTOR", "0")
+
+    advisor = advisor_guidance(
+        user_question="invoice payment review needs PO GRN vendor and duplicate payment materials",
+        case_state={"requirements": [{"id": "purchase_order", "status": "missing"}]},
+        attachment_manifest={},
+        top_k=3,
+    )
+    reviewer = review_guidance(
+        user_message="Review SAP invoice duplicate payment and vendor bank change evidence",
+        attachment_context=[{"name": "sap_invoice.pdf", "summary": "SAP invoice duplicate payment sample"}],
+        attachment_manifest={},
+        top_k=3,
+    )
+
+    for guidance, role in ((advisor, "materials_advisor"), (reviewer, "evidence_reviewer")):
+        assert guidance.evidences
+        assert guidance.debug["role"] == role
+        assert guidance.debug["source_ids"]
+        assert guidance.debug["source_paths"]
+        assert guidance.debug["scores"]
+        assert guidance.debug["channels"]
+        assert all(str(channel).startswith("txtai_") for channel in guidance.debug["channels"])

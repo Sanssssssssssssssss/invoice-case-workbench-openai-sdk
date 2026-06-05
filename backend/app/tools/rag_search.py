@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
 from collections import Counter
@@ -28,10 +27,12 @@ class RagSkill:
     def __init__(self, knowledge_roots: list[Path] | None = None, index_root: Path | None = None) -> None:
         settings = get_settings()
         self.knowledge_roots = [Path(root) for root in (knowledge_roots or settings.knowledge_roots)]
-        self.index_root = Path(index_root or settings.storage_root / "rag")
+        root = Path(index_root or settings.storage_root / "rag")
+        self.index_root = root
         self.index_root.mkdir(parents=True, exist_ok=True)
-        self.index_path = self.index_root / "index.json"
-        self.embedding_path = self.index_root / "embeddings.json"
+        self.manifest_path = self.index_root / "index.json"
+        self.txtai_path = self.index_root / "txtai"
+        self.index_mode = "sparse" if _vector_disabled() else "hybrid"
 
     def retrieve(
         self,
@@ -43,70 +44,70 @@ class RagSkill:
         include_raw_snippets: bool = True,
     ) -> RagResult:
         docs = self._load_or_build_index()
+        if not docs:
+            return _not_found()
+
         query_tokens = _tokens(query)
-        vector_scores = self._vector_scores(query, docs)
-        filters = filters or {}
-        scored: list[tuple[float, dict[str, Any], str]] = []
-        for index, doc in enumerate(docs):
-            text = str(doc.get("text") or "")
-            token_counts = Counter(doc.get("tokens") or [])
-            score = _lexical_score(query_tokens, token_counts, text)
-            score += vector_scores.get(index, 0.0) * 3.0
-            score += _filter_bonus(filters, text, doc)
-            if intent == "policy_qa" and "policy" in str(doc.get("source_path", "")).lower():
-                score += 0.8
-            if "invoice" in query.lower() and "invoice" in text.lower():
-                score += 0.5
-            if score > 0:
-                scored.append((score, doc, _best_snippet(text, query_tokens)))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        evidences: list[RagEvidence] = []
-        for score, doc, snippet in scored[: max(1, top_k)]:
-            source_path = str(doc.get("source_path") or "")
-            evidences.append(
-                RagEvidence(
-                    source_id=_stable_id(source_path, str(doc.get("locator") or "")),
-                    source_path=source_path,
-                    source_type=_source_type(source_path),
-                    locator=str(doc.get("locator") or ""),
-                    snippet=snippet if include_raw_snippets else snippet[:280],
-                    fields=_extract_fields(snippet),
-                    score=round(float(score), 4),
-                    channel="fused" if vector_scores else "bm25",
-                )
-            )
-        status = "success" if evidences else "not_found"
+        scored = self._txtai_scores(query, docs, top_k=max(top_k * 4, 12))
+        scored = _apply_business_scoring(
+            scored,
+            docs,
+            query=query,
+            query_tokens=query_tokens,
+            intent=intent,
+            filters=filters or {},
+        )
+        evidences = _render_evidences(
+            scored[: max(1, top_k)],
+            docs,
+            query_tokens,
+            include_raw_snippets,
+            channel=f"txtai_{self.index_mode}",
+        )
+        if not evidences:
+            return _not_found()
         return RagResult(
-            status=status,
+            status="success",
             evidences=evidences,
             answer_context=_render_context(evidences),
-            unsupported_fields=[] if evidences else ["query"],
-            reason=(
-                "Retrieved local invoice payment knowledge snippets."
-                if evidences
-                else "No local knowledge snippets matched the query."
-            ),
+            unsupported_fields=[],
+            reason="Retrieved local invoice payment knowledge snippets with txtai.",
         )
 
     def _load_or_build_index(self) -> list[dict[str, Any]]:
         root_signature = [str(root.resolve()) for root in self.knowledge_roots]
         knowledge_signature = _knowledge_signature(self.knowledge_roots)
-        if self.index_path.exists():
+        txtai_path = self._txtai_path(knowledge_signature)
+        if self.manifest_path.exists():
             try:
-                data = json.loads(self.index_path.read_text(encoding="utf-8"))
-                docs = data.get("documents")
-                if (
-                    isinstance(docs, list)
-                    and data.get("knowledge_roots") == root_signature
-                    and data.get("knowledge_signature") == knowledge_signature
-                ):
-                    return docs
+                data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
-                pass
-        docs = self._build_index()
-        self.index_path.write_text(
+                data = {}
+            docs = data.get("documents")
+            manifest_txtai_path = Path(str(data.get("txtai_path") or self.txtai_path))
+            if (
+                isinstance(docs, list)
+                and data.get("knowledge_roots") == root_signature
+                and data.get("knowledge_signature") == knowledge_signature
+                and data.get("engine") == "txtai"
+                and data.get("index_mode") == self.index_mode
+                and manifest_txtai_path.exists()
+            ):
+                self.txtai_path = manifest_txtai_path
+                return docs
+
+        docs = self._build_documents()
+        self.txtai_path = txtai_path
+        if docs:
+            embeddings = _new_embeddings(self.index_mode)
+            embeddings.index([(index, str(doc.get("text") or ""), None) for index, doc in enumerate(docs)])
+            embeddings.save(str(self.txtai_path))
+        self.manifest_path.write_text(
             json.dumps(
                 {
+                    "engine": "txtai",
+                    "index_mode": self.index_mode,
+                    "txtai_path": str(self.txtai_path),
                     "knowledge_roots": root_signature,
                     "knowledge_signature": knowledge_signature,
                     "documents": docs,
@@ -118,7 +119,10 @@ class RagSkill:
         )
         return docs
 
-    def _build_index(self) -> list[dict[str, Any]]:
+    def _txtai_path(self, knowledge_signature: str) -> Path:
+        return self.index_root / f"txtai-{self.index_mode}-{knowledge_signature[:12]}"
+
+    def _build_documents(self) -> list[dict[str, Any]]:
         docs: list[dict[str, Any]] = []
         for root in self.knowledge_roots:
             if not root.exists():
@@ -143,41 +147,112 @@ class RagSkill:
                     )
         return docs
 
-    def _vector_scores(self, query: str, docs: list[dict[str, Any]]) -> dict[int, float]:
-        settings = get_settings()
-        if os.getenv("INVOICE_AGENT_ENABLE_VECTOR", "auto").strip().lower() in {"0", "false", "no", "off"}:
-            return {}
-        if not settings.embedding_api_key:
-            return {}
-        fingerprint = _doc_fingerprint(docs)
-        cache = _read_json(self.embedding_path)
-        embeddings = cache.get("embeddings")
-        if (
-            cache.get("fingerprint") != fingerprint
-            or cache.get("model") != settings.embedding_model
-            or not isinstance(embeddings, list)
-            or len(embeddings) != len(docs)
-        ):
-            texts = [str(doc.get("text") or "")[:1600] for doc in docs]
-            embeddings = _embed_texts(texts, api_key=settings.embedding_api_key, base_url=settings.embedding_base_url, model=settings.embedding_model)
-            self.embedding_path.write_text(
-                json.dumps(
-                    {
-                        "fingerprint": fingerprint,
-                        "model": settings.embedding_model,
-                        "embeddings": embeddings,
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
+    def _txtai_scores(self, query: str, docs: list[dict[str, Any]], *, top_k: int) -> list[tuple[float, int]]:
+        embeddings = _new_embeddings(self.index_mode)
+        embeddings.load(str(self.txtai_path))
+        results = embeddings.search(query, max(1, min(top_k, len(docs))))
+        scored: list[tuple[float, int]] = []
+        for item in results:
+            doc_id, score = _parse_txtai_result(item)
+            if doc_id is None or doc_id < 0 or doc_id >= len(docs):
+                continue
+            scored.append((float(score), doc_id))
+        return scored
+
+
+def _new_embeddings(index_mode: str) -> Any:
+    from txtai import Embeddings
+
+    if index_mode == "sparse":
+        return Embeddings({"keyword": True})
+    return Embeddings({"path": "sentence-transformers/all-MiniLM-L6-v2", "hybrid": True})
+
+
+def _vector_disabled() -> bool:
+    return os.getenv("INVOICE_AGENT_ENABLE_VECTOR", "auto").strip().lower() in {"0", "false", "no", "off"}
+
+
+def _parse_txtai_result(item: Any) -> tuple[int | None, float]:
+    if isinstance(item, dict):
+        raw_id = item.get("id")
+        raw_score = item.get("score", 0.0)
+    elif isinstance(item, (list, tuple)) and len(item) >= 2:
+        raw_id, raw_score = item[0], item[1]
+    else:
+        return None, 0.0
+    try:
+        return int(raw_id), float(raw_score)
+    except (TypeError, ValueError):
+        return None, 0.0
+
+
+def _apply_business_scoring(
+    scored: list[tuple[float, int]],
+    docs: list[dict[str, Any]],
+    *,
+    query: str,
+    query_tokens: list[str],
+    intent: str,
+    filters: dict[str, Any],
+) -> list[tuple[float, int]]:
+    seen = {doc_id for _, doc_id in scored}
+    for index, doc in enumerate(docs):
+        if index not in seen and _lexical_score(query_tokens, Counter(doc.get("tokens") or []), str(doc.get("text") or "")) > 0:
+            scored.append((0.0, index))
+    adjusted: list[tuple[float, int]] = []
+    for base_score, doc_id in scored:
+        doc = docs[doc_id]
+        text = str(doc.get("text") or "")
+        source_path = str(doc.get("source_path") or "")
+        score = float(base_score)
+        score += _lexical_score(query_tokens, Counter(doc.get("tokens") or []), text)
+        score += _filter_bonus(filters, text, doc)
+        if intent == "policy_qa" and "policy" in source_path.lower():
+            score += 0.8
+        if "invoice" in query.lower() and "invoice" in text.lower():
+            score += 0.5
+        if score > 0:
+            adjusted.append((score, doc_id))
+    adjusted.sort(key=lambda item: item[0], reverse=True)
+    return adjusted
+
+
+def _render_evidences(
+    scored: list[tuple[float, int]],
+    docs: list[dict[str, Any]],
+    query_tokens: list[str],
+    include_raw_snippets: bool,
+    channel: str,
+) -> list[RagEvidence]:
+    evidences: list[RagEvidence] = []
+    for score, doc_id in scored:
+        doc = docs[doc_id]
+        source_path = str(doc.get("source_path") or "")
+        locator = str(doc.get("locator") or "")
+        snippet = _best_snippet(str(doc.get("text") or ""), query_tokens)
+        evidences.append(
+            RagEvidence(
+                source_id=_stable_id(source_path, locator),
+                source_path=source_path,
+                source_type=_source_type(source_path),
+                locator=locator,
+                snippet=snippet if include_raw_snippets else snippet[:280],
+                fields=_extract_fields(snippet) or dict(doc.get("fields") or {}),
+                score=round(float(score), 4),
+                channel=channel,
             )
-        query_embedding = _embed_texts([query], api_key=settings.embedding_api_key, base_url=settings.embedding_base_url, model=settings.embedding_model)[0]
-        scored = {
-            index: _cosine(query_embedding, embedding)
-            for index, embedding in enumerate(embeddings)
-            if isinstance(embedding, list)
-        }
-        return {index: score for index, score in scored.items() if score > 0.15}
+        )
+    return evidences
+
+
+def _not_found() -> RagResult:
+    return RagResult(
+        status="not_found",
+        evidences=[],
+        answer_context="",
+        unsupported_fields=["query"],
+        reason="No local knowledge snippets matched the query.",
+    )
 
 
 def _safe_relative(path: Path, base: Path) -> str:
@@ -194,16 +269,6 @@ def _read_text(path: Path) -> str:
         except UnicodeDecodeError:
             continue
     return ""
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def _knowledge_signature(roots: list[Path]) -> str:
@@ -254,7 +319,7 @@ def _lexical_score(query_tokens: list[str], doc_counts: Counter[str], text: str)
         score += min(doc_counts.get(token, 0), 4) * 1.0
         if token in lowered:
             score += 0.2
-    return score / math.sqrt(max(1, len(doc_counts)))
+    return score / max(1.0, len(doc_counts) ** 0.5)
 
 
 def _filter_bonus(filters: dict[str, Any], text: str, doc: dict[str, Any]) -> float:
@@ -317,38 +382,6 @@ def _source_type(source_path: str) -> str:
 def _stable_id(source_path: str, locator: str) -> str:
     digest = hashlib.sha256(f"{source_path}|{locator}".encode("utf-8")).hexdigest()[:12]
     return f"rag_{digest}"
-
-
-def _doc_fingerprint(docs: list[dict[str, Any]]) -> str:
-    h = hashlib.sha256()
-    for doc in docs:
-        h.update(str(doc.get("source_path") or "").encode("utf-8"))
-        h.update(str(doc.get("locator") or "").encode("utf-8"))
-        h.update(str(doc.get("text") or "").encode("utf-8"))
-    return h.hexdigest()
-
-
-def _embed_texts(texts: list[str], *, api_key: str, base_url: str, model: str) -> list[list[float]]:
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    embeddings: list[list[float]] = []
-    for index in range(0, len(texts), 10):
-        batch = texts[index : index + 10]
-        response = client.embeddings.create(model=model, input=batch)
-        embeddings.extend(list(item.embedding) for item in response.data)
-    return embeddings
-
-
-def _cosine(left: list[float], right: list[float]) -> float:
-    if not left or not right or len(left) != len(right):
-        return 0.0
-    dot = sum(a * b for a, b in zip(left, right))
-    l_norm = math.sqrt(sum(a * a for a in left))
-    r_norm = math.sqrt(sum(b * b for b in right))
-    if not l_norm or not r_norm:
-        return 0.0
-    return dot / (l_norm * r_norm)
 
 
 def _render_context(evidences: list[RagEvidence]) -> str:

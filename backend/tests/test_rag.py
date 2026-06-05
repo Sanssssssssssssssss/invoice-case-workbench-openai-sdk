@@ -5,7 +5,8 @@ from pathlib import Path
 from app.tools.rag_search import RagSkill
 
 
-def test_rag_retrieves_invoice_policy(tmp_path) -> None:
+def test_rag_retrieves_invoice_policy(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("INVOICE_AGENT_ENABLE_VECTOR", raising=False)
     knowledge = tmp_path / "knowledge" / "ERP Approval"
     knowledge.mkdir(parents=True)
     (knowledge / "invoice_payment_policy_excerpt.md").write_text(
@@ -16,6 +17,7 @@ def test_rag_retrieves_invoice_policy(tmp_path) -> None:
     result = skill.retrieve("invoice payment required materials", top_k=3)
     assert result.status == "success"
     assert result.evidences
+    assert result.evidences[0].channel == "txtai_hybrid"
     assert "purchase order" in result.evidences[0].snippet.lower()
 
 
@@ -131,6 +133,7 @@ def test_rag_index_rebuilds_when_knowledge_files_change(tmp_path, monkeypatch) -
 
     first = RagSkill([knowledge], tmp_path / "rag")
     assert first.retrieve("alpha", top_k=1).status == "success"
+    assert list((tmp_path / "rag").glob("txtai-sparse-*"))
 
     (knowledge / "new_policy.md").write_text("beta vendor bank approval workflow", encoding="utf-8")
     second = RagSkill([knowledge], tmp_path / "rag")
