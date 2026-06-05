@@ -15,5 +15,7 @@ backend/storage/*.sqlite
 backend/storage/checkpoints/
 workspace/cases/
 reports/evals/latest_session_eval.*
+reports/evals/ragas_latest.json
+reports/evals/ragas_latest.jsonl
 reports/evals/trace_role_boundary_analysis*.md
 reports/evals/manual_scores.jsonl
