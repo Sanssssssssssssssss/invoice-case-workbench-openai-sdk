@@ -15,6 +15,7 @@ from app.state.schemas import RagEvidence, RagResult
 SUPPORTED_SUFFIXES = {".md", ".txt", ".json"}
 TOKEN_RE = re.compile(r"[A-Za-z0-9_-]+|[\u4e00-\u9fff]")
 FIELD_PATTERNS = {
+    "profile_id": re.compile(r"\bprofile_id\s*:\s*`?([A-Za-z0-9_-]+)`?", re.I),
     "invoice_id": re.compile(r"\b(?:invoice|发票)\s*(?:id|no|number|号)?[:：#\s-]*([A-Z]{2,}-?\d{2,}|\bINV[-_]?\d+)", re.I),
     "supplier": re.compile(r"\b(?:vendor|supplier|供应商)[:：\s-]+([A-Za-z0-9\u4e00-\u9fff &.,_-]{2,80})", re.I),
     "total_amount": re.compile(r"\b(?:amount|total|金额)[:：\s-]*(?:USD|CNY|RMB|\$)?\s*([0-9][0-9,]*(?:\.\d+)?)", re.I),

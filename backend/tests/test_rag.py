@@ -100,6 +100,69 @@ def test_enterprise_ap_controls_recall_bank_change(tmp_path, monkeypatch) -> Non
     assert "workflow" in joined.lower()
 
 
+def test_enterprise_ap_controls_recall_approval_authority(tmp_path, monkeypatch) -> None:
+    result = _retrieve("审批矩阵 授权审批 审批权限 审批限额 approval matrix delegation", tmp_path, monkeypatch)
+
+    assert result.status == "success"
+    joined = _joined_snippets(result)
+    assert "approval_authority_matrix_control" in joined
+    assert "approval limit" in joined.lower() or "审批限额" in joined
+
+
+def test_enterprise_ap_controls_recall_segregation_of_duties(tmp_path, monkeypatch) -> None:
+    result = _retrieve("职责分离 同一人建供应商又付款 segregation of duties SoD compensating control", tmp_path, monkeypatch)
+
+    assert result.status == "success"
+    joined = _joined_snippets(result)
+    assert "segregation_of_duties_ap_control" in joined
+    assert "vendor" in joined.lower() or "供应商" in joined
+
+
+def test_enterprise_ap_controls_recall_payment_release(tmp_path, monkeypatch) -> None:
+    result = _retrieve("付款释放 ACH wire 银行账号临时变更 payment run payment hold", tmp_path, monkeypatch)
+
+    assert result.status == "success"
+    joined = _joined_snippets(result)
+    assert "payment_release_disbursement_control" in joined
+    assert "vendor master" in joined.lower() or "银行账号" in joined
+
+
+def test_enterprise_ap_controls_recall_vendor_master_governance(tmp_path, monkeypatch) -> None:
+    result = _retrieve("vendor onboarding 供应商入驻 vendor master change log 重复供应商 供应商对账单", tmp_path, monkeypatch)
+
+    assert result.status == "success"
+    joined = _joined_snippets(result)
+    assert "vendor_onboarding_master_data_governance" in joined
+    assert "duplicate vendor" in joined.lower() or "重复供应商" in joined
+
+
+def test_enterprise_ap_controls_recall_non_po_contract_invoice(tmp_path, monkeypatch) -> None:
+    result = _retrieve("non-PO invoice 合同发票 服务费 SOW recurring service 里程碑验收", tmp_path, monkeypatch)
+
+    assert result.status == "success"
+    joined = _joined_snippets(result)
+    assert "non_po_contract_invoice_control" in joined
+    assert "service acceptance" in joined.lower() or "服务验收" in joined
+
+
+def test_enterprise_ap_controls_recall_tax_gl_coding(tmp_path, monkeypatch) -> None:
+    result = _retrieve("GL coding tax treatment 成本中心 税码 VAT withholding 总账科目", tmp_path, monkeypatch)
+
+    assert result.status == "success"
+    joined = _joined_snippets(result)
+    assert "tax_gl_coding_cost_center_control" in joined
+    assert "cost center" in joined.lower() or "成本中心" in joined
+
+
+def test_enterprise_ap_controls_recall_exception_hold_tolerance(tmp_path, monkeypatch) -> None:
+    result = _retrieve("matching hold payment hold 匹配容差 容差超限 例外审批 hold release", tmp_path, monkeypatch)
+
+    assert result.status == "success"
+    joined = _joined_snippets(result)
+    assert "exception_hold_tolerance_control" in joined
+    assert "tolerance" in joined.lower() or "容差" in joined
+
+
 def test_invoice_calculation_validation_recall(tmp_path, monkeypatch) -> None:
     result = _retrieve("发票金额和税额合计不一致 小计 总计 行项目", tmp_path, monkeypatch)
 

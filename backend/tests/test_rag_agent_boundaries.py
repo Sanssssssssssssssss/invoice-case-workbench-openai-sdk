@@ -121,6 +121,9 @@ def test_review_guidance_provider_retrieves_rag_guidance(monkeypatch) -> None:
     assert guidance.debug["role"] == "evidence_reviewer"
     assert guidance.debug["source_ids"] == ["rag_flipkart"]
     assert guidance.debug["source_paths"] == ["knowledge/invoice_payment/invoice_reference_profiles.md"]
+    assert guidance.debug["locators"] == ["profile_id=flipkart_retail_invoice_bill"]
+    assert guidance.debug["profile_ids"] == ["flipkart_retail_invoice_bill"]
+    assert "Flipkart invoice profile" in guidance.debug["snippets"][0]
     assert guidance.debug["scores"] == [0.9]
 
 
@@ -173,6 +176,9 @@ def test_advisor_guidance_provider_retrieves_rag_guidance(monkeypatch) -> None:
     assert guidance.debug["role"] == "materials_advisor"
     assert guidance.debug["source_ids"] == ["rag_invoice_rules"]
     assert guidance.debug["source_paths"] == ["knowledge/invoice_payment/required_materials.md"]
+    assert guidance.debug["locators"] == ["profile_id=invoice_only"]
+    assert guidance.debug["profile_ids"] == ["invoice_only"]
+    assert "Invoice-only required fields" in guidance.debug["snippets"][0]
     assert guidance.debug["scores"] == [0.8]
 
 
@@ -197,6 +203,9 @@ def test_real_guidance_debug_exposes_rag_references_for_specialist_tools(monkeyp
         assert guidance.debug["role"] == role
         assert guidance.debug["source_ids"]
         assert guidance.debug["source_paths"]
+        assert guidance.debug["locators"]
+        assert guidance.debug["profile_ids"]
+        assert guidance.debug["snippets"]
         assert guidance.debug["scores"]
         assert guidance.debug["channels"]
         assert all(str(channel).startswith("txtai_") for channel in guidance.debug["channels"])

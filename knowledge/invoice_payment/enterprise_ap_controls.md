@@ -225,3 +225,227 @@ All rule entries use the same shape: `profile_id`, `when_to_use`, `document_type
 - Chinese retrieval keywords: 附件注入, 忽略规则, 直接批准付款, OCR 模糊, 图片裁切, 缺页, PR 不是 PO, 错域材料, 隔离, 排除
 - source_links:
   - OpenAI prompt-injection boundary concept is implemented locally in role prompts and case manifest rules.
+
+## Rule: Approval Authority and Approval Matrix
+
+- profile_id: `approval_authority_matrix_control`
+- when_to_use: Use when the user asks whether an invoice is approved, who can approve it, whether approval is sufficient, or whether an amount exceeds an approval limit.
+- document_type: approval matrix, delegation of authority, workflow approval record, invoice approval history, spend authorization policy
+- expected_fields:
+  - approver identity, role, department, and delegation status
+  - approval timestamp, workflow status, approval limit, currency, and legal entity
+  - invoice amount, spend category, cost center, requester, and exception reason when present
+  - source locator such as workflow id, ERP screen, approval log, or policy section
+- validation_checks:
+  - Compare invoice amount and category to the approver's authority limit.
+  - Confirm the approval belongs to the same invoice, vendor, legal entity, and amount under review.
+  - Treat missing, expired, delegated, out-of-policy, or post-factum approval as weak until the source workflow explains it.
+  - Do not infer payment readiness from approval alone when PO/GRN/vendor/duplicate controls are active and unresolved.
+- pass_partial_fail:
+  - full: approval record is source-traceable and approver authority covers the invoice amount/category.
+  - partial: approval exists but limit, delegation, timestamp, or invoice binding is unclear.
+  - none: user statement, email-only approval, or unrelated approval matrix without a matching workflow record.
+- advisor_guidance:
+  - Ask AP owner or business approver for workflow approval history and current approval matrix.
+  - Ask for exception approval when matching discrepancies, missing receipt, or over-tolerance amounts exist.
+- evidence_boundary:
+  - Approval authority is a control layer. It cannot replace invoice, PO, GRN/service acceptance, vendor master, or duplicate-check evidence.
+- risk_flags: `approval_missing`, `approval_limit_exceeded`, `delegation_unclear`, `post_factum_approval`, `approval_not_bound_to_invoice`
+- Chinese retrieval keywords: 审批矩阵, 授权审批, 审批权限, 审批限额, 审批流, 授权矩阵, 额度超限, 事后审批, delegation of authority
+- source_links:
+  - Microsoft Dynamics 365 three-way matching policies: https://learn.microsoft.com/en-us/dynamics365/finance/accounts-payable/three-way-matching-policies
+  - Washington State Auditor Accounts Payable Guide: https://sao.wa.gov/sites/default/files/2023-05/Accounts-Payable-Guide.pdf
+
+## Rule: Segregation of Duties for AP
+
+- profile_id: `segregation_of_duties_ap_control`
+- when_to_use: Use when the user asks about the same person creating vendors, entering invoices, approving invoices, releasing payments, reconciling bank activity, or changing bank details.
+- document_type: role access matrix, user access report, workflow history, vendor master change log, payment release log, bank reconciliation evidence
+- expected_fields:
+  - user id, role, department, and granted permissions
+  - transaction creator, invoice enterer, approver, vendor master maintainer, payment releaser, and reconciler
+  - timestamps and workflow ids for each sensitive action
+  - compensating control evidence for small teams when duties cannot be fully separated
+- validation_checks:
+  - Flag when one user can create/change vendors and also enter, approve, or release payment.
+  - Flag when payment release and bank reconciliation are performed by the same person without independent review.
+  - For lean teams, look for owner/manager review, change reports, vendor legitimacy checks, and bank statement review as compensating controls.
+  - Treat SoD concerns as risk/control findings, not as submitted invoice evidence.
+- pass_partial_fail:
+  - full: access report and workflow logs show separated roles or documented compensating controls.
+  - partial: roles are described but source access report or review evidence is missing.
+  - none: no user-role or workflow evidence is provided.
+- advisor_guidance:
+  - Ask finance systems, AP controls, or internal audit for user access report, vendor change report, and payment approval/release logs.
+- evidence_boundary:
+  - SoD evidence supports control assessment. It does not prove goods receipt, vendor legitimacy, or absence of duplicate payment by itself.
+- risk_flags: `sod_conflict`, `vendor_creation_and_payment_same_user`, `invoice_entry_and_approval_same_user`, `payment_release_and_reconciliation_same_user`, `compensating_control_missing`
+- Chinese retrieval keywords: 职责分离, 权限冲突, 同一人建供应商又付款, 同一人录入发票并审批, 付款释放, 银行对账, compensating control
+- source_links:
+  - Washington State Auditor Segregation of Duties Guide: https://sao.wa.gov/sites/default/files/2023-04/Segregation-of-Duties-Guide.pdf
+  - Washington State Auditor Accounts Payable Guide: https://sao.wa.gov/sites/default/files/2023-05/Accounts-Payable-Guide.pdf
+
+## Rule: Payment Release and Disbursement Control
+
+- profile_id: `payment_release_disbursement_control`
+- when_to_use: Use when the user asks whether payment can be released, ACH/wire/check can be sent, bank details changed near payment, or payment run controls are sufficient.
+- document_type: payment run approval, payment proposal, ACH/wire instruction, bank account validation, payment release log, vendor master bank record
+- expected_fields:
+  - payee legal name, vendor id, bank/payment account, amount, currency, payment method, due date
+  - payment batch/run id, preparer, approver, releaser, release timestamp, and bank account source
+  - last vendor bank change timestamp and approval status
+  - exception/hold status and reconciliation evidence after payment
+- validation_checks:
+  - Compare payment payee and bank account to approved vendor master, not only to invoice remittance text.
+  - Flag last-minute bank changes, new vendors, unfamiliar payment methods, high-value wires, or released payments with unresolved matching holds.
+  - Confirm payment release is separate from invoice entry and approval where SoD is in scope.
+  - Do not advise execution of ERP payment; this workbench can only review evidence and request approval-gated report artifacts.
+- pass_partial_fail:
+  - full: payment run evidence ties amount/payee/bank to approved payable and vendor master with release approval.
+  - partial: payment proposal exists but bank validation, release approver, or hold status is unclear.
+  - none: invoice-only material or email instruction requesting payment.
+- advisor_guidance:
+  - Ask treasury/AP payments for payment proposal, release approval, bank validation, and post-payment reconciliation if payment release is under review.
+- evidence_boundary:
+  - Payment release control is not part of default invoice-only review and does not authorize this agent to pay.
+- risk_flags: `payment_release_requested`, `payment_hold_unresolved`, `last_minute_bank_change`, `bank_account_not_vendor_master`, `wire_or_ach_high_risk`
+- Chinese retrieval keywords: 付款释放, 付款批次, ACH, wire, 电汇, 支票, 银行账号临时变更, payment run, payment hold, disbursement control
+- source_links:
+  - Washington State Auditor Accounts Payable Guide: https://sao.wa.gov/sites/default/files/2023-05/Accounts-Payable-Guide.pdf
+
+## Rule: Vendor Onboarding and Master Data Governance
+
+- profile_id: `vendor_onboarding_master_data_governance`
+- when_to_use: Use when the user asks about new vendors, duplicate vendor records, vendor legitimacy, master-data changes, tax id, address, contact route, bank account, or vendor statement reconciliation.
+- document_type: vendor onboarding record, vendor master export, change log, W-9/tax registration, supplier profile approval, vendor statement, duplicate vendor report
+- expected_fields:
+  - vendor id, legal name, tax/registration id, address, status, payment terms, bank/payment method
+  - creator, reviewer, approver, change timestamp, changed fields, old/new values
+  - duplicate vendor search result and vendor statement reconciliation when relevant
+  - trusted contact verification for sensitive changes
+- validation_checks:
+  - Check one active vendor master record per real vendor where possible.
+  - Compare invoice supplier identity to vendor master identity and tax/registration data.
+  - Treat duplicate vendor records as duplicate-payment risk because system duplicate checks may be vendor-id scoped.
+  - Bank or address changes require approval/change log evidence and trusted verification.
+- pass_partial_fail:
+  - full: current vendor master export and change history are source-traceable and match the invoice.
+  - partial: vendor exists but status, changed fields, approval, or duplicate-vendor search is missing.
+  - none: email-only vendor setup/change request or user statement.
+- advisor_guidance:
+  - Ask vendor master data team for current master export, change log, duplicate vendor search, and vendor statement when duplicate risk exists.
+- evidence_boundary:
+  - Vendor master governance supports identity/control review. It does not prove goods receipt or invoice arithmetic.
+- risk_flags: `new_vendor`, `duplicate_vendor_record`, `vendor_master_change_unapproved`, `vendor_statement_not_reconciled`, `supplier_identity_conflict`
+- Chinese retrieval keywords: 供应商入驻, 供应商主数据治理, vendor onboarding, vendor master change log, 供应商变更记录, 重复供应商, 税号, 地址, 供应商对账单
+- source_links:
+  - Washington State Auditor duplicate-payment guidance: https://sao.wa.gov/the-audit-connection-blog/2022/paying-vendors-twice-problem-sao-offers-tips-prevent-duplicate-payments
+  - Oracle supplier profile approvals: https://docs.oracle.com/en/cloud/saas/procurement/25b/oapro/how-you-configure-internal-changes-on-supplier-profile-approvals.html
+
+## Rule: Non-PO and Contract Invoice Review
+
+- profile_id: `non_po_contract_invoice_control`
+- when_to_use: Use when the invoice has no purchase order, relates to rent, legal, utilities, subscription, professional services, recurring service, contract, statement of work, milestone, or blanket agreement.
+- document_type: non-PO invoice, contract invoice, service invoice, statement of work, milestone acceptance, recurring service bill, blanket purchase agreement
+- expected_fields:
+  - contract/SOW/agreement id, vendor, service period, rate card, milestone, deliverable, and approved budget
+  - business owner approval, receiving/service acceptance, invoice amount, tax, currency, and GL/cost center
+  - duplicate/recurring billing period check for repeat services
+- validation_checks:
+  - Do not reject only because PO/GRN is absent if the active profile is non-PO/contract review.
+  - Match invoice to contract terms, service period, milestone acceptance, rate card, and approval authority.
+  - Flag duplicate service periods, over-contract amounts, missing owner approval, or missing service acceptance.
+  - If the active case is AP Lite PO-based review, non-PO material cannot silently replace required PO/GRN without changing scope.
+- pass_partial_fail:
+  - full: contract/SOW, service acceptance, owner approval, and invoice amount tie together.
+  - partial: contract exists but acceptance, approval, or rate/milestone evidence is missing.
+  - none: invoice-only material for a non-PO service with no contract or approval support.
+- advisor_guidance:
+  - Ask business owner, procurement, or contract manager for contract/SOW, service acceptance, approval record, and recurring period check.
+- evidence_boundary:
+  - Non-PO contract controls are scope-specific and must not expand invoice-only review by default.
+- risk_flags: `non_po_invoice`, `contract_missing`, `service_acceptance_missing`, `duplicate_billing_period`, `over_contract_amount`
+- Chinese retrieval keywords: 非 PO 发票, 无 PO 发票, 合同发票, 服务费, recurring service, subscription, SOW, 里程碑验收, 服务验收, 合同金额
+- source_links:
+  - Washington State Auditor Accounts Payable Guide: https://sao.wa.gov/sites/default/files/2023-05/Accounts-Payable-Guide.pdf
+
+## Rule: Tax, GL Coding, and Cost Center Review
+
+- profile_id: `tax_gl_coding_cost_center_control`
+- when_to_use: Use when the user asks about tax treatment, VAT/GST/sales tax, withholding, GL account, cost center, fund, project, department, or accounting coding.
+- document_type: invoice coding screen, tax invoice, ERP voucher, GL distribution, cost-center approval, tax calculation support
+- expected_fields:
+  - GL account, cost center, department/project/fund, tax code, tax amount, taxable base, currency
+  - coding preparer, reviewer/approver, business purpose, and source locator
+  - tax registration/VAT/GST id when present on the invoice
+- validation_checks:
+  - Check that GL/cost center/fund coding makes sense for the purchase type and approving owner.
+  - Reconcile tax amount and tax treatment to visible invoice fields where possible.
+  - Treat tax/GL coding as an accounting-control review, not as proof that invoice/PO/GRN evidence is complete.
+  - Flag missing or inconsistent tax ids, tax code mismatch, unsupported cost center, or unclear business purpose.
+- pass_partial_fail:
+  - full: ERP voucher or coding screen ties invoice to reviewed GL/tax/cost center values with approval.
+  - partial: coding values are present but reviewer, source locator, or tax basis is unclear.
+  - none: no coding or tax support is available.
+- advisor_guidance:
+  - Ask AP accounting, tax, or cost-center owner for coding screen, tax calculation, and approval if coding is in scope.
+- evidence_boundary:
+  - Tax and GL review are risk/control enrichments by default. They do not replace AP source documents.
+- risk_flags: `gl_coding_unclear`, `cost_center_mismatch`, `tax_code_mismatch`, `tax_amount_conflict`, `business_purpose_unclear`
+- Chinese retrieval keywords: GL coding, 总账科目, 成本中心, 税务处理, 税码, VAT, GST, withholding, 预提税, 税额, 费用归属, fund code
+- source_links:
+  - Washington State Auditor Accounts Payable Guide: https://sao.wa.gov/sites/default/files/2023-05/Accounts-Payable-Guide.pdf
+
+## Rule: Exception Hold and Matching Tolerance
+
+- profile_id: `exception_hold_tolerance_control`
+- when_to_use: Use when invoice matching fails, price/quantity tolerance is exceeded, payment hold exists, exception approval is requested, or a discrepancy needs override.
+- document_type: invoice matching exception, payment hold, discrepancy approval, tolerance configuration, hold release log, reconciliation note
+- expected_fields:
+  - hold id/type/status, failed match reason, tolerance value, invoice line, PO line, receipt/service acceptance line
+  - exception approver, release timestamp, business explanation, corrected source document if any
+  - amount/quantity/price variance and whether it is within policy tolerance
+- validation_checks:
+  - Distinguish tolerable rounding or configured variance from unresolved price, quantity, supplier, currency, or receipt mismatch.
+  - A hold release or discrepancy approval must be source-traceable and authorized for the same invoice.
+  - Do not mark a requirement satisfied just because a system can override the hold.
+- pass_partial_fail:
+  - full: exception approval/hold release explains the variance and ties to source documents.
+  - partial: hold reason is visible but approver, tolerance basis, or source reconciliation is missing.
+  - none: user asks to ignore or override a discrepancy without evidence.
+- advisor_guidance:
+  - Ask AP matching owner for hold details, tolerance policy, discrepancy approval, and corrected PO/receipt/invoice if needed.
+- evidence_boundary:
+  - Exception approval can explain a discrepancy; it does not erase the original evidence conflict from the audit trail.
+- risk_flags: `matching_hold`, `tolerance_exceeded`, `hold_release_missing`, `override_without_evidence`, `exception_approval_missing`
+- Chinese retrieval keywords: payment hold, matching hold, 匹配容差, 容差超限, 例外审批, 差异审批, hold release, 价格差异, 数量差异
+- source_links:
+  - Microsoft Dynamics 365 three-way matching policies: https://learn.microsoft.com/en-us/dynamics365/finance/accounts-payable/three-way-matching-policies
+  - Oracle two-, three-, and four-way matching: https://docs.oracle.com/cd/A60725_05/html/comnls/us/ap/point04.htm
+
+## Rule: Audit Trail and Evidence Retention
+
+- profile_id: `audit_trail_retention_control`
+- when_to_use: Use when the user asks whether the review is audit-ready, whether evidence is traceable, whether report claims are grounded, or whether records should be retained.
+- document_type: audit trail, attachment manifest, workflow history, source locator, report evidence matrix, retention record, vendor statement reconciliation
+- expected_fields:
+  - source file path, attachment id, page/locator, extracted quote, reviewer decision, timestamp, actor/tool
+  - claim-to-evidence mapping, status changes, approvals, exceptions, and artifact paths
+  - retention owner and record category if the user asks about retention
+- validation_checks:
+  - Every strong conclusion should bind to source evidence, not RAG guidance alone.
+  - Preserve rejected, weak, conflicting, quarantined, and process-only evidence in the audit trail.
+  - Report unresolved gaps and conflicts rather than smoothing them into a clean conclusion.
+  - Retention guidance is generic unless the user provides a jurisdiction/company policy.
+- pass_partial_fail:
+  - full: case has source locators, trace events, artifacts, and claim-to-evidence mapping.
+  - partial: source files exist but quotes, locators, or status history are incomplete.
+  - none: narrative conclusion without traceable source support.
+- advisor_guidance:
+  - Ask for original source files and missing workflow/export locators; use the report to preserve gaps and conflicts.
+- evidence_boundary:
+  - Audit trail quality supports defensibility. It does not independently satisfy business document requirements.
+- risk_flags: `weak_audit_trail`, `claim_without_source`, `missing_locator`, `unretained_evidence`, `unsupported_report_conclusion`
+- Chinese retrieval keywords: 审计留痕, 审计轨迹, 证据矩阵, claim-to-evidence, source locator, 附件 id, 保留记录, audit ready, 支撑性文件
+- source_links:
+  - Washington State Auditor Accounts Payable Guide: https://sao.wa.gov/sites/default/files/2023-05/Accounts-Payable-Guide.pdf

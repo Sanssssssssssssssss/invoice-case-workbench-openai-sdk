@@ -73,5 +73,41 @@ def test_dynamic_ragas_dataset_reads_database_and_uses_hybrid_rag() -> None:
     assert all(record.retrieved_contexts for record in records)
     assert all(record.retrieved_context_ids for record in records)
     assert all(record.source_paths for record in records)
+    assert all(record.locators for record in records)
+    assert all(record.profile_ids for record in records)
+    assert all(record.retrieved_evidence for record in records)
     assert all(set(record.channels) == {"txtai_hybrid"} for record in records)
     assert {"duplicate_payment", "bank_change", "materials_required"} & {record.intent for record in records}
+
+
+def test_dynamic_ragas_dataset_templates_cover_enterprise_control_intents() -> None:
+    records = build_dynamic_ragas_records(max_samples=16, top_k=3, session_db_path=BACKEND_DIR / "storage" / "missing.sqlite")
+    intents = {record.intent for record in records}
+
+    assert {
+        "approval_authority",
+        "segregation_of_duties",
+        "payment_release",
+        "vendor_master_governance",
+        "non_po_contract_invoice",
+        "tax_gl_coding",
+        "exception_hold_tolerance",
+    }.issubset(intents)
+    enterprise_records = [
+        record
+        for record in records
+        if record.intent
+        in {
+            "approval_authority",
+            "segregation_of_duties",
+            "payment_release",
+            "vendor_master_governance",
+            "non_po_contract_invoice",
+            "tax_gl_coding",
+            "exception_hold_tolerance",
+        }
+    ]
+    assert enterprise_records
+    assert all(record.source == "intent_template" for record in enterprise_records)
+    assert all(item.get("locator") for record in records for item in record.retrieved_evidence)
+    assert all("snippet" in item for record in records for item in record.retrieved_evidence)

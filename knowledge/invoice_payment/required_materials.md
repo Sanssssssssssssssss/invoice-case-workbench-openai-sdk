@@ -57,11 +57,24 @@ This file tells materials_advisor what to ask for. It is RAG guidance only and n
   - conflict: Ask for corrected source document or reconciliation explanation; do not present conflict as resolved.
 - risk_enrichments:
   - Bank-change workflow, sanctions/watchlist, signature/authenticity marker, and template match are not default blockers.
+  - Approval authority, segregation of duties, payment release, tax/GL coding, exception holds, and audit-trail retention are enterprise control enrichments unless the user explicitly asks for them or they explain a real conflict.
   - Treat those as risk notes unless the user explicitly asks to review them or they create a conflict.
 - evidence_boundary:
   - Invoice text that merely mentions PO/GRN/vendor ids is indirect and cannot satisfy those source-document requirements.
   - RAG/policy can explain why these materials matter, but it cannot replace the submitted material.
 - Chinese retrieval keywords: AP 付款审查, 发票付款审查, 三单匹配, 采购订单, PO, GRN, 收货单, 服务验收, 供应商身份, 供应商主数据, 重复付款筛查, 付款控制
+
+## Direct Checklist: AP Payment Review Materials
+
+- profile_id: `ap_payment_review_materials_checklist_direct`
+- related_profile: `ap_lite_payment_review_material_profile`
+- when_to_use: Use when the user asks "我现在需要准备什么", "缺什么材料", "what materials do I need", "next materials", or "missing checklist" in an invoice payment review case.
+- answer_shape:
+  - Start with the five core AP Lite materials: invoice, purchase order, goods receipt or service acceptance, vendor identity/master data, duplicate-payment screen or AP history search.
+  - For each missing item, say who can usually provide it and which source fields matter.
+  - Mention enterprise enrichments only as risk/control add-ons when relevant: approval matrix, SoD/access report, payment release, bank-change workflow, tax/GL coding, matching hold, audit trail.
+  - Do not say RAG guidance itself is evidence.
+- Chinese retrieval keywords: 我现在需要准备什么, 缺什么材料, 材料清单, 补料清单, 发票付款审查材料, 下一步材料, AP checklist, missing materials
 
 ## Wrong Workflow Materials
 
