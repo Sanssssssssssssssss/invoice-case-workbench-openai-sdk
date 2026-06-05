@@ -155,6 +155,16 @@ def _artifact_checks(case_dir: Path, expected: ExpectedSpec) -> list[CheckResult
                 details={"pattern": pattern, "sample_files": files[:30]},
             )
         )
+    for pattern in expected.artifacts_must_not_exist:
+        matched = any(fnmatch.fnmatch(path, pattern) for path in files)
+        checks.append(
+            CheckResult(
+                name=f"artifact_absent:{pattern}",
+                passed=not matched,
+                score=1.0 if not matched else 0.0,
+                details={"pattern": pattern, "sample_files": files[:30]},
+            )
+        )
     return checks
 
 
