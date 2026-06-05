@@ -6,7 +6,7 @@ from typing import Any
 
 from app.runtime.turn_runner import AgentRuntime
 from app.state.schemas import AgentTurnRequest
-from tests.test_graph import ScriptedManagerRunner, _runtime
+from tests.test_runtime_turn_runner import ScriptedManagerRunner, _runtime
 
 
 def _runtime_with_approval(tmp_path, monkeypatch, decisions: list[dict[str, Any]]) -> AgentRuntime:

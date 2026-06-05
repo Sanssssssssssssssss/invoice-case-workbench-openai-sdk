@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.state.schemas import ReviewMode
@@ -68,39 +66,3 @@ SPECIALIST_TOOL_MODELS: dict[str, type[BaseModel]] = {
     "report_writer": ReportWriterInput,
     "write_case_patch": WriteCasePatchInput,
 }
-
-
-def supervisor_openai_tools(tool_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    tools = [
-        _openai_tool(name, SPECIALIST_TOOL_DESCRIPTIONS[name], model.model_json_schema())
-        for name, model in SPECIALIST_TOOL_MODELS.items()
-    ]
-    for card in tool_cards:
-        if not isinstance(card, dict):
-            continue
-        name = str(card.get("name") or "")
-        if not name:
-            continue
-        tools.append(
-            _openai_tool(
-                name,
-                str(card.get("description") or name),
-                dict(card.get("parameters") or {"type": "object", "properties": {}}),
-            )
-        )
-    return tools
-
-
-def _openai_tool(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
-    schema = dict(parameters or {})
-    schema.setdefault("type", "object")
-    schema.setdefault("properties", {})
-    schema.setdefault("additionalProperties", False)
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": schema,
-        },
-    }
