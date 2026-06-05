@@ -52,6 +52,7 @@ class HarnessRunState:
     planner_actions: list[dict[str, Any]] = field(default_factory=list)
     plan_progress: list[dict[str, Any]] = field(default_factory=list)
     observations: list[dict[str, Any]] = field(default_factory=list)
+    pending_approvals: list[dict[str, Any]] = field(default_factory=list)
     session_id: str = ""
     turn_id: str = ""
     user_message_for_planner: str = ""
@@ -89,6 +90,7 @@ class HarnessRunState:
             "feedback_summary": _feedback_summary(feedback),
             "feedback": feedback,
             "observations": list(self.observations),
+            "interrupts": list(self.pending_approvals),
             "supervisor_decisions": list(self.supervisor_decisions),
             "planner_actions": list(self.planner_actions),
             "model_calls": list(self.model_calls),
@@ -397,6 +399,7 @@ class HarnessRuntime:
             "role_calls": state.role_calls,
             "plan_progress": state.plan_progress,
             "observations": state.observations,
+            "interrupts": state.pending_approvals,
             "feedback_summary": _feedback_summary(feedback),
             "feedback": feedback,
             "debug_events_ref": f"traces/{state.run_id}/events.jsonl",

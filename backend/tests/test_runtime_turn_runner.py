@@ -553,6 +553,8 @@ def test_report_request_runs_file_and_pdf_approval_pipeline(tmp_path, monkeypatc
     assert response.trace["interrupts"][0]["tool"] == "write_case_file"
     assert response.trace["role_calls"][0]["role"] == "report_writer"
     assert not list((tmp_path / "cases" / "case_report_approval" / "reports").glob("*.md"))
+    waiting_trace = json.loads((tmp_path / "cases" / "case_report_approval" / "traces" / f"{response.trace['run_id']}.json").read_text(encoding="utf-8"))
+    assert waiting_trace["interrupts"][0]["tool"] == "write_case_file"
 
     resumed = runtime.resume_approval("case_report_approval", response.trace["run_id"], approved=True, reason="ok")
 
@@ -568,6 +570,8 @@ def test_report_request_runs_file_and_pdf_approval_pipeline(tmp_path, monkeypatc
     assert {call["tool"] for call in final.trace["tool_calls"]} >= {"write_case_file", "render_pdf"}
     assert list((tmp_path / "cases" / "case_report_approval" / "reports").glob("*.pdf"))
     assert any(event["kind"] == "approval" and event["name"] == "approved" for event in final.trace["observations"])
+    final_trace = json.loads((tmp_path / "cases" / "case_report_approval" / "traces" / f"{response.trace['run_id']}.json").read_text(encoding="utf-8"))
+    assert final_trace["interrupts"] == []
 
 
 def test_report_completion_wins_over_step_limit_after_pdf_render(tmp_path, monkeypatch) -> None:

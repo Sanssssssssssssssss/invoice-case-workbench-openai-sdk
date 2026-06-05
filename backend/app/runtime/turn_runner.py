@@ -873,6 +873,7 @@ class TurnRunner:
         interruptions: list[Any],
     ) -> AgentTurnResponse:
         payloads = [_approval_payload(item) for item in interruptions]
+        state.pending_approvals = payloads
         for payload in payloads:
             self.harness.append_debug_event(
                 state,
@@ -930,6 +931,7 @@ class TurnRunner:
                     "must_preserve_refs": [],
                 },
             )
+        state.pending_approvals = []
 
     def _record_policy_check(self, state: HarnessRunState, decision: SupervisorDecision, check: PolicyCheck) -> None:
         self.harness.append_debug_event(

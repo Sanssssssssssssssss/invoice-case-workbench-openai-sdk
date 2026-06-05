@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api, createEventSource } from '@/lib/api'
+import { approvalInterruptsFromEvents, approvalInterruptsFromTrace } from '@/lib/approvals'
 import { createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic } from '@/lib/chat'
 import { parseLiveStatusMessage, parseTraceEventMessage } from '@/lib/eventStream'
 import { mergeEvents } from '@/lib/trace'
@@ -160,6 +161,20 @@ export default function App() {
     () => mergeConversationWithOptimistic(conversationQuery.data ?? [], optimisticMessages),
     [conversationQuery.data, optimisticMessages]
   )
+
+  useEffect(() => {
+    if (!selectedCaseId || pendingApprovals.length > 0) return
+    const waitingRun = (runsQuery.data ?? []).find((run) => run.status === 'waiting_approval')
+    if (!waitingRun) return
+    if (selectedRunId !== waitingRun.run_id) {
+      setSelectedRunId(waitingRun.run_id)
+      return
+    }
+    const approvals = approvalInterruptsFromEvents(selectedCaseId, waitingRun.run_id, visibleEvents)
+    if (approvals.length) {
+      setPendingApprovals(approvals)
+    }
+  }, [pendingApprovals.length, runsQuery.data, selectedCaseId, selectedRunId, setSelectedRunId, visibleEvents])
 
   useEffect(() => {
     if (!selectedEvent && visibleEvents.length) {
@@ -326,25 +341,6 @@ export default function App() {
   )
 }
 
-function approvalInterruptsFromTrace(caseId: string, trace: Record<string, unknown>): ApprovalInterrupt[] {
-  const interrupts = Array.isArray(trace.interrupts) ? trace.interrupts : []
-  const runId = stringValue(trace.run_id)
-  return interrupts.filter(isRecord).map((item) => ({
-    type: stringValue(item.type) || 'tool_approval',
-    case_id: stringValue(item.case_id) || caseId,
-    run_id: stringValue(item.run_id) || runId,
-    tool: stringValue(item.tool) || 'tool',
-    risk_level: stringValue(item.risk_level) || 'read',
-    input_preview: stringValue(item.input_preview),
-    input_sha256: stringValue(item.input_sha256),
-    reason: stringValue(item.reason) || 'This action requires approval.'
-  }))
-}
-
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : value == null ? '' : String(value)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
