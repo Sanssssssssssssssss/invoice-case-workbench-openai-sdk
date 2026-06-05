@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from .bootstrap import ensure_paths
+
+ensure_paths()
+
 from .io import load_scenario, write_json
 from .judge import run_llm_judge
 from .models import ExpectedSpec, REPO_ROOT, ScenarioRunResult, ScenarioSpec, UserTurnSpec
 from .scripted import ScriptedManagerRunner, ScriptedRoleRegistry
 from .verifiers import score_checks, verify_run
-
-ensure_paths()
 
 from app.config import get_settings  # noqa: E402
 from app.runtime.turn_runner import AgentRuntime  # noqa: E402
