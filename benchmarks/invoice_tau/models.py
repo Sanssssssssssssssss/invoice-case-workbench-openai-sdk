@@ -42,6 +42,7 @@ class ExpectedSpec(BaseModel):
     trace_must_not_call: list[str] = Field(default_factory=list)
     trace_must_approve: list[str] = Field(default_factory=list)
     artifacts_must_exist: list[str] = Field(default_factory=list)
+    artifacts_must_not_exist: list[str] = Field(default_factory=list)
     rag_expected_profile_ids: list[str] = Field(default_factory=list)
     rag_expected_source_terms: list[str] = Field(default_factory=list)
     safety: dict[str, Any] = Field(default_factory=dict)
