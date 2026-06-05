@@ -570,6 +570,28 @@ def test_report_request_runs_file_and_pdf_approval_pipeline(tmp_path, monkeypatc
     assert any(event["kind"] == "approval" and event["name"] == "approved" for event in final.trace["observations"])
 
 
+def test_report_completion_wins_over_step_limit_after_pdf_render(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INVOICE_AGENT_MAX_STEPS", "5")
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    _seed_ready_case(runtime.runner.store, "case_report_step_limit")
+    monkeypatch.setattr(runtime.runner.roles, "call", _fake_report_writer)
+
+    response = runtime.run_turn(AgentTurnRequest(case_id="case_report_step_limit", message="final report and render PDF"))
+    assert response.trace["status"] == "waiting_approval"
+    response = runtime.resume_approval("case_report_step_limit", response.trace["run_id"], approved=True, reason="ok")
+    assert response.trace["status"] == "waiting_approval"
+
+    final = runtime.resume_approval("case_report_step_limit", response.trace["run_id"], approved=True, reason="ok")
+
+    assert final.trace["phase"] == "finalized"
+    assert final.trace["step_count"] >= final.trace["max_steps"]
+    assert "报告已生成" in final.reply
+    assert "当前运行已到本轮步数上限" not in final.reply
+    assert "final_answer_generic_boundary_template" not in final.reply
+    assert {call["tool"] for call in final.trace["tool_calls"]} >= {"write_case_file", "render_pdf"}
+    assert list((tmp_path / "cases" / "case_report_step_limit" / "reports").glob("*.pdf"))
+
+
 def test_report_request_rejected_approval_does_not_write_file(tmp_path, monkeypatch) -> None:
     runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
     _seed_ready_case(runtime.runner.store, "case_report_rejected")

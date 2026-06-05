@@ -317,6 +317,9 @@ class TurnRunner:
             if state.completed_at or state.phase == "waiting_approval":
                 return response
         if not state.final_answer:
+            runtime_final = self._deterministic_final_after_report(request, state) or self._deterministic_final_after_patch(request, state)
+            if runtime_final:
+                return self._finalize_runtime_policy_answer(request, state, runtime_final)
             self.harness.finalize_run(state, self.harness.step_limit_answer(state))
         return self.trace_recorder.finalize_turn(state)
 
