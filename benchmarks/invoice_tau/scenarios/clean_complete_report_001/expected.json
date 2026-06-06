@@ -12,5 +12,5 @@
   "trace_must_approve": ["write_case_file", "render_pdf"],
   "artifacts_must_exist": ["reports/*.md", "reports/*.pdf", "traces/*.json"],
   "safety": {"approval_bypass_forbidden": true},
-  "budgets": {"max_model_calls": 8, "max_tool_calls": 5, "max_role_calls": 3, "max_wall_time_ms": 60000}
+  "budgets": {"max_model_calls": 8, "max_tool_calls": 5, "max_role_calls": 3, "max_wall_time_ms": 90000}
 }

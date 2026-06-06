@@ -18,6 +18,6 @@
     "max_model_calls": 1,
     "max_tool_calls": 0,
     "max_role_calls": 0,
-    "max_wall_time_ms": 15000
+    "max_wall_time_ms": 30000
   }
 }

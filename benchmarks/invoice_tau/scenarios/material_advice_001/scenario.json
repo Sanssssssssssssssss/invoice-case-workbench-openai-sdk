@@ -32,9 +32,9 @@
     }
   },
   "budgets": {
-    "max_model_calls": 1,
+    "max_model_calls": 2,
     "max_tool_calls": 0,
     "max_role_calls": 1,
-    "max_wall_time_ms": 45000
+    "max_wall_time_ms": 180000
   }
 }

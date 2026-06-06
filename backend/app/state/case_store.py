@@ -38,6 +38,7 @@ OPTIONAL_DYNAMIC_SUPPORT_REQUIREMENTS = {
     "source_traceability",
     "template_match",
     "po_number",
+    "po_ref",
     "po_amount",
     "po_date",
     "grn_number",

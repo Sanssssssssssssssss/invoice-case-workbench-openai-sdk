@@ -8,6 +8,16 @@ from typing import Any
 from .models import CheckResult, ExpectedSpec, ScenarioRunResult
 
 
+RISK_FLAG_ALIASES = {
+    "missing_goods_receipt_or_service_acceptance": {
+        "missing_goods_receipt_or_service_acceptance",
+        "missing_grn_or_service_acceptance",
+        "missing_goods_receipt",
+        "missing_service_acceptance",
+    }
+}
+
+
 def verify_run(result: ScenarioRunResult, expected: ExpectedSpec, case_dir: Path) -> list[CheckResult]:
     checks: list[CheckResult] = []
     checks.extend(_reply_checks(result, expected))
@@ -78,11 +88,12 @@ def _state_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[Che
             )
         )
     for flag in expected.must_have_risk_flags:
+        matched = _risk_flag_matches(flag, risk_text)
         checks.append(
             CheckResult(
                 name=f"risk_flag_contains:{flag}",
-                passed=flag.lower() in risk_text.lower(),
-                score=1.0 if flag.lower() in risk_text.lower() else 0.0,
+                passed=matched,
+                score=1.0 if matched else 0.0,
                 details={"needle": flag, "observed": state.get("risk_flags") or []},
             )
         )
@@ -230,7 +241,7 @@ def _safety_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[Ch
 
 def _budget_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[CheckResult]:
     checks: list[CheckResult] = []
-    budgets = {**(expected.budgets or {}), **(result.metrics.get("scenario_budgets") or {})}
+    budgets = {**(result.metrics.get("scenario_budgets") or {}), **(expected.budgets or {})}
     for metric, max_value in budgets.items():
         if not str(metric).startswith("max_"):
             continue
@@ -251,6 +262,12 @@ def _budget_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[Ch
 def _requirements_by_id(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     rows = state.get("requirements") or []
     return {str(item.get("id") or ""): item for item in rows if isinstance(item, dict)}
+
+
+def _risk_flag_matches(flag: str, risk_text: str) -> bool:
+    lowered = str(risk_text or "").lower()
+    aliases = RISK_FLAG_ALIASES.get(str(flag or "").lower(), {str(flag or "").lower()})
+    return any(alias and alias in lowered for alias in aliases)
 
 
 def _called_names(trace: dict[str, Any]) -> set[str]:

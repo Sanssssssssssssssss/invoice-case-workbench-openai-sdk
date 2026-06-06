@@ -301,6 +301,9 @@ class TurnRunner:
             runtime_final = self._deterministic_final_after_report(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
+            runtime_final = self._deterministic_final_after_materials_advice(request, state)
+            if runtime_final:
+                return self._finalize_runtime_policy_answer(request, state, runtime_final)
             manager_input = self._manager_input(request, state, planner_context)
             try:
                 outcome = self.manager_runner.run(
@@ -370,6 +373,14 @@ class TurnRunner:
             return ""
         return f"报告已生成：Markdown {markdown_path}；PDF {pdf_path}"
 
+    def _deterministic_final_after_materials_advice(self, request: AgentTurnRequest, state: HarnessRunState) -> str:
+        if not requires_materials_advice(request.message):
+            return ""
+        advisor = self.context.last_role_result(state, name="materials_advisor")
+        if not isinstance(advisor, dict):
+            return ""
+        return str(advisor.get("answer") or "").strip()
+
     def _handle_manager_outcome(
         self,
         request: AgentTurnRequest,
@@ -405,7 +416,7 @@ class TurnRunner:
             self.trace_recorder.persist_trace_checkpoint(state, decision)
             return self.trace_recorder.finalize_turn(state)
         self.trace_recorder.persist_trace_checkpoint(state, decision)
-        recovered_text = _runtime_final_answer(self.store.load(state.case_id), state)
+        recovered_text, recovered_source = self._guard_recovery_final_answer(request, state)
         recovered = SupervisorDecision(
             action="final_answer",
             final_answer=recovered_text,
@@ -418,7 +429,7 @@ class TurnRunner:
             kind="runtime_recovery",
             name="final_answer_guard_rewrite",
             payload={
-                "source": "case_state",
+                "source": recovered_source,
                 "guard_feedback": self.context.last_runtime_feedback(state),
                 "final_answer_chars": len(recovered_text),
             },
@@ -431,6 +442,14 @@ class TurnRunner:
             state.final_answer = recovered_text
         self.trace_recorder.persist_trace_checkpoint(state, recovered)
         return self.trace_recorder.finalize_turn(state)
+
+    def _guard_recovery_final_answer(self, request: AgentTurnRequest, state: HarnessRunState) -> tuple[str, str]:
+        if requires_materials_advice(request.message):
+            advisor = self.context.last_role_result(state, name="materials_advisor")
+            answer = str(advisor.get("answer") or "").strip() if isinstance(advisor, dict) else ""
+            if answer:
+                return answer, "materials_advisor"
+        return _runtime_final_answer(self.store.load(state.case_id), state), "case_state"
 
     def _finalize_runtime_policy_answer(
         self,

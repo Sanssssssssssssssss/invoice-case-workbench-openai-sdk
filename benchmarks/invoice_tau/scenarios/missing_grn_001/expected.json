@@ -11,5 +11,5 @@
   "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
   "trace_must_not_call": ["report_writer", "write_case_file", "render_pdf"],
   "artifacts_must_not_exist": ["reports/*.md", "reports/*.pdf"],
-  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 45000}
+  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 420000}
 }

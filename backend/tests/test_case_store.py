@@ -840,6 +840,7 @@ def test_existing_case_adds_safe_dynamic_field_supports_as_optional(tmp_path) ->
                         "supports": [
                             {"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO-9201"},
                             {"requirement": "po_number", "support_level": "full", "quoted_text": "PO-9201"},
+                            {"requirement": "po_ref", "support_level": "full", "quoted_text": "PO-9201"},
                             {"requirement": "po_amount", "support_level": "full", "quoted_text": "9900.00 CNY"},
                         ],
                     }
@@ -851,8 +852,10 @@ def test_existing_case_adds_safe_dynamic_field_supports_as_optional(tmp_path) ->
 
     requirements = {item.id: item for item in updated.requirements}
     assert requirements["po_number"].required is False
+    assert requirements["po_ref"].required is False
     assert requirements["po_amount"].required is False
     assert requirements["po_number"].status == "satisfied"
+    assert requirements["po_ref"].status == "satisfied"
     assert requirements["po_amount"].status == "satisfied"
 
 
