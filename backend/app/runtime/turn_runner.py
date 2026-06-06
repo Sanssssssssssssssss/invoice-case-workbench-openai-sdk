@@ -293,7 +293,8 @@ class TurnRunner:
                 )
                 if result.get("status") == "approval_required":
                     return self._waiting_approval_response(request, state, "", [result])
-                continue
+                if result.get("status") != "blocked":
+                    continue
             runtime_final = self._deterministic_final_after_patch(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)

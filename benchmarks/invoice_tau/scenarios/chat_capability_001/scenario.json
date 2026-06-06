@@ -1,0 +1,23 @@
+{
+  "id": "chat_capability_001",
+  "name": "Capability greeting",
+  "description": "Tau-style smoke scenario for a pure conversational turn with no tools.",
+  "tags": ["chat", "manager"],
+  "user_script": [
+    {
+      "message": "你好，你是谁？你能做什么？",
+      "manager_decisions": [
+        {
+          "action": "final_answer",
+          "final_answer": "你好，我是这个工作台里的发票材料审查助手，可以帮你整理材料、审查证据、识别付款风险并生成本地报告/PDF。"
+        }
+      ]
+    }
+  ],
+  "budgets": {
+    "max_model_calls": 1,
+    "max_tool_calls": 0,
+    "max_role_calls": 0,
+    "max_wall_time_ms": 15000
+  }
+}

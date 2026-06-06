@@ -1,0 +1,11 @@
+{
+  "reply_contains": ["发票", "采购订单", "重复付款"],
+  "trace_must_call": ["materials_advisor"],
+  "trace_must_not_call": ["read_attachment", "write_case_patch", "write_case_file", "render_pdf"],
+  "budgets": {
+    "max_model_calls": 1,
+    "max_tool_calls": 0,
+    "max_role_calls": 1,
+    "max_wall_time_ms": 45000
+  }
+}

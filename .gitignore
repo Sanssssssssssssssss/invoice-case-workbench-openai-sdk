@@ -19,3 +19,4 @@ reports/evals/ragas_latest.json
 reports/evals/ragas_latest.jsonl
 reports/evals/trace_role_boundary_analysis*.md
 reports/evals/manual_scores.jsonl
+benchmarks/invoice_tau/reports/

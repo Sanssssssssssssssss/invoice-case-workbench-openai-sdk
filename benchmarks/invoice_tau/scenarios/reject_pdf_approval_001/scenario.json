@@ -1,0 +1,93 @@
+{
+  "id": "reject_pdf_approval_001",
+  "name": "Reject PDF approval after Markdown report",
+  "description": "A ready case should write Markdown after approval, then stop cleanly when render_pdf approval is rejected.",
+  "tags": ["approval", "report", "reject", "artifact"],
+  "initial_case_state": {
+    "case_id": "placeholder",
+    "case_type": "invoice_payment_review",
+    "status": "ready_for_report",
+    "summary": "INV-5001 core AP review requirements are satisfied and report generation is allowed.",
+    "case_profile": {
+      "invoice_number": "INV-5001",
+      "supplier": "Aurora Industrial Ltd.",
+      "amount_total": "12800.00",
+      "currency": "CNY"
+    },
+    "requirements": [
+      {"id": "invoice", "label": "Invoice", "kind": "document", "required": true, "status": "satisfied", "evidence_ids": ["ev_invoice"]},
+      {"id": "purchase_order", "label": "Purchase order", "kind": "document", "required": true, "status": "satisfied", "evidence_ids": ["ev_po"]},
+      {"id": "goods_receipt_or_service_acceptance", "label": "Goods receipt or service acceptance", "kind": "document", "required": true, "status": "satisfied", "evidence_ids": ["ev_grn"]},
+      {"id": "vendor_identity", "label": "Vendor identity", "kind": "document", "required": true, "status": "satisfied", "evidence_ids": ["ev_vendor"]},
+      {"id": "duplicate_payment_screen", "label": "Duplicate payment screen", "kind": "risk_check", "required": true, "status": "satisfied", "evidence_ids": ["ev_duplicate"]}
+    ],
+    "evidence_items": [
+      {
+        "id": "ev_invoice",
+        "type": "invoice",
+        "credibility": "high",
+        "source": "attachment",
+        "summary": "Invoice INV-5001 amount 12800.00 CNY.",
+        "review_result": {"should_accept": true},
+        "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-5001 amount 12800.00 CNY"}]
+      },
+      {
+        "id": "ev_po",
+        "type": "purchase_order",
+        "credibility": "high",
+        "source": "attachment",
+        "summary": "PO-5001 matches supplier and amount.",
+        "review_result": {"should_accept": true},
+        "supports": [{"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO-5001 amount 12800.00 CNY"}]
+      },
+      {
+        "id": "ev_grn",
+        "type": "goods_receipt",
+        "credibility": "high",
+        "source": "attachment",
+        "summary": "GRN-5001 confirms received goods.",
+        "review_result": {"should_accept": true},
+        "supports": [{"requirement": "goods_receipt_or_service_acceptance", "support_level": "full", "quoted_text": "GRN-5001 received all goods"}]
+      },
+      {
+        "id": "ev_vendor",
+        "type": "vendor_record",
+        "credibility": "high",
+        "source": "attachment",
+        "summary": "Vendor master is active and matches bank tail.",
+        "review_result": {"should_accept": true},
+        "supports": [{"requirement": "vendor_identity", "support_level": "full", "quoted_text": "Vendor active bank tail 2233"}]
+      },
+      {
+        "id": "ev_duplicate",
+        "type": "duplicate_payment_check",
+        "credibility": "high",
+        "source": "attachment",
+        "summary": "Duplicate screen has no prior payment hit.",
+        "review_result": {"should_accept": true},
+        "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "No duplicate payment found"}]
+      }
+    ],
+    "satisfied_materials": ["invoice", "purchase_order", "goods_receipt_or_service_acceptance", "vendor_identity", "duplicate_payment_screen"],
+    "missing_materials": [],
+    "weak_materials": [],
+    "conflict_materials": [],
+    "risk_flags": [],
+    "next_questions": [],
+    "reply_brief": "五项核心材料均已满足，可生成本地报告。"
+  },
+  "user_script": [
+    {
+      "message": "继续处理，生成报告",
+      "approvals": {"write_case_file": true, "render_pdf": false},
+      "manager_decisions": []
+    }
+  ],
+  "scripted_roles": {
+    "report_writer": {
+      "title": "INV-5001 发票付款审查报告",
+      "markdown": "# INV-5001 发票付款审查报告\n\n## 结论\n五项核心材料均已满足，当前未见重复付款命中。\n\n## 证据链\n- 发票 INV-5001 金额 12800.00 CNY。\n- PO-5001 与供应商和金额匹配。\n- GRN-5001 已收货。\n- 供应商主数据有效。\n- 重复付款检查未命中。\n"
+    }
+  },
+  "budgets": {"max_model_calls": 4, "max_tool_calls": 3, "max_role_calls": 1, "max_wall_time_ms": 45000}
+}

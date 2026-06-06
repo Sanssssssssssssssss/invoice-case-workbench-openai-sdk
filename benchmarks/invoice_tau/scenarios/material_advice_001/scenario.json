@@ -1,0 +1,40 @@
+{
+  "id": "material_advice_001",
+  "name": "Material advice route",
+  "description": "Checks that the manager can delegate to materials_advisor and produce user-facing missing-material guidance.",
+  "tags": ["materials_advisor", "role"],
+  "user_script": [
+    {
+      "message": "我现在需要准备什么发票付款审查材料？",
+      "manager_decisions": [
+        {"action": "delegate_agent", "target": "materials_advisor", "input": {"question_focus": "required AP invoice payment review materials"}},
+        {"action": "final_answer", "final_answer": "请准备发票、采购订单、收货或服务验收、供应商主数据和重复付款检查记录。"}
+      ]
+    }
+  ],
+  "scripted_roles": {
+    "materials_advisor": {
+      "answer": "请准备发票、采购订单、收货或服务验收、供应商主数据和重复付款检查记录。",
+      "tasks": [
+        {
+          "task": "收集核心付款审查材料",
+          "requirement": "invoice,purchase_order,goods_receipt_or_service_acceptance,vendor_identity,duplicate_payment_screen",
+          "current_status": "missing",
+          "why_insufficient": "当前尚未提交任何付款审查材料。",
+          "owner": "AP reviewer",
+          "format": "source document or system export",
+          "required_fields": ["invoice_number", "supplier", "amount", "PO", "GRN"],
+          "impact": "无法判断是否可付款。"
+        }
+      ],
+      "missing_materials": ["invoice", "purchase_order", "goods_receipt_or_service_acceptance", "vendor_identity", "duplicate_payment_screen"],
+      "next_questions": ["请上传发票、PO、GRN、供应商记录和重复付款检查。"]
+    }
+  },
+  "budgets": {
+    "max_model_calls": 1,
+    "max_tool_calls": 0,
+    "max_role_calls": 1,
+    "max_wall_time_ms": 45000
+  }
+}

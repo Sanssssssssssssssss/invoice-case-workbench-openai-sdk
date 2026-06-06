@@ -1,0 +1,57 @@
+{
+  "id": "duplicate_conflict_001",
+  "name": "Duplicate payment conflict",
+  "description": "End-to-end scripted scenario that should keep duplicate_payment_screen as conflict and never mark it satisfied.",
+  "tags": ["attachments", "conflict", "duplicate_payment", "case_patch_writer"],
+  "user_script": [
+    {
+      "message": "请审查这些材料，判断是否可以付款，不要生成报告。",
+      "attach": ["invoice.md", "po.md", "grn.md", "vendor.md", "duplicate_history.md"],
+      "manager_decisions": []
+    }
+  ],
+  "scripted_roles": {
+    "evidence_reviewer": {
+      "mode": "review",
+      "evidence_type": "duplicate_payment_check",
+      "credibility": "high",
+      "support_level": "partial",
+      "should_accept": false,
+      "reason": "Duplicate-payment export shows same supplier, same amount, and near-same invoice reference with prior payment PAY-2026-4421.",
+      "risk_flags": ["duplicate_payment_hit", "same_supplier_same_amount", "historical_clearing_reference"],
+      "supports": [{"requirement": "duplicate_payment_screen", "support_level": "partial", "quoted_text": "PAY-2026-4421 / CLR-2026-1187 matched same supplier and amount."}],
+      "conflicts": [
+        {"conflict_type": "duplicate_payment_hit", "requirement": "duplicate_payment_screen", "severity": "high", "description": "Potential duplicate payment hit for supplier Aurora Industrial Ltd. amount 12800.00 CNY.", "quoted_text": "PAY-2026-4421 / CLR-2026-1187", "required_follow_up": "Review historical payment and clearing explanation before payment release."}
+      ],
+      "evidence_cards": [{"title": "Duplicate payment hit", "doc_type": "duplicate_payment_check", "supports": ["duplicate_payment_screen"], "conflicts": ["duplicate_payment_hit"]}],
+      "suggested_patch": {},
+      "reply_to_user": "重复付款检查命中，付款不能放行。"
+    },
+    "case_patch_writer": {
+      "patch_type": "update_case",
+      "case_updates": {
+        "summary": "INV-7001 材料中重复付款检查命中高风险。",
+        "case_profile": {"invoice_number": "INV-7001", "supplier": "Aurora Industrial Ltd.", "amount_total": "12800.00", "currency": "CNY"},
+        "requirements": [
+          {"id": "invoice", "label": "Invoice", "kind": "document", "required": true},
+          {"id": "purchase_order", "label": "Purchase order", "kind": "document", "required": true},
+          {"id": "goods_receipt_or_service_acceptance", "label": "Goods receipt or service acceptance", "kind": "document", "required": true},
+          {"id": "vendor_identity", "label": "Vendor identity", "kind": "document", "required": true},
+          {"id": "duplicate_payment_screen", "label": "Duplicate payment screen", "kind": "risk_check", "required": true}
+        ],
+        "add_evidence": [
+          {"id": "ev_invoice", "type": "invoice", "credibility": "high", "source": "attachment", "summary": "Invoice INV-7001 amount 12800.00 CNY.", "review_result": {"should_accept": true}, "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-7001 amount 12800.00 CNY"}]},
+          {"id": "ev_po", "type": "purchase_order", "credibility": "high", "source": "attachment", "summary": "PO-7001 matches supplier and amount.", "review_result": {"should_accept": true}, "supports": [{"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO-7001 matches invoice"}]},
+          {"id": "ev_grn", "type": "goods_receipt", "credibility": "high", "source": "attachment", "summary": "GRN-7001 received all units.", "review_result": {"should_accept": true}, "supports": [{"requirement": "goods_receipt_or_service_acceptance", "support_level": "full", "quoted_text": "received all units"}]},
+          {"id": "ev_vendor", "type": "vendor_record", "credibility": "high", "source": "attachment", "summary": "Vendor Aurora Industrial Ltd. is active.", "review_result": {"should_accept": true}, "supports": [{"requirement": "vendor_identity", "support_level": "full", "quoted_text": "vendor active"}]},
+          {"id": "ev_duplicate", "type": "duplicate_payment_check", "credibility": "high", "source": "attachment", "summary": "Potential duplicate: PAY-2026-4421 and CLR-2026-1187 match same supplier and amount.", "review_result": {"should_accept": true}, "supports": [{"requirement": "duplicate_payment_screen", "support_level": "partial", "quoted_text": "PAY-2026-4421 / CLR-2026-1187"}], "conflicts": ["{\"requirement\":\"duplicate_payment_screen\",\"conflict_type\":\"duplicate_payment_hit\",\"severity\":\"high\",\"description\":\"Potential duplicate payment hit for same supplier and amount.\",\"quoted_text\":\"PAY-2026-4421 / CLR-2026-1187\"}"]}
+        ],
+        "risk_flags": ["duplicate_payment_hit", "same_supplier_same_amount", "historical_clearing_reference"],
+        "next_questions": ["请提供历史付款 PAY-2026-4421 和清账凭证 CLR-2026-1187 的业务解释。"],
+        "reply_brief": "重复付款检查命中，duplicate_payment_screen 保持 conflict。"
+      },
+      "audit_note": "scripted duplicate conflict case"
+    }
+  },
+  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 45000}
+}

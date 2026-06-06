@@ -1,0 +1,10 @@
+{
+  "reply_contains": ["发票材料审查助手"],
+  "trace_must_not_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
+  "budgets": {
+    "max_model_calls": 1,
+    "max_tool_calls": 0,
+    "max_role_calls": 0,
+    "max_wall_time_ms": 15000
+  }
+}

@@ -203,7 +203,7 @@ class PolicyGate:
                     risk_level="local_write",
                 )
 
-        if _report_requested(user_message):
+        if _report_requested(user_message) and not _evidence_pipeline_pending(request, state):
             if not has_observation(state, kind="role", name="report_writer"):
                 if not (decision.action == "delegate_agent" and decision.target == "report_writer"):
                     return block("report_requires_writer", "Report generation must start with report_writer.", constraints=["Choose delegate_agent target=report_writer."])
@@ -631,6 +631,21 @@ def _report_requested(message: str) -> bool:
     if any(term in text for term in ("不要生成报告", "不要生成 pdf", "不生成报告", "先不生成", "不用生成")):
         return False
     return any(term in text for term in ("生成报告", "最终报告", "导出报告", "渲染pdf", "生成 pdf", "pdf report", "report", "final report"))
+
+
+def _evidence_pipeline_pending(request: AgentTurnRequest, state: HarnessRunState) -> bool:
+    attachments = list(request.attachments or [])
+    if attachments and not has_observation(state, kind="tool", name="read_attachment"):
+        return True
+    if has_observation(state, kind="tool", name="read_attachment") and not _review_finished(state):
+        return True
+    if (has_reviewer_mode(state, "review") or has_reviewer_mode(state, "repair")) and not has_observation(
+        state, kind="role", name="case_patch_writer"
+    ):
+        return True
+    if has_observation(state, kind="role", name="case_patch_writer") and not has_observation(state, kind="tool", name="write_case_patch"):
+        return True
+    return False
 
 
 def _markdown_only(message: str) -> bool:
