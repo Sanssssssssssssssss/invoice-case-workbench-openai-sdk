@@ -1,5 +1,6 @@
 import type {
   AgentTurnResponse,
+  AgentRunAccepted,
   ArtifactItem,
   AttachmentUpload,
   CaseState,
@@ -54,6 +55,15 @@ export const api = {
   getLiveStatus: (caseId: string) => requestJson<LiveStatus>(`/api/cases/${encodeURIComponent(caseId)}/live-status`),
   getRunEvents: (caseId: string, runId: string) =>
     requestJson<TraceEvent[]>(`/api/cases/${encodeURIComponent(caseId)}/runs/${encodeURIComponent(runId)}/events`),
+  startRun: (caseId: string, message: string, attachments: AttachmentUpload[]) =>
+    requestJson<AgentRunAccepted>('/api/agent/runs', {
+      method: 'POST',
+      body: JSON.stringify({
+        case_id: caseId,
+        message,
+        attachments: attachments.map((item) => ({ name: item.name, path: item.path, content_type: item.content_type }))
+      })
+    }),
   sendTurn: (caseId: string, message: string, attachments: AttachmentUpload[]) =>
     requestJson<AgentTurnResponse>('/api/agent/turn', {
       method: 'POST',
@@ -67,6 +77,11 @@ export const api = {
     requestJson<AgentTurnResponse>(`/api/cases/${encodeURIComponent(caseId)}/runs/${encodeURIComponent(runId)}/approval`, {
       method: 'POST',
       body: JSON.stringify({ approved, reason })
+    }),
+  resumeRunApproval: (caseId: string, runId: string, approved: boolean, reason = '') =>
+    requestJson<AgentRunAccepted>(`/api/agent/runs/${encodeURIComponent(runId)}/approval`, {
+      method: 'POST',
+      body: JSON.stringify({ case_id: caseId, approved, reason })
     }),
   uploadAttachment: async (caseId: string, file: File) => {
     const data = new FormData()

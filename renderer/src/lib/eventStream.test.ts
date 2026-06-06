@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseLiveStatusMessage, parseTraceEventMessage } from './eventStream'
+import { parseAgentRunStreamMessage, parseLiveStatusMessage, parseTraceEventMessage } from './eventStream'
 
 describe('parseTraceEventMessage', () => {
   it('parses valid trace event payloads', () => {
@@ -19,5 +19,16 @@ describe('parseLiveStatusMessage', () => {
 
   it('rejects malformed live status payloads', () => {
     expect(() => parseLiveStatusMessage(JSON.stringify({ latestEventId: 1 }))).toThrow('Invalid live_status payload')
+  })
+})
+
+describe('parseAgentRunStreamMessage', () => {
+  it('parses valid agent run stream payloads', () => {
+    const event = parseAgentRunStreamMessage(JSON.stringify({ event_id: 'run_1:stream:1', run_id: 'run_1', kind: 'assistant_delta', payload: { delta: 'hi' } }))
+    expect(event.kind).toBe('assistant_delta')
+  })
+
+  it('rejects malformed agent run stream payloads', () => {
+    expect(() => parseAgentRunStreamMessage(JSON.stringify({ event_id: 'evt_1' }))).toThrow('Invalid agent run stream payload')
   })
 })

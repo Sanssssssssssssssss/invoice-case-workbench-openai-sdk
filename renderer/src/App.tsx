@@ -3,10 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api, createEventSource } from '@/lib/api'
 import { approvalInterruptsFromEvents, approvalInterruptsFromTrace } from '@/lib/approvals'
-import { createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic } from '@/lib/chat'
-import { parseLiveStatusMessage, parseTraceEventMessage } from '@/lib/eventStream'
+import { createOptimisticAssistantMessage, createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic } from '@/lib/chat'
+import { parseAgentRunStreamMessage, parseLiveStatusMessage, parseTraceEventMessage } from '@/lib/eventStream'
 import { mergeEvents } from '@/lib/trace'
-import type { AgentTurnResponse, ApprovalInterrupt, AttachmentUpload, ConversationItem, LiveStatus, TraceEvent } from '@/types'
+import type { AgentRunStreamEvent, AgentTurnResponse, ApprovalInterrupt, AttachmentUpload, ConversationItem, LiveStatus, TraceEvent } from '@/types'
 import { useUiStore } from '@/store/uiStore'
 import { TitleBar } from '@/components/TitleBar'
 import { CaseRail } from '@/components/CaseRail'
@@ -21,6 +21,7 @@ export default function App() {
   const [optimisticMessages, setOptimisticMessages] = useState<ConversationItem[]>([])
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalInterrupt[]>([])
   const liveEventsRef = useRef<TraceEvent[]>([])
+  const streamSeqByRunRef = useRef<Record<string, number>>({})
   const selectedRunIdRef = useRef<string>('')
   const selectedCaseId = useUiStore((state) => state.selectedCaseId)
   const selectedRunId = useUiStore((state) => state.selectedRunId)
@@ -239,6 +240,87 @@ export default function App() {
     await refreshCaseData(response.case_id, runId)
   }
 
+  const upsertStreamingAssistant = (runId: string, content: string) => {
+    if (!content) return
+    setOptimisticMessages((current) => {
+      const id = `stream:${runId}`
+      const existing = current.findIndex((item) => item.metadata?.client_id === id)
+      if (existing >= 0) {
+        return current.map((item, index) => (index === existing ? { ...item, content } : item))
+      }
+      return [...current, createOptimisticAssistantMessage(content, id)]
+    })
+  }
+
+  const updateFromRunStreamEvent = (event: AgentRunStreamEvent) => {
+    streamSeqByRunRef.current[event.run_id] = Math.max(streamSeqByRunRef.current[event.run_id] ?? 0, event.seq)
+    if (!selectedRunIdRef.current && event.run_id) {
+      selectedRunIdRef.current = event.run_id
+      setSelectedRunId(event.run_id)
+    }
+    setLiveStatus(liveStatusFromRunStream(event))
+  }
+
+  const waitForRunStream = async (caseId: string, runId: string, streamUrl: string) => {
+    const afterSeq = streamSeqByRunRef.current[runId] ?? 0
+    const path = `${streamUrl}${streamUrl.includes('?') ? '&' : '?'}after_seq=${afterSeq}`
+    return new Promise<'final' | 'approval'>((resolve, reject) => {
+      let source: EventSource | null = null
+      let assistantText = ''
+      let settled = false
+      const finish = (result: 'final' | 'approval') => {
+        if (settled) return
+        settled = true
+        source?.close()
+        resolve(result)
+      }
+      const fail = (error: unknown) => {
+        if (settled) return
+        settled = true
+        source?.close()
+        reject(error)
+      }
+      const handle = async (raw: MessageEvent) => {
+        try {
+          const event = parseAgentRunStreamMessage(raw.data)
+          updateFromRunStreamEvent(event)
+          if (event.kind === 'assistant_delta') {
+            const delta = stringValue(event.payload.delta)
+            if (delta) {
+              assistantText += delta
+              upsertStreamingAssistant(runId, assistantText)
+            }
+          } else if (event.kind === 'approval_required') {
+            const approvals = approvalsFromRunStream(event, caseId, runId)
+            setPendingApprovals(approvals)
+            await refreshCaseData(caseId, runId)
+            finish('approval')
+          } else if (event.kind === 'final') {
+            const response = agentTurnResponseFromPayload(event.payload)
+            if (!response) throw new Error('Streaming final event did not include a valid response.')
+            await applyResponse(response)
+            finish('final')
+          } else if (event.kind === 'error') {
+            fail(new Error(stringValue(event.payload.message) || event.summary || 'Streaming run failed.'))
+          }
+        } catch (error) {
+          fail(error)
+        }
+      }
+      createEventSource(path)
+        .then((eventSource) => {
+          source = eventSource
+          for (const kind of STREAM_EVENT_KINDS) {
+            source.addEventListener(kind, (event) => void handle(event as MessageEvent))
+          }
+          source.onerror = () => {
+            if (!settled) fail(new Error('Streaming connection failed.'))
+          }
+        })
+        .catch(fail)
+    })
+  }
+
   const sendTurn = async (message: string, files: File[]) => {
     const caseId = selectedCaseId || caseQuery.data?.case_id
     if (!caseId) return
@@ -256,13 +338,23 @@ export default function App() {
     ])
     let completed = false
     try {
-      const uploads: AttachmentUpload[] = []
-      for (const file of files) {
-        uploads.push(await api.uploadAttachment(caseId, file))
+      const uploads = await Promise.all(files.map((file) => api.uploadAttachment(caseId, file)))
+      let runStarted = false
+      try {
+        const run = await api.startRun(caseId, userText, uploads)
+        runStarted = true
+        setSelectedRunId(run.run_id)
+        selectedRunIdRef.current = run.run_id
+        const result = await waitForRunStream(run.case_id, run.run_id, run.stream_url)
+        completed = result === 'final' || result === 'approval'
+      } catch (streamError) {
+        if (runStarted) {
+          throw streamError
+        }
+        const response = await api.sendTurn(caseId, userText, uploads)
+        await applyResponse(response)
+        completed = true
       }
-      const response = await api.sendTurn(caseId, userText, uploads)
-      await applyResponse(response)
-      completed = true
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       setOptimisticMessages((current) => [...current, createOptimisticSystemMessage(`发送失败：${detail}`)])
@@ -280,9 +372,15 @@ export default function App() {
     const runId = approval?.run_id || selectedRunId
     if (!caseId || !runId) return
     setRunning(true)
+    setPendingApprovals([])
     try {
-      const response = await api.resumeApproval(caseId, runId, approved, approved ? 'approved_from_desktop' : 'rejected_from_desktop')
-      await applyResponse(response)
+      try {
+        const run = await api.resumeRunApproval(caseId, runId, approved, approved ? 'approved_from_desktop' : 'rejected_from_desktop')
+        await waitForRunStream(caseId, run.run_id, run.stream_url)
+      } catch (_streamError) {
+        const response = await api.resumeApproval(caseId, runId, approved, approved ? 'approved_from_desktop' : 'rejected_from_desktop')
+        await applyResponse(response)
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       setOptimisticMessages((current) => [...current, createOptimisticSystemMessage(`审批恢复失败：${detail}`)])
@@ -343,4 +441,88 @@ export default function App() {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : value == null ? '' : String(value)
+}
+
+const STREAM_EVENT_KINDS = [
+  'run_started',
+  'context_loaded',
+  'model_started',
+  'assistant_delta',
+  'tool_started',
+  'tool_finished',
+  'approval_decision',
+  'approval_required',
+  'final',
+  'error'
+]
+
+function liveStatusFromRunStream(event: AgentRunStreamEvent): LiveStatus {
+  const tool = stringValue(event.payload.tool)
+  const role = stringValue(event.payload.role)
+  const label = tool || role || event.kind
+  const isDone = event.kind === 'final' || event.kind === 'error' || event.kind === 'approval_required'
+  return {
+    runId: event.run_id,
+    phase: event.kind,
+    activeAgent: isDone ? statusLabelForStream(event.kind) : label,
+    activeRole: role || tool || '',
+    currentStep: numberValue(event.payload.step_count),
+    latestSummary: event.summary || statusLabelForStream(event.kind),
+    latestThinking: '',
+    latestEventId: event.event_id,
+    isRunning: !isDone,
+    thinkingSource: 'run_stream',
+    reasoningChars: 0,
+    reasoningChunks: 0,
+    runStartedAt: '',
+    elapsedMs: numberValue(event.payload.duration_ms),
+    activeStep: event.summary || label,
+    latestThoughtSummary: event.summary || label,
+    updatedAt: event.ts
+  }
+}
+
+function statusLabelForStream(kind: string) {
+  const labels: Record<string, string> = {
+    run_started: '运行已开始',
+    context_loaded: '上下文已加载',
+    model_started: '模型调用中',
+    assistant_delta: '回复生成中',
+    tool_started: '工具执行中',
+    tool_finished: '工具已完成',
+    approval_decision: '审批已提交',
+    approval_required: '等待确认',
+    final: '回复已生成',
+    error: '运行失败'
+  }
+  return labels[kind] || kind
+}
+
+function approvalsFromRunStream(event: AgentRunStreamEvent, caseId: string, runId: string): ApprovalInterrupt[] {
+  const raw = Array.isArray(event.payload.interrupts) ? event.payload.interrupts : []
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+    .map((item) => ({
+      type: stringValue(item.type) || 'tool_approval',
+      case_id: stringValue(item.case_id) || caseId,
+      run_id: stringValue(item.run_id) || runId,
+      tool: stringValue(item.tool),
+      risk_level: stringValue(item.risk_level),
+      input_preview: stringValue(item.input_preview),
+      input_sha256: stringValue(item.input_sha256),
+      reason: stringValue(item.reason)
+    }))
+}
+
+function agentTurnResponseFromPayload(payload: Record<string, unknown>): AgentTurnResponse | null {
+  const response = payload.response
+  if (!response || typeof response !== 'object') return null
+  const candidate = response as Partial<AgentTurnResponse>
+  if (!candidate.case_id || typeof candidate.reply !== 'string' || !candidate.case_state || !candidate.trace) return null
+  return candidate as AgentTurnResponse
+}
+
+function numberValue(value: unknown): number {
+  const parsed = Number(value ?? 0)
+  return Number.isFinite(parsed) ? parsed : 0
 }

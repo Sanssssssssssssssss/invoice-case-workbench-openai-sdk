@@ -283,6 +283,8 @@ def _await(value: Any) -> Any:
 
 
 def _close_run_config_client(run_config: Any) -> None:
+    if not getattr(run_config, "_invoice_close_openai_client", True):
+        return
     client = getattr(run_config, "_invoice_openai_client", None)
     if client is not None:
         try:

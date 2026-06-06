@@ -1,4 +1,4 @@
-import type { LiveStatus, TraceEvent } from '@/types'
+import type { AgentRunStreamEvent, LiveStatus, TraceEvent } from '@/types'
 
 export function parseTraceEventMessage(data: string): TraceEvent {
   const parsed = JSON.parse(data) as Partial<TraceEvent>
@@ -14,4 +14,12 @@ export function parseLiveStatusMessage(data: string): LiveStatus {
     throw new Error('Invalid live_status payload')
   }
   return parsed as LiveStatus
+}
+
+export function parseAgentRunStreamMessage(data: string): AgentRunStreamEvent {
+  const parsed = JSON.parse(data) as Partial<AgentRunStreamEvent>
+  if (!parsed || typeof parsed.event_id !== 'string' || typeof parsed.run_id !== 'string' || typeof parsed.kind !== 'string') {
+    throw new Error('Invalid agent run stream payload')
+  }
+  return parsed as AgentRunStreamEvent
 }

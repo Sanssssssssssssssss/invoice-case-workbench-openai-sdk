@@ -4,10 +4,11 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from agents import FunctionTool, RunConfig
+from agents import FunctionTool, RunConfig, Runner
 from agents.run_state import RunState
 from pydantic import BaseModel
 
@@ -19,7 +20,7 @@ from app.harness import HarnessRuntime, HarnessRunState
 from app.llm import LlmClient, ModelCallRecord
 from app.observability.langfuse_tracer import LangfuseTracer, safe_role_input, safe_role_output
 from app.observability.openai_trace_bridge import sdk_run_summary
-from app.runtime.agents_sdk import build_run_config, run_agent_sync
+from app.runtime.agents_sdk import build_run_config, close_run_config_client, run_agent_sync
 from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.runtime.context_assembler import ContextAssembler, context_budget
 from app.runtime.evidence_recovery import recover_text_direct_review
@@ -91,6 +92,38 @@ class SdkManagerRunner:
             raw_result=result,
         )
 
+    async def run_streamed(
+        self,
+        *,
+        runner: TurnRunner,
+        request: AgentTurnRequest,
+        state: HarnessRunState,
+        planner_context: dict[str, Any],
+        manager_input: dict[str, Any],
+    ) -> ManagerRunOutcome:
+        _ = planner_context
+        tools = runner.sdk_tools(state=state, request=request, planner_context=planner_context)
+        manager = runner.manager_factory.build(tools, metadata={"case_id": state.case_id, "run_id": state.run_id})
+        run_config = runner.run_config(state)
+        try:
+            result = Runner.run_streamed(
+                manager,
+                json.dumps(manager_input, ensure_ascii=False, default=str),
+                max_turns=max(1, state.max_steps - state.step_count + 2),
+                run_config=run_config,
+            )
+            runner.emit_stream_event(
+                "model_started",
+                {"role": "planner", "model": runner.settings.llm_model, "step_count": state.step_count},
+                summary="Case manager model call started.",
+            )
+            async for event in result.stream_events():
+                runner.record_sdk_stream_event(state, event)
+            runner.record_manager_model_call(state, manager_input, result)
+            return _manager_outcome_from_result(result)
+        finally:
+            await close_run_config_client(run_config)
+
     def resume(
         self,
         *,
@@ -127,6 +160,48 @@ class SdkManagerRunner:
             raw_result=result,
         )
 
+    async def resume_streamed(
+        self,
+        *,
+        runner: TurnRunner,
+        request: AgentTurnRequest,
+        state: HarnessRunState,
+        sdk_state: str,
+        approved: bool,
+        reason: str = "",
+    ) -> ManagerRunOutcome:
+        planner_context = runner.context_assembler.build_planner_context(request, state)
+        tools = runner.sdk_tools(state=state, request=request, planner_context=planner_context)
+        manager = runner.manager_factory.build(tools, metadata={"case_id": state.case_id, "run_id": state.run_id})
+        loaded_state = RunState.from_string(manager, sdk_state, context_override={})
+        run_state = await loaded_state if hasattr(loaded_state, "__await__") else loaded_state
+        interruptions = list(run_state.get_interruptions())
+        if not interruptions:
+            raise RuntimeError("No pending approval items are available for this run.")
+        for item in interruptions:
+            if approved:
+                run_state.approve(item)
+            else:
+                run_state.reject(item, rejection_message=reason or "User rejected this tool call.")
+        run_config = runner.run_config(state)
+        try:
+            result = Runner.run_streamed(
+                run_state,
+                max_turns=max(1, state.max_steps - state.step_count + 2),
+                run_config=run_config,
+            )
+            runner.emit_stream_event(
+                "model_started",
+                {"role": "planner", "model": runner.settings.llm_model, "approval_resume": approved},
+                summary="Case manager approval resume started.",
+            )
+            async for event in result.stream_events():
+                runner.record_sdk_stream_event(state, event)
+            runner.record_manager_model_call(state, {"approval_resume": approved, "reason": reason}, result)
+            return _manager_outcome_from_result(result)
+        finally:
+            await close_run_config_client(run_config)
+
 
 class AgentRuntime:
     def __init__(
@@ -140,8 +215,28 @@ class AgentRuntime:
     def run_turn(self, request: AgentTurnRequest) -> AgentTurnResponse:
         return self.runner.run_turn(request)
 
+    async def run_turn_streamed(
+        self,
+        request: AgentTurnRequest,
+        *,
+        run_id: str,
+        event_sink: Any | None = None,
+    ) -> AgentTurnResponse:
+        return await self.runner.run_turn_streamed(request, run_id=run_id, event_sink=event_sink)
+
     def resume_approval(self, case_id: str, run_id: str, approved: bool, reason: str = "") -> AgentTurnResponse:
         return self.runner.resume_approval(case_id, run_id, approved=approved, reason=reason)
+
+    async def resume_approval_streamed(
+        self,
+        case_id: str,
+        run_id: str,
+        approved: bool,
+        reason: str = "",
+        *,
+        event_sink: Any | None = None,
+    ) -> AgentTurnResponse:
+        return await self.runner.resume_approval_streamed(case_id, run_id, approved=approved, reason=reason, event_sink=event_sink)
 
     def resume_run(self, case_id: str, run_id: str) -> dict[str, Any]:
         return self.runner.resume_run(case_id, run_id)
@@ -188,6 +283,7 @@ class TurnRunner:
         self.manager_factory = CaseManagerAgentFactory(self.settings)
         self.manager_runner = manager_runner or SdkManagerRunner()
         self.checkpoints = RuntimeCheckpointStore(self.store)
+        self._stream_emit: Any | None = None
 
     def run_turn(self, request: AgentTurnRequest) -> AgentTurnResponse:
         if not request.message.strip():
@@ -211,6 +307,56 @@ class TurnRunner:
                 return self._run_until_final(request, state)
             finally:
                 self.harness.write_trace(state)
+
+    async def run_turn_streamed(
+        self,
+        request: AgentTurnRequest,
+        *,
+        run_id: str,
+        event_sink: Any | None = None,
+    ) -> AgentTurnResponse:
+        if not request.message.strip():
+            raise ValueError("message is required")
+        self.llm.calls.clear()
+        prior_emit = self._stream_emit
+        self._stream_emit = event_sink
+        case_id = self.store.validate_case_id(request.case_id)
+        with self.observability.start_turn(
+            case_id=case_id,
+            run_id=run_id,
+            session_id=f"{case_id}:main",
+            message_summary=request.message,
+            attachments=request.attachments,
+            max_steps=self.harness.max_steps,
+            model=self.llm.settings.llm_model,
+            workspace_root_hash=_workspace_root_hash(self.store),
+        ) as turn:
+            try:
+                started = time.perf_counter()
+                state = self.context_assembler.load_context(request, run_id=run_id)
+                state.observability.update(turn.to_dict())
+                self._record_timing(state, "context_loaded", started)
+                self.emit_stream_event(
+                    "context_loaded",
+                    {
+                        "case_id": state.case_id,
+                        "run_id": state.run_id,
+                        "session_compacted": state.session_compacted,
+                        "pre_run_context_estimate_chars": state.pre_run_context_estimate_chars,
+                        "pre_run_context_limit_chars": state.pre_run_context_limit_chars,
+                    },
+                    summary="Case context loaded.",
+                )
+                return await self._run_until_final_streamed(request, state)
+            finally:
+                try:
+                    if "state" in locals():
+                        started = time.perf_counter()
+                        self.harness.write_trace(state)
+                        self._record_timing(state, "trace_write_finally", started)
+                        self.harness.write_trace(state)
+                finally:
+                    self._stream_emit = prior_emit
 
     def resume_approval(self, case_id: str, run_id: str, approved: bool, reason: str = "") -> AgentTurnResponse:
         state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
@@ -241,6 +387,53 @@ class TurnRunner:
                 return self._handle_manager_outcome(request, state, outcome)
             return self._run_until_final(request, state)
 
+    async def resume_approval_streamed(
+        self,
+        case_id: str,
+        run_id: str,
+        *,
+        approved: bool,
+        reason: str = "",
+        event_sink: Any | None = None,
+    ) -> AgentTurnResponse:
+        prior_emit = self._stream_emit
+        self._stream_emit = event_sink
+        state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
+        with self.observability.start_turn(
+            case_id=state.case_id,
+            run_id=state.run_id,
+            session_id=state.session_id or f"{state.case_id}:main",
+            turn_id=state.turn_id,
+            message_summary=f"approval_resume approved={approved}",
+            attachments=request.attachments,
+            max_steps=self.harness.max_steps,
+            model=self.llm.settings.llm_model,
+            workspace_root_hash=_workspace_root_hash(self.store),
+        ) as turn:
+            try:
+                state.observability.update(turn.to_dict())
+                self.emit_stream_event(
+                    "approval_decision",
+                    {"case_id": state.case_id, "run_id": state.run_id, "approved": approved},
+                    summary="Approval decision received.",
+                )
+                self._record_approval_decision(state, interruptions, approved=approved, reason=reason)
+                if not sdk_state:
+                    return await self._resume_runtime_policy_approval_streamed(request, state, approved=approved, reason=reason)
+                if hasattr(self.manager_runner, "resume_streamed"):
+                    outcome = await self.manager_runner.resume_streamed(  # type: ignore[attr-defined]
+                        runner=self,
+                        request=request,
+                        state=state,
+                        sdk_state=sdk_state,
+                        approved=approved,
+                        reason=reason,
+                    )
+                    return self._handle_manager_outcome(request, state, outcome)
+                return await self._run_until_final_streamed(request, state)
+            finally:
+                self._stream_emit = prior_emit
+
     def _resume_runtime_policy_approval(
         self,
         request: AgentTurnRequest,
@@ -251,6 +444,24 @@ class TurnRunner:
     ) -> AgentTurnResponse:
         if approved:
             return self._run_until_final(request, state)
+        tool = _latest_approval_tool(state)
+        if tool:
+            self.harness.finalize_run(state, f"已取消执行 {tool}，未写入或渲染被拒绝的报告文件。")
+        else:
+            self.harness.finalize_run(state, "已取消执行该操作。")
+        return self.trace_recorder.finalize_turn(state)
+
+    async def _resume_runtime_policy_approval_streamed(
+        self,
+        request: AgentTurnRequest,
+        state: HarnessRunState,
+        *,
+        approved: bool,
+        reason: str,
+    ) -> AgentTurnResponse:
+        if approved:
+            return await self._run_until_final_streamed(request, state)
+        _ = reason
         tool = _latest_approval_tool(state)
         if tool:
             self.harness.finalize_run(state, f"已取消执行 {tool}，未写入或渲染被拒绝的报告文件。")
@@ -313,6 +524,75 @@ class TurnRunner:
                     planner_context=planner_context,
                     manager_input=manager_input,
                 )
+            except Exception as exc:
+                self._record_manager_failure(state, manager_input, exc)
+                self.harness.finalize_run(state, _manager_failure_answer(exc))
+                return self.trace_recorder.finalize_turn(state)
+            response = self._handle_manager_outcome(request, state, outcome)
+            if state.completed_at or state.phase == "waiting_approval":
+                return response
+        if not state.final_answer:
+            runtime_final = self._deterministic_final_after_report(request, state) or self._deterministic_final_after_patch(request, state)
+            if runtime_final:
+                return self._finalize_runtime_policy_answer(request, state, runtime_final)
+            self.harness.finalize_run(state, self.harness.step_limit_answer(state))
+        return self.trace_recorder.finalize_turn(state)
+
+    async def _run_until_final_streamed(self, request: AgentTurnRequest, state: HarnessRunState) -> AgentTurnResponse:
+        while not state.completed_at and state.step_count < state.max_steps:
+            started = time.perf_counter()
+            planner_context = self.context_assembler.build_planner_context(request, state)
+            self._record_timing(state, "planner_context", started)
+            forced = self._deterministic_policy_continuation(request, state)
+            if forced:
+                name, payload = forced
+                self.harness.append_debug_event(
+                    state,
+                    kind="runtime_policy",
+                    name="deterministic_continuation",
+                    payload={"tool": name, "input": payload},
+                    summary=f"Runtime continued required policy action: {name}",
+                    parent_event_id=state.last_action_event_id,
+                    caused_by_event_id=state.last_action_event_id,
+                )
+                result = self.invoke_manager_tool(
+                    state=state,
+                    request=request,
+                    planner_context=planner_context,
+                    name=name,
+                    payload=payload,
+                )
+                if result.get("status") == "approval_required":
+                    return self._waiting_approval_response(request, state, "", [result])
+                if result.get("status") != "blocked":
+                    continue
+            runtime_final = self._deterministic_final_after_patch(request, state)
+            if runtime_final:
+                return self._finalize_runtime_policy_answer(request, state, runtime_final)
+            runtime_final = self._deterministic_final_after_report(request, state)
+            if runtime_final:
+                return self._finalize_runtime_policy_answer(request, state, runtime_final)
+            runtime_final = self._deterministic_final_after_materials_advice(request, state)
+            if runtime_final:
+                return self._finalize_runtime_policy_answer(request, state, runtime_final)
+            manager_input = self._manager_input(request, state, planner_context)
+            try:
+                if hasattr(self.manager_runner, "run_streamed"):
+                    outcome = await self.manager_runner.run_streamed(  # type: ignore[attr-defined]
+                        runner=self,
+                        request=request,
+                        state=state,
+                        planner_context=planner_context,
+                        manager_input=manager_input,
+                    )
+                else:
+                    outcome = self.manager_runner.run(
+                        runner=self,
+                        request=request,
+                        state=state,
+                        planner_context=planner_context,
+                        manager_input=manager_input,
+                    )
             except Exception as exc:
                 self._record_manager_failure(state, manager_input, exc)
                 self.harness.finalize_run(state, _manager_failure_answer(exc))
@@ -517,8 +797,16 @@ class TurnRunner:
         name: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        started = time.perf_counter()
+        self.emit_stream_event(
+            "tool_started",
+            {"tool": name, "step_count": state.step_count, "phase": state.phase},
+            summary=f"{name} started.",
+        )
         if state.step_count >= state.max_steps:
-            return {"status": "blocked", "reason": "step_limit", "message": self.harness.step_limit_answer(state)}
+            result = {"status": "blocked", "reason": "step_limit", "message": self.harness.step_limit_answer(state)}
+            self._emit_tool_finished(state, name, result, started)
+            return result
         decision = _decision_for_tool(name, payload)
         check = self.policy_gate.check(
             request=request,
@@ -531,13 +819,17 @@ class TurnRunner:
             self._record_policy_check(state, decision, check)
             self._record_policy_block(state, check)
             self.trace_recorder.persist_trace_checkpoint(state, decision)
-            return {"status": "blocked", "policy_check": check.model_dump(mode="json")}
+            result = {"status": "blocked", "policy_check": check.model_dump(mode="json")}
+            self._emit_tool_finished(state, name, result, started)
+            return result
         self.harness.record_supervisor_decision(state, decision)
         self._record_policy_check(state, decision, check)
         if check.requires_approval and not self._approval_was_granted(state, decision.target):
             self.harness.set_phase(state, "waiting_approval")
             self.harness.write_trace(state)
-            return {"status": "approval_required", "policy_check": check.model_dump(mode="json")}
+            result = {"status": "approval_required", "policy_check": check.model_dump(mode="json")}
+            self._emit_tool_finished(state, name, result, started)
+            return result
         if decision.action == "delegate_agent":
             result = self._call_specialist(state, request, planner_context, decision)
         elif decision.action == "write_case_patch":
@@ -545,6 +837,7 @@ class TurnRunner:
         else:
             result = self._call_tool(state, request, decision)
         self.trace_recorder.persist_trace_checkpoint(state, decision)
+        self._emit_tool_finished(state, name, result, started)
         return result
 
     def run_config(self, state: HarnessRunState) -> RunConfig:
@@ -577,6 +870,58 @@ class TurnRunner:
         )
         self.llm.calls.append(record)
         self.trace_recorder.record_model_call_debug(state)
+
+    def emit_stream_event(self, kind: str, payload: dict[str, Any] | None = None, *, summary: str = "") -> None:
+        if not callable(self._stream_emit):
+            return
+        try:
+            self._stream_emit(kind, payload or {}, summary=summary)
+        except Exception:
+            return
+
+    def record_sdk_stream_event(self, state: HarnessRunState, event: Any) -> None:
+        event_type = str(getattr(event, "type", "") or "")
+        if event_type == "agent_updated_stream_event":
+            agent = getattr(event, "new_agent", None)
+            self.emit_stream_event(
+                "model_started",
+                {"role": getattr(agent, "name", "") or "manager", "model": self.settings.llm_model},
+                summary="Agent updated.",
+            )
+            return
+        if event_type == "raw_response_event":
+            delta = _stream_text_delta(getattr(event, "data", None))
+            if delta:
+                self.emit_stream_event(
+                    "assistant_delta",
+                    {"delta": delta, "role": "assistant", "step_count": state.step_count},
+                    summary="Assistant response delta.",
+                )
+            return
+        if event_type == "run_item_stream_event":
+            name = str(getattr(event, "name", "") or "")
+            item = getattr(event, "item", None)
+            tool_name = _stream_item_tool_name(item)
+            if name == "tool_called" and tool_name:
+                self.emit_stream_event("tool_started", {"tool": tool_name, "source": "sdk"}, summary=f"{tool_name} called.")
+            elif name == "tool_output" and tool_name:
+                self.emit_stream_event("tool_finished", {"tool": tool_name, "source": "sdk", "status": "completed"}, summary=f"{tool_name} output.")
+
+    def _record_timing(self, state: HarnessRunState, name: str, started: float) -> None:
+        duration_ms = max(0, int((time.perf_counter() - started) * 1000))
+        timings = state.observability.setdefault("timings", [])
+        if isinstance(timings, list):
+            timings.append({"name": name, "duration_ms": duration_ms, "ts": time.time()})
+
+    def _emit_tool_finished(self, state: HarnessRunState, name: str, result: dict[str, Any], started: float) -> None:
+        duration_ms = max(0, int((time.perf_counter() - started) * 1000))
+        self._record_timing(state, f"tool:{name}", started)
+        status = str(result.get("status") or ("error" if result.get("error") else "completed"))
+        self.emit_stream_event(
+            "tool_finished",
+            {"tool": name, "status": status, "duration_ms": duration_ms, "phase": state.phase},
+            summary=f"{name} {status}.",
+        )
 
     def _record_manager_failure(self, state: HarnessRunState, manager_input: dict[str, Any], exc: Exception) -> None:
         error = f"{type(exc).__name__}: {exc}"
@@ -911,6 +1256,11 @@ class TurnRunner:
         trace = state.compact_trace()
         trace["status"] = "waiting_approval"
         trace["interrupts"] = payloads
+        self.emit_stream_event(
+            "approval_required",
+            {"case_id": state.case_id, "run_id": state.run_id, "interrupts": payloads},
+            summary="Approval is required before continuing.",
+        )
         return AgentTurnResponse(
             case_id=state.case_id,
             reply="这个操作需要你确认后才能继续。",
@@ -1280,6 +1630,51 @@ def _approval_payload(item: Any) -> dict[str, Any]:
 
 def _manager_output_preview(result: Any) -> str:
     return json.dumps(sdk_run_summary(result), ensure_ascii=False, default=str)
+
+
+def _manager_outcome_from_result(result: Any) -> ManagerRunOutcome:
+    interruptions = list(getattr(result, "interruptions", []) or [])
+    sdk_state = ""
+    if interruptions:
+        sdk_state = result.to_state().to_string()
+    return ManagerRunOutcome(
+        final_output=str(getattr(result, "final_output", "") or ""),
+        interruptions=interruptions,
+        sdk_state=sdk_state,
+        raw_result=result,
+    )
+
+
+def _stream_text_delta(data: Any) -> str:
+    event_type = str(getattr(data, "type", "") or "")
+    if event_type.endswith("output_text.delta") or event_type.endswith("text.delta"):
+        return str(getattr(data, "delta", "") or "")
+    if event_type.endswith("message.delta"):
+        delta = getattr(data, "delta", None)
+        content = getattr(delta, "content", None)
+        if isinstance(content, str):
+            return content
+    choices = getattr(data, "choices", None)
+    if choices:
+        chunks: list[str] = []
+        for choice in choices:
+            delta = getattr(choice, "delta", None)
+            content = getattr(delta, "content", None)
+            if content:
+                chunks.append(str(content))
+        return "".join(chunks)
+    return ""
+
+
+def _stream_item_tool_name(item: Any) -> str:
+    raw_item = getattr(item, "raw_item", None) or item
+    for attr in ("name", "tool_name"):
+        value = getattr(raw_item, attr, None)
+        if value:
+            return str(value)
+    call = getattr(raw_item, "function", None)
+    value = getattr(call, "name", None)
+    return str(value or "")
 
 
 def _usage_from_result(result: Any) -> dict[str, Any]:

@@ -11,6 +11,10 @@ from openai import AsyncOpenAI
 from app.config import Settings
 
 
+_SHARED_CLIENTS_ENABLED = False
+_SHARED_CLIENTS: dict[tuple[str, str, float], AsyncOpenAI] = {}
+
+
 def build_run_config(
     settings: Settings,
     *,
@@ -19,12 +23,8 @@ def build_run_config(
     timeout_seconds: float | None = None,
 ) -> RunConfig:
     base_url = settings.llm_base_url or "https://api.openai.com/v1"
-    client = AsyncOpenAI(
-        api_key=settings.llm_api_key,
-        base_url=base_url,
-        timeout=timeout_seconds if timeout_seconds is not None else settings.llm_timeout_seconds,
-        max_retries=0,
-    )
+    timeout = float(timeout_seconds if timeout_seconds is not None else settings.llm_timeout_seconds)
+    client, should_close = _client_for(settings, base_url=base_url, timeout_seconds=timeout)
     config = RunConfig(
         model_provider=OpenAIProvider(
             openai_client=client,
@@ -36,6 +36,7 @@ def build_run_config(
         trace_metadata=trace_metadata or {},
     )
     setattr(config, "_invoice_openai_client", client)
+    setattr(config, "_invoice_close_openai_client", should_close)
     return config
 
 
@@ -53,9 +54,53 @@ async def _run_agent_and_close(*args: Any, **kwargs: Any) -> Any:
     try:
         return await Runner.run(*args, **kwargs)
     finally:
-        client = getattr(config, "_invoice_openai_client", None)
-        if client is not None:
-            await client.close()
+        await close_run_config_client(config)
+
+
+async def close_run_config_client(config: Any) -> None:
+    if not getattr(config, "_invoice_close_openai_client", True):
+        return
+    client = getattr(config, "_invoice_openai_client", None)
+    if client is not None:
+        await client.close()
+
+
+def enable_shared_openai_clients() -> None:
+    global _SHARED_CLIENTS_ENABLED
+    _SHARED_CLIENTS_ENABLED = True
+
+
+async def close_shared_openai_clients() -> None:
+    global _SHARED_CLIENTS_ENABLED
+    clients = list(_SHARED_CLIENTS.values())
+    _SHARED_CLIENTS.clear()
+    _SHARED_CLIENTS_ENABLED = False
+    for client in clients:
+        await client.close()
+
+
+def _client_for(settings: Settings, *, base_url: str, timeout_seconds: float) -> tuple[AsyncOpenAI, bool]:
+    if not _SHARED_CLIENTS_ENABLED:
+        return (
+            AsyncOpenAI(
+                api_key=settings.llm_api_key,
+                base_url=base_url,
+                timeout=timeout_seconds,
+                max_retries=0,
+            ),
+            True,
+        )
+    key = (settings.llm_api_key or "", base_url.rstrip("/"), timeout_seconds)
+    client = _SHARED_CLIENTS.get(key)
+    if client is None:
+        client = AsyncOpenAI(
+            api_key=settings.llm_api_key,
+            base_url=base_url,
+            timeout=timeout_seconds,
+            max_retries=0,
+        )
+        _SHARED_CLIENTS[key] = client
+    return client, False
 
 
 def _use_responses_api(provider: str, base_url: str) -> bool:

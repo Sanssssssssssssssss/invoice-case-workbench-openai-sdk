@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -7,20 +8,32 @@ from fastapi import FastAPI, HTTPException
 from fastapi import File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.agent_runs import router as agent_runs_router
 from app.api.live_status import router as live_status_router
 from app.api.workbench import router as workbench_router
+from app.runtime.agents_sdk import close_shared_openai_clients, enable_shared_openai_clients
 from app.runtime.turn_runner import AgentRuntime
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, AgentTurnResponse
 
 
-app = FastAPI(title="Invoice Case Workbench Agent", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    enable_shared_openai_clients()
+    try:
+        yield
+    finally:
+        await close_shared_openai_clients()
+
+
+app = FastAPI(title="Invoice Case Workbench Agent", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(agent_runs_router)
 app.include_router(workbench_router)
 app.include_router(live_status_router)
 

@@ -147,6 +147,36 @@ export interface AgentTurnResponse {
   trace: Record<string, unknown>
 }
 
+export interface AgentRunAccepted {
+  case_id: string
+  run_id: string
+  status: string
+  stream_url: string
+}
+
+export type AgentRunStreamKind =
+  | 'run_started'
+  | 'context_loaded'
+  | 'model_started'
+  | 'assistant_delta'
+  | 'tool_started'
+  | 'tool_finished'
+  | 'approval_decision'
+  | 'approval_required'
+  | 'final'
+  | 'error'
+
+export interface AgentRunStreamEvent {
+  seq: number
+  event_id: string
+  run_id: string
+  case_id: string
+  kind: AgentRunStreamKind
+  ts: string
+  summary: string
+  payload: Record<string, unknown>
+}
+
 export interface LiveStatus {
   runId: string
   phase: string

@@ -37,6 +37,19 @@ export function createOptimisticSystemMessage(content: string, now = new Date().
   }
 }
 
+export function createOptimisticAssistantMessage(content: string, id = `assistant_${Date.now()}`, now = new Date().toISOString()): ConversationItem {
+  return {
+    ts: now,
+    role: 'assistant',
+    content,
+    metadata: {
+      optimistic: true,
+      client_id: id,
+      streaming: true
+    }
+  }
+}
+
 export function mergeConversationWithOptimistic(persisted: ConversationItem[] = [], optimistic: ConversationItem[] = []) {
   if (!optimistic.length) return persisted
   const persistedContentKeys = new Set(persisted.map((item) => contentKey(item)))
