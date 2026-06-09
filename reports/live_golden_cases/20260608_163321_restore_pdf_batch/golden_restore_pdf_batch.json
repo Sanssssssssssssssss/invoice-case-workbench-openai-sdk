@@ -1,0 +1,246 @@
+{
+  "started": "2026-06-08T16:33:21",
+  "finished": "2026-06-08T16:34:52",
+  "output_dir": "E:\\GPTProject2\\erp-openai\\reports\\live_golden_cases\\20260608_163321_restore_pdf_batch",
+  "cases_total": 4,
+  "cases_passed": 0,
+  "results": [
+    {
+      "case_name": "case_01_clean_match_real_jpg_FACTU2015020048",
+      "case_id": "golden_live_20260608_163321_01_case_01_clean_match_real_jpg_FACTU2015020048",
+      "elapsed_seconds": 25.246,
+      "http_status": 200,
+      "status": "new",
+      "expected_status": "ready_for_report",
+      "status_ok": false,
+      "satisfied": [],
+      "missing": [],
+      "weak": [],
+      "conflict": [],
+      "expected_conflict_contains": [],
+      "conflict_ok": true,
+      "risk_flags": [],
+      "reply_preview": "根据系统检查，当前附件路径不存在。从附件清单中可以看到以下5个文件均显示为 **error** 状态：\n\n| 文件名 | 状态 | 原因 |\n|--------|------|------|\n| 01_invoice_extract_from_real_source.md | error | FileNotFoundError |\n| 02_purchase_order.md | error | FileNotFoundError |\n| 03_goods_receipt.md | error | FileNotFoundError |\n| 04_vendor_record.md | error | FileNotFoundError |\n| 05_duplicate_payment_check.md | error | FileNotFoundError |\n\n---\n\n## 问题说明\n\n您上传的5个证据文件（发票、采购订单、收货单、供应商记录、重复付款检查）在本轮请求中**路径不存在或未被正确声明**。\n\n---\n\n## 建议操作\n\n请**重新上传这5个文件**，我将为您：\n\n1. **提取并审查**所有证据内容\n2. **检查材料完整性**（invoice、PO、GRN、vendor、duplicate payment）\n3. **评估是否满足** `ready_for_report` 条件\n4. **生成中文审查报告** 和 **PDF文件**\n\n---\n\n## 本系统说明\n\n本系统用于**本地材料收集、证据审查和报告/PDF生成**，不执行 ERP 审批、付款、过账、路由或提交。\n\n请重新上传文件后，我会立即开始审查流程。",
+      "run_id": "run_c0056ea51cf2",
+      "trace_status": null,
+      "model_calls": 1,
+      "planner_actions": 2,
+      "interrupts": [],
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_source.md",
+          "content_type": "text/markdown",
+          "bytes": 1506,
+          "relative_path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "content_type": "text/markdown",
+          "bytes": 484,
+          "relative_path": "attachments/a4c85f7a23_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "content_type": "text/markdown",
+          "bytes": 434,
+          "relative_path": "attachments/40ceaa8195_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "content_type": "text/markdown",
+          "bytes": 459,
+          "relative_path": "attachments/15842711d6_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "content_type": "text/markdown",
+          "bytes": 581,
+          "relative_path": "attachments/d2cbc955a9_05_duplicate_payment_check.md"
+        }
+      ],
+      "pass": false
+    },
+    {
+      "case_name": "case_02_amount_conflict_real_jpg_FACTU2015040047",
+      "case_id": "golden_live_20260608_163321_02_case_02_amount_conflict_real_jpg_FACTU2015040047",
+      "elapsed_seconds": 10.14,
+      "http_status": 200,
+      "status": "new",
+      "expected_status": "collecting_materials",
+      "status_ok": false,
+      "satisfied": [],
+      "missing": [],
+      "weak": [],
+      "conflict": [],
+      "expected_conflict_contains": [
+        "purchase_order",
+        "goods_receipt_or_service_acceptance"
+      ],
+      "conflict_ok": false,
+      "risk_flags": [],
+      "reply_preview": "根据系统反馈，当前附件路径不存在或本轮请求没有声明该附件，需要重新上传。\n\n**当前状态说明：**\n\n1. **附件状态**：您提到的5个附件（发票提取、采购订单、收货单、供应商记录、重复付款检查）在系统中均显示为 **error** 状态，原因是文件路径不存在。\n\n2. **无法生成报告**：由于证据材料未能成功读取，目前无法判断案件是否 `ready_for_report`，也无法生成 PDF 报告。\n\n**下一步操作建议：**\n\n请您重新上传以下材料，以便进行证据审查和报告生成：\n- 发票原件或提取文件\n- 采购订单（PO）\n- 收货单/服务验收单（GRN）\n- 供应商身份/银行信息\n- 重复付款排查记录（如有）\n\n上传后，我将帮您：\n1. 提取并审查各项证据\n2. 核对材料完整性\n3. 生成审查报告和 PDF 文件\n\n请直接上传文件，或粘贴文件内容，我会立即开始处理。",
+      "run_id": "run_52543cb6081b",
+      "trace_status": null,
+      "model_calls": 1,
+      "planner_actions": 2,
+      "interrupts": [],
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_source.md",
+          "content_type": "text/markdown",
+          "bytes": 1711,
+          "relative_path": "attachments/993e586f1c_01_invoice_extract_from_real_source.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "content_type": "text/markdown",
+          "bytes": 463,
+          "relative_path": "attachments/0bb7bd6b04_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "content_type": "text/markdown",
+          "bytes": 438,
+          "relative_path": "attachments/03c7d51f91_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "content_type": "text/markdown",
+          "bytes": 466,
+          "relative_path": "attachments/b69d0e18df_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "content_type": "text/markdown",
+          "bytes": 585,
+          "relative_path": "attachments/cb4b277da2_05_duplicate_payment_check.md"
+        }
+      ],
+      "pass": false
+    },
+    {
+      "case_name": "case_05_clean_match_real_pdf_flipkart",
+      "case_id": "golden_live_20260608_163321_03_case_05_clean_match_real_pdf_flipkart",
+      "elapsed_seconds": 30.365,
+      "http_status": 200,
+      "status": "new",
+      "expected_status": "ready_for_report",
+      "status_ok": false,
+      "satisfied": [],
+      "missing": [],
+      "weak": [],
+      "conflict": [],
+      "expected_conflict_contains": [],
+      "conflict_ok": true,
+      "risk_flags": [],
+      "reply_preview": "根据系统反馈，附件路径确实不存在。系统提示需要重新上传附件。让我直接回复您：\n\n---\n\n**当前状态说明**\n\n根据系统检查，您本轮上传的附件在服务器端未能成功保存。具体包括：\n\n1. `01_invoice_extract_from_real_pdf.md` - 发票提取文件\n2. `02_purchase_order.md` - 采购订单\n3. `03_goods_receipt.md` - 收货单\n4. `04_vendor_record.md` - 供应商记录\n5. `05_duplicate_payment_check.md` - 重复付款检查\n6. `invoice2data_FlipkartInvoice.pdf` - 原始PDF发票\n\n**建议操作**\n\n请您**重新上传这些附件**，上传后我可以帮您：\n\n1. **提取和审查证据** - 使用 `evidence_reviewer` 分析所有材料\n2. **检查缺失项** - 使用 `materials_advisor` 确认是否满足 `ready_for_report` 条件\n3. **生成报告** - 使用 `report_writer` 生成中文 Markdown 报告\n4. **导出 PDF** - 使用 `render_pdf` 生成 PDF 文件\n\n请重新上传附件后，我将立即开始处理您的发票审查流程。\n\n---\n\n**补充说明**：本系统用于本地材料收集、证据审查和报告/PDF生成，不执行 ERP 审批、付款、过账、路由或提交。",
+      "run_id": "run_073f5675a5f3",
+      "trace_status": null,
+      "model_calls": 1,
+      "planner_actions": 2,
+      "interrupts": [],
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_pdf.md",
+          "content_type": "text/markdown",
+          "bytes": 1313,
+          "relative_path": "attachments/5407927f70_01_invoice_extract_from_real_pdf.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "content_type": "text/markdown",
+          "bytes": 563,
+          "relative_path": "attachments/9caf1a3042_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "content_type": "text/markdown",
+          "bytes": 507,
+          "relative_path": "attachments/983f38e946_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "content_type": "text/markdown",
+          "bytes": 546,
+          "relative_path": "attachments/3e6e32c9cc_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "content_type": "text/markdown",
+          "bytes": 625,
+          "relative_path": "attachments/e1118416e8_05_duplicate_payment_check.md"
+        },
+        {
+          "name": "invoice2data_FlipkartInvoice.pdf",
+          "content_type": "application/pdf",
+          "bytes": 44791,
+          "relative_path": "attachments/8df4f6cc99_invoice2data_FlipkartInvoice.pdf"
+        }
+      ],
+      "pass": false
+    },
+    {
+      "case_name": "case_06_duplicate_hit_real_pdf_sap",
+      "case_id": "golden_live_20260608_163321_04_case_06_duplicate_hit_real_pdf_sap",
+      "elapsed_seconds": 24.338,
+      "http_status": 200,
+      "status": "new",
+      "expected_status": "collecting_materials",
+      "status_ok": false,
+      "satisfied": [],
+      "missing": [],
+      "weak": [],
+      "conflict": [],
+      "expected_conflict_contains": [
+        "duplicate_payment_check"
+      ],
+      "conflict_ok": false,
+      "risk_flags": [],
+      "reply_preview": "根据系统反馈，所有附件文件在当前会话中无法读取（路径不存在）。我需要您重新上传这些材料，才能进行审查并生成报告。\n\n**当前状态：**\n- 案件ID：`golden_live_20260608_163321_04_case_06_duplicate_hit_real_pdf_sap`\n- 附件清单显示有6个文件，但全部处于 `error` 状态\n- 原因：`FileNotFoundError: Attachment path does not exist`\n\n**需要您重新上传的材料：**\n1. `01_invoice_extract_from_real_pdf.md` - 发票提取内容\n2. `02_purchase_order.md` - 采购订单\n3. `03_goods_receipt.md` - 收货凭证\n4. `04_vendor_record.md` - 供应商记录\n5. `05_duplicate_payment_check.md` - 重复付款检查\n6. `sap_5435569865439.pdf` - PDF原始发票\n\n请您重新上传这些文件后，我将立即进行：\n1. 证据提取与审查\n2. 材料完整性检查\n3. 生成审查报告（Markdown）\n4. 渲染PDF版本\n\n---\n\n**说明：** 本系统用于本地材料收集、证据审查和报告/PDF生成，不执行 ERP 审批、付款、过账、路由或提交。",
+      "run_id": "run_d3f35bd2e9d9",
+      "trace_status": null,
+      "model_calls": 1,
+      "planner_actions": 2,
+      "interrupts": [],
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_pdf.md",
+          "content_type": "text/markdown",
+          "bytes": 1203,
+          "relative_path": "attachments/f5bd71d843_01_invoice_extract_from_real_pdf.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "content_type": "text/markdown",
+          "bytes": 540,
+          "relative_path": "attachments/d87b7a2849_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "content_type": "text/markdown",
+          "bytes": 499,
+          "relative_path": "attachments/b1dce7d04e_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "content_type": "text/markdown",
+          "bytes": 505,
+          "relative_path": "attachments/a57bf6759d_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "content_type": "text/markdown",
+          "bytes": 783,
+          "relative_path": "attachments/780cf7c37a_05_duplicate_payment_check.md"
+        },
+        {
+          "name": "sap_5435569865439.pdf",
+          "content_type": "application/pdf",
+          "bytes": 193822,
+          "relative_path": "attachments/443c5688e6_sap_5435569865439.pdf"
+        }
+      ],
+      "pass": false
+    }
+  ]
+}

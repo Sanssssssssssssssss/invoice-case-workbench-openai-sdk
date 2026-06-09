@@ -20,7 +20,6 @@ from app.runtime.policy_gate import (
     requires_materials_advice,
 )
 from app.runtime.retry import is_transient_llm_error, is_transient_tool_error
-from app.runtime.recovery_policy import enforce_no_generic_boundary_template
 from app.runtime.agents_sdk import build_run_config
 from app.runtime.tool_runtime import ToolRuntime
 from app.runtime.turn_runner import supervisor_task
@@ -458,6 +457,39 @@ def test_policy_gate_enforces_report_writer_file_and_pdf_sequence(tmp_path) -> N
     assert check.error_type in {"report_requires_pdf", "report_file_requires_pdf"}
 
 
+def test_policy_gate_does_not_reblock_approved_report_file_tool(tmp_path) -> None:
+    store, context, harness, state = _state(tmp_path, message="???????? PDF?")
+    gate = PolicyGate(store=store, context=context)
+    harness.record_observation(
+        state,
+        {
+            "kind": "approval",
+            "name": "approved",
+            "summary": "User approved write_case_file.",
+            "key_facts": ["tool=write_case_file", "risk_level=local_write"],
+            "risks": [],
+            "missing_items": [],
+            "next_action_hint": "dispatch",
+            "must_preserve_refs": [],
+        },
+    )
+
+    check = gate.check(
+        request=AgentTurnRequest(case_id=state.case_id, message="???????? PDF?"),
+        state=state,
+        decision=SupervisorDecision(
+            action="call_tool",
+            target="write_case_file",
+            input={"relative_path": "reports/final_report.md", "content": "# report"},
+            reason="approved report write",
+        ),
+        planner_context={"attachments": []},
+    )
+
+    assert check.allowed
+    assert check.error_type != "report_file_not_requested"
+
+
 def test_tool_runtime_preserves_capability_metadata(tmp_path) -> None:
     store = CaseStore(tmp_path / "cases")
     harness = HarnessRuntime(store)
@@ -602,14 +634,6 @@ def test_case_patch_normalizes_grn_support_alias(tmp_path) -> None:
     assert state.requirements[0].status == "satisfied"
 
 
-def test_guard_allows_erp_source_logs_but_blocks_execution_boundary() -> None:
-    enforce_no_generic_boundary_template("来自 ERP 的截图显示清账记录已作为材料记录。", "请看日志")
-    from app.runtime.recovery_policy import GenericBoundaryTemplateError
-
-    with pytest.raises(GenericBoundaryTemplateError):
-        enforce_no_generic_boundary_template("是否提交至 ERP 付款审批需要人工处理。", "请看发票")
-
-
 def test_step_limit_answer_does_not_leak_guard_retry_instruction(tmp_path) -> None:
     store = CaseStore(tmp_path / "cases")
     harness = HarnessRuntime(store, max_steps=10)
@@ -617,10 +641,10 @@ def test_step_limit_answer_does_not_leak_guard_retry_instruction(tmp_path) -> No
     state.step_count = state.max_steps
     harness.record_guard_error(
         state,
-        "final_answer_generic_boundary_template",
+        "final_answer_no_execution_wording",
         Exception("The previous final_answer added a generic template. Rewrite the answer."),
         runtime_feedback=guard_retry_feedback(
-            "final_answer_generic_boundary_template",
+            "final_answer_no_execution_wording",
             "The previous final_answer added a generic template. Rewrite the answer.",
         ),
     )
@@ -630,4 +654,4 @@ def test_step_limit_answer_does_not_leak_guard_retry_instruction(tmp_path) -> No
     assert "The previous final_answer" not in answer
     assert "Rewrite the answer" not in answer
     assert "当前运行已到本轮步数上限" in answer
-    assert "最终回复误加通用 ERP/付款边界模板" in answer
+    assert "最终回复包含执行性措辞" in answer

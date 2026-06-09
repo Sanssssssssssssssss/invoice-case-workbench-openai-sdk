@@ -1,0 +1,82 @@
+{
+  "case_id": "golden_live_20260608_163804_03_case_05_clean_match_real_pdf_flipkart",
+  "message": "继续处理，生成中文审核报告，并渲染 PDF。",
+  "finished": "2026-06-08T17:13:53",
+  "records": [
+    {
+      "label": "initial",
+      "elapsed_seconds": 74.136,
+      "reply_preview": "这个操作需要你确认后才能继续。",
+      "status": "ready_for_report",
+      "run_id": "run_336179e53562",
+      "phase": "waiting_approval",
+      "trace_status": "waiting_approval",
+      "interrupts": [
+        {
+          "type": "tool_approval",
+          "tool": "write_case_file",
+          "risk_level": "local_write",
+          "input_preview": "{}",
+          "input_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "reason": "write_case_file requires approval before execution."
+        }
+      ],
+      "tool_calls": [],
+      "planner_actions": 2,
+      "model_calls": 1
+    },
+    {
+      "label": "approval_1",
+      "elapsed_seconds": 0.854,
+      "reply_preview": "这个操作需要你确认后才能继续。",
+      "status": "ready_for_report",
+      "run_id": "run_336179e53562",
+      "phase": "waiting_approval",
+      "trace_status": "waiting_approval",
+      "interrupts": [
+        {
+          "type": "tool_approval",
+          "tool": "render_pdf",
+          "risk_level": "local_write",
+          "input_preview": "{}",
+          "input_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "reason": "render_pdf requires approval before execution."
+        }
+      ],
+      "tool_calls": [
+        "write_case_file"
+      ],
+      "planner_actions": 4,
+      "model_calls": 0
+    },
+    {
+      "label": "approval_2",
+      "elapsed_seconds": 2.621,
+      "reply_preview": "报告已生成：Markdown reports/final_report_20260608_161236.md；PDF reports/final_report_20260608_161236.pdf",
+      "status": "ready_for_report",
+      "run_id": "run_336179e53562",
+      "phase": "finalized",
+      "trace_status": null,
+      "interrupts": [],
+      "tool_calls": [
+        "write_case_file",
+        "render_pdf"
+      ],
+      "planner_actions": 6,
+      "model_calls": 0
+    }
+  ],
+  "report_files": [
+    {
+      "relative_path": "reports/final_report_20260608_161236.md",
+      "bytes": 9276
+    },
+    {
+      "relative_path": "reports/final_report_20260608_161236.pdf",
+      "bytes": 1039790
+    }
+  ],
+  "has_markdown": true,
+  "has_pdf": true,
+  "final_reply_preview": "报告已生成：Markdown reports/final_report_20260608_161236.md；PDF reports/final_report_20260608_161236.pdf"
+}

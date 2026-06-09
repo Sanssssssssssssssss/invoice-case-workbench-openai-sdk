@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from typing import Any
@@ -13,10 +13,6 @@ from app.harness import HarnessRuntime, HarnessRunState
 from app.runtime import policy_gate as route_policy
 from app.state.case_store import CaseStore
 from app.state.schemas import SupervisorDecision
-
-
-class GenericBoundaryTemplateError(ValueError):
-    pass
 
 
 class InvoiceOnlyScopeAnswerError(ValueError):
@@ -44,7 +40,6 @@ class RecoveryPolicy:
             enforce_no_internal_retry_instruction_leak(draft)
             enforce_optional_invoice_quality_not_required(draft, case_state)
             enforce_invoice_only_scope_answer(draft, state.user_message_for_planner or state.current_goal or "")
-            enforce_no_generic_boundary_template(draft, state.user_message_for_planner or state.current_goal or "")
             checked = enforce_no_execution_wording(draft)
             state.final_answer = enforce_case_state_consistency(checked, case_state)
         except InternalRetryInstructionLeakError as exc:
@@ -75,16 +70,6 @@ class RecoveryPolicy:
                 runtime_feedback=route_policy.guard_retry_feedback(
                     "final_answer_invoice_only_scope",
                     "错误类型：单张发票范围越界。为什么拦截：用户要求 invoice-only 或不做 AP/三单审查，但回复加入了 AP、PO、GRN、供应商主数据、重复付款或付款控制措辞。下一轮必须：只说明发票字段、视觉质量、来源可追溯性和报告/PDF结果。",
-                ),
-            )
-        except GenericBoundaryTemplateError as exc:
-            self.harness.record_guard_error(
-                state,
-                "final_answer_generic_boundary_template",
-                exc,
-                runtime_feedback=route_policy.guard_retry_feedback(
-                    "final_answer_generic_boundary_template",
-                    "错误类型：通用 ERP/付款边界模板误加。为什么拦截：用户只是做常规材料/发票审查，回复却加入了泛化 ERP/付款边界段落。下一轮必须：只基于 case_state 和最近 observations 回复，不添加模板化边界段落。",
                 ),
             )
         except NoExecutionWordingError as exc:
@@ -223,43 +208,3 @@ def user_declares_invoice_only(message: str) -> bool:
         "without payment review",
     )
     return any(marker in text for marker in markers)
-
-
-def enforce_no_generic_boundary_template(final_answer: str, user_message: str) -> None:
-    text = str(final_answer or "").lower()
-    if "erp" not in text:
-        return
-    if user_asks_execution_boundary(user_message):
-        return
-    if _contains_erp_execution_boundary(text):
-        raise GenericBoundaryTemplateError("Generic ERP/payment boundary template should not be added to routine review replies")
-
-
-def user_asks_execution_boundary(message: str) -> bool:
-    text = str(message or "").lower()
-    if not text:
-        return False
-    if any(term in text for term in ("no generic", "do not include", "without")) and "erp" in text:
-        return False
-    boundary_terms = ("erp", "route", "post", "pay", "approve", "submit", "payment")
-    ask_terms = ("?", "？", "吗", "嗎", "是否", "能不能", "可以", "能否", "can", "could", "whether", "if")
-    return any(term in text for term in boundary_terms) and any(term in text for term in ask_terms)
-
-
-def _contains_erp_execution_boundary(text: str) -> bool:
-    chinese_patterns = (
-        r"提交.{0,8}erp",
-        r"erp.{0,8}提交",
-        r"erp.{0,12}(审批|付款|支付|过账|路由|执行|推进)",
-        r"(审批|付款|支付|过账|路由|执行|推进).{0,12}erp",
-        r"进入.{0,8}erp.{0,8}流程",
-        r"不(会|能|可)?执行.{0,8}erp",
-        r"无法.{0,8}(提交|审批|付款|支付|过账|路由|执行).{0,12}erp",
-    )
-    english_patterns = (
-        r"\b(submit|post|pay|approve|route|execute|process)\b.{0,30}\berp\b",
-        r"\berp\b.{0,30}\b(submit|post|pay|approve|route|execute|process)\b",
-        r"\bdoes\s+not\s+execute\s+erp\b",
-        r"\bcannot\s+(submit|post|pay|approve|route|execute|process).{0,30}\berp\b",
-    )
-    return any(re.search(pattern, text) for pattern in chinese_patterns + english_patterns)

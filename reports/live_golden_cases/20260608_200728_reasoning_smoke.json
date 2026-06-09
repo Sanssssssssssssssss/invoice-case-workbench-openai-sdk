@@ -1,0 +1,26 @@
+[
+  {
+    "case_id": "reasoning_smoke_simple_20260608_200728",
+    "run_id": "run_reasoning_smoke_20260608_200728_28",
+    "reply_chars": 430,
+    "reply_preview_ascii": "****\n\n1. ****  \n2. ****  \n3. ****   Markdown  PDF\n\n---\n\n### \n\n|  |  |\n|------|------|\n|  **** | ",
+    "event_count": 223,
+    "thinking_events": 0,
+    "thinking_roles": [],
+    "thinking_chars_max": 0,
+    "allow_like_stream_events": 0,
+    "case_status": "new"
+  },
+  {
+    "case_id": "reasoning_smoke_golden03_20260608_200728",
+    "run_id": "run_reasoning_smoke_20260608_200728_28",
+    "reply_chars": 1062,
+    "reply_preview_ascii": "\n\n##  \n\n**ID**: reasoning_smoke_golden03_20260608_200728\n\n5\n\n### 1. **** (01_invoice_extract_from_real_source.md)\n-  : FA05/2015/065587\n-  : ",
+    "event_count": 572,
+    "thinking_events": 0,
+    "thinking_roles": [],
+    "thinking_chars_max": 0,
+    "allow_like_stream_events": 0,
+    "case_status": "new"
+  }
+]

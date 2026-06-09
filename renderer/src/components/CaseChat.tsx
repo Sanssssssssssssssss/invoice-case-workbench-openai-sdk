@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Bot, CheckCircle2, ChevronDown, ChevronUp, CloudUpload, FileText, Paperclip, Send, Settings2, ShieldAlert, UserRound, X } from 'lucide-react'
+import { Bot, CheckCircle2, ChevronDown, ChevronUp, CloudUpload, Download, ExternalLink, FileText, FolderOpen, Paperclip, Send, Settings2, ShieldAlert, UserRound, X } from 'lucide-react'
 import { Virtuoso } from 'react-virtuoso'
-import type { ApprovalInterrupt, CaseState, ConversationItem, LiveStatus, TraceEvent } from '@/types'
+import type { ApprovalInterrupt, ArtifactItem, CaseState, ConversationItem, LiveStatus, TraceEvent } from '@/types'
 import { requirementProgress, statusLabel } from '@/lib/requirements'
 import { shortTime } from '@/lib/trace'
 import { shouldShowThinking, thinkingLineClass, thinkingRaw, thinkingSummary, thinkingTitle } from '@/lib/thinking'
 import { dataTransferHasFiles, mergeFiles } from '@/lib/files'
+import { runArtifactAction } from '@/lib/artifacts'
 import { RequirementRing } from './RequirementRing'
 
 interface CaseChatProps {
+  caseId: string
   caseState?: CaseState
   messages: ConversationItem[]
+  reportArtifacts: ArtifactItem[]
   liveEvents: TraceEvent[]
   liveStatus: LiveStatus | null
   running: boolean
@@ -23,8 +26,10 @@ interface CaseChatProps {
 }
 
 export function CaseChat({
+  caseId,
   caseState,
   messages,
+  reportArtifacts,
   liveEvents,
   liveStatus,
   running,
@@ -46,11 +51,18 @@ export function CaseChat({
   const virtuosoComponents = useMemo(() => ({ Footer: MessageFooter }), [])
   const rows = useMemo<ChatRow[]>(() => {
     const base: ChatRow[] = messages.map((item) => ({ type: 'message', id: `${item.ts}:${item.role}:${item.content}`, item }))
+    if (reportArtifacts.length) {
+      base.push({
+        type: 'reports',
+        id: `reports:${reportArtifacts.map((item) => `${item.path}:${item.updated_at}`).join('|')}`,
+        artifacts: reportArtifacts
+      })
+    }
     if (shouldShowThinking(liveStatus, agentRunning)) {
       base.push({ type: 'thinking' as const, id: 'thinking:live', status: liveStatus })
     }
     return base
-  }, [agentRunning, liveStatus, messages])
+  }, [agentRunning, liveStatus, messages, reportArtifacts])
 
   const submit = () => {
     if ((!message.trim() && files.length === 0) || running || waitingApproval) return
@@ -123,9 +135,17 @@ export function CaseChat({
           followOutput="smooth"
           computeItemKey={(_index, row) => row.id}
           components={virtuosoComponents}
-          itemContent={(_index, row) => (row.type === 'thinking' ? <ThinkingBubble status={row.status} /> : <MessageItem item={row.item} />)}
+          itemContent={(_index, row) =>
+            row.type === 'thinking' ? (
+              <ThinkingBubble status={row.status} />
+            ) : row.type === 'reports' ? (
+              <ReportArtifactsRow caseId={caseId} artifacts={row.artifacts} />
+            ) : (
+              <MessageItem item={row.item} />
+            )
+          }
         />
-        {messages.length === 0 && (
+        {messages.length === 0 && reportArtifacts.length === 0 && (
           <div className="empty-chat">
             <Bot size={24} />
             <span>发送问题或添加材料，开始案件运行。</span>
@@ -215,6 +235,7 @@ export function CaseChat({
 
 type ChatRow =
   | { type: 'message'; id: string; item: ConversationItem }
+  | { type: 'reports'; id: string; artifacts: ArtifactItem[] }
   | { type: 'thinking'; id: string; status: LiveStatus | null }
 
 function MessageFooter() {
@@ -233,6 +254,103 @@ function MessageItem({ item }: { item: ConversationItem }) {
           <time>{shortTime(item.ts)}</time>
         </div>
         <p>{item.content}</p>
+      </div>
+    </motion.article>
+  )
+}
+
+function ReportArtifactsRow({ caseId, artifacts }: { caseId: string; artifacts: ArtifactItem[] }) {
+  const [error, setError] = useState('')
+  const openArtifact = async (item: ArtifactItem) => {
+    setError('')
+    try {
+      await runArtifactAction(caseId, item, 'open')
+    } catch (reason) {
+      setError(`文件打开失败：${reason instanceof Error ? reason.message : String(reason)}`)
+    }
+  }
+  const showArtifact = async (item: ArtifactItem) => {
+    setError('')
+    try {
+      await runArtifactAction(caseId, item, 'show')
+    } catch (reason) {
+      setError(`定位文件失败：${reason instanceof Error ? reason.message : String(reason)}`)
+    }
+  }
+  const downloadArtifact = async (item: ArtifactItem) => {
+    setError('')
+    try {
+      await runArtifactAction(caseId, item, 'download')
+    } catch (reason) {
+      setError(`下载文件失败：${reason instanceof Error ? reason.message : String(reason)}`)
+    }
+  }
+  return (
+    <motion.article className="message-item agent report-artifacts-message" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+      <div className="message-avatar">
+        <FileText size={18} />
+      </div>
+      <div className="message-body report-artifacts-body">
+        <div className="message-meta">
+          <strong>报告附件</strong>
+          <time>{shortTime(artifacts[0]?.updated_at || new Date().toISOString())}</time>
+        </div>
+        <div className="report-attachment-list">
+          {artifacts.map((item) => (
+            <div
+              key={`${item.path}:${item.updated_at}`}
+              role="button"
+              tabIndex={0}
+              className="report-attachment-card"
+              onClick={() => void openArtifact(item)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  void openArtifact(item)
+                }
+              }}
+            >
+              <FileText size={18} />
+              <span className="report-attachment-copy">
+                <strong>{item.name}</strong>
+                <span>{reportFormatLabel(item)} · {formatBytes(item.bytes)} · {item.path}</span>
+              </span>
+              <span className="report-attachment-actions" aria-label="报告文件操作">
+                <button
+                  type="button"
+                  aria-label="打开报告"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void openArtifact(item)
+                  }}
+                >
+                  <ExternalLink size={15} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="在文件夹中显示"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void showArtifact(item)
+                  }}
+                >
+                  <FolderOpen size={15} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="下载报告"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void downloadArtifact(item)
+                  }}
+                >
+                  <Download size={15} />
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+        {error ? <p className="report-attachment-error">{error}</p> : null}
       </div>
     </motion.article>
   )
@@ -304,4 +422,18 @@ function ThinkingBubble({ status }: { status: LiveStatus | null }) {
       </div>
     </motion.article>
   )
+}
+
+function reportFormatLabel(item: ArtifactItem) {
+  const path = item.path.toLowerCase()
+  if (path.endsWith('.pdf')) return 'PDF'
+  if (path.endsWith('.md') || item.content_type === 'text/markdown') return 'Markdown'
+  return item.content_type || item.type || '文件'
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }

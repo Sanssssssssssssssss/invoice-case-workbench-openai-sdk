@@ -1,0 +1,44 @@
+[
+  {
+    "case": "case_01_clean_match_real_jpg_FACTU2015020048",
+    "source": "mouadhamri/invoice_dataset",
+    "original": "originals/FACTU2015020048.jpg",
+    "upload_folder": "upload_to_app",
+    "variant": "clean"
+  },
+  {
+    "case": "case_02_amount_conflict_real_jpg_FACTU2015040047",
+    "source": "mouadhamri/invoice_dataset",
+    "original": "originals/FACTU2015040047.jpg",
+    "upload_folder": "upload_to_app",
+    "variant": "amount_conflict"
+  },
+  {
+    "case": "case_03_duplicate_hit_real_jpg_FACTU2015050046",
+    "source": "mouadhamri/invoice_dataset",
+    "original": "originals/FACTU2015050046.jpg",
+    "upload_folder": "upload_to_app",
+    "variant": "duplicate"
+  },
+  {
+    "case": "case_04_bank_change_risk_real_jpg_FACTU2015060039",
+    "source": "mouadhamri/invoice_dataset",
+    "original": "originals/FACTU2015060039.jpg",
+    "upload_folder": "upload_to_app",
+    "variant": "bank_change"
+  },
+  {
+    "case": "case_05_clean_match_real_pdf_flipkart",
+    "source": "invoice-x/invoice2data",
+    "original": "originals/invoice2data_FlipkartInvoice.pdf",
+    "upload_folder": "upload_to_app",
+    "variant": "clean_pdf"
+  },
+  {
+    "case": "case_06_duplicate_hit_real_pdf_sap",
+    "source": "SAP-samples/btp-cap-dox-invoice-validation",
+    "original": "originals/sap_5435569865439.pdf",
+    "upload_folder": "upload_to_app",
+    "variant": "duplicate_pdf"
+  }
+]

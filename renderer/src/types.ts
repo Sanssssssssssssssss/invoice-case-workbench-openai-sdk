@@ -158,6 +158,7 @@ export type AgentRunStreamKind =
   | 'run_started'
   | 'context_loaded'
   | 'model_started'
+  | 'model_thinking'
   | 'assistant_delta'
   | 'tool_started'
   | 'tool_finished'

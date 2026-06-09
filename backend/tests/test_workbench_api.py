@@ -229,6 +229,26 @@ def test_live_status_reports_real_thinking_excerpt(tmp_path, monkeypatch) -> Non
     assert "event: live_status" in sse_payload("live_status", build_live_status("case_cockpit").model_dump(), event_id=status["latestEventId"])
 
 
+def test_live_status_does_not_turn_policy_allow_into_thinking(tmp_path, monkeypatch) -> None:
+    _configure_tmp_settings(tmp_path, monkeypatch)
+    from app.main import app
+
+    store = CaseStore()
+    _seed_case(store, "case_policy")
+    _seed_policy_only_trace(store, "case_policy", "run_policy")
+    client = TestClient(app)
+
+    status = client.get("/api/cases/case_policy/live-status").json()
+
+    assert status["runId"] == "run_policy"
+    assert status["isRunning"] is True
+    assert status["activeRole"] == "allow"
+    assert status["latestSummary"] == "allowed"
+    assert status["thinkingSource"] == ""
+    assert status["latestThinking"] == ""
+    assert status["reasoningChars"] == 0
+
+
 def test_summarizer_model_call_is_artifact_summary_trace_event(tmp_path, monkeypatch) -> None:
     _configure_tmp_settings(tmp_path, monkeypatch)
     from app.main import app
@@ -420,6 +440,39 @@ def _seed_running_thinking_trace(store: CaseStore, case_id: str, run_id: str) ->
         }
     ]
     text = "\n".join(json.dumps(item, ensure_ascii=False) for item in events) + "\n"
+    (run_dir / "events.jsonl").write_text(text, encoding="utf-8")
+    (root / "traces" / "events.jsonl").write_text(text, encoding="utf-8")
+
+
+def _seed_policy_only_trace(store: CaseStore, case_id: str, run_id: str) -> None:
+    root = store.ensure_case_dirs(case_id)
+    trace = {
+        "run_id": run_id,
+        "case_id": case_id,
+        "started_at": "2026-06-01T10:00:00+00:00",
+        "completed_at": "",
+        "phase": "attachment_read",
+        "model_calls": [],
+        "current_goal": "Review materials",
+    }
+    (root / "traces" / f"{run_id}.json").write_text(json.dumps(trace), encoding="utf-8")
+    run_dir = root / "traces" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    event = {
+        "seq": 1,
+        "case_seq": 1,
+        "event_id": "evt_policy",
+        "ts": "2026-06-01T10:00:00+00:00",
+        "case_id": case_id,
+        "run_id": run_id,
+        "phase": "attachment_read",
+        "step_count": 1,
+        "kind": "policy_check",
+        "name": "allow",
+        "summary": "allowed",
+        "payload": {"policy_check": {"allowed": True}},
+    }
+    text = json.dumps(event, ensure_ascii=False) + "\n"
     (run_dir / "events.jsonl").write_text(text, encoding="utf-8")
     (root / "traces" / "events.jsonl").write_text(text, encoding="utf-8")
 

@@ -35,11 +35,14 @@ DEFAULT_VARIANTS = ["blocking", "streaming"]
 class BenchRow:
     scenario: str
     variant: str
+    transport: str
     iteration: int
+    accepted_ms: float | None
     first_sse_ms: float | None
     first_delta_ms: float | None
     final_ms: float
     approval_ms: float | None
+    event_loop_lag_ms: float | None
     event_count: int
     error: str = ""
 
@@ -54,9 +57,10 @@ def main() -> None:
     report_dir = report_root / f"infra_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = _run_fake_benchmark(scenarios=scenarios, variants=variants, iterations=args.iterations)
+    rows = _run_fake_benchmark(scenarios=scenarios, variants=variants, iterations=args.iterations, transport=args.transport)
     payload = {
         "mode": args.mode,
+        "transport": args.transport,
         "iterations": args.iterations,
         "scenarios": scenarios,
         "variants": variants,
@@ -69,7 +73,7 @@ def main() -> None:
     print(f"report_dir={report_dir}")
 
 
-def _run_fake_benchmark(*, scenarios: list[str], variants: list[str], iterations: int) -> list[BenchRow]:
+def _run_fake_benchmark(*, scenarios: list[str], variants: list[str], iterations: int, transport: str) -> list[BenchRow]:
     rows: list[BenchRow] = []
     with tempfile.TemporaryDirectory(prefix="invoice_infra_bench_") as tmp:
         tmp_path = Path(tmp)
@@ -88,7 +92,7 @@ def _run_fake_benchmark(*, scenarios: list[str], variants: list[str], iterations
                     for scenario in scenarios:
                         for variant in variants:
                             stream_hub.clear()
-                            rows.append(_run_one(client, tmp_path, scenario=scenario, variant=variant, iteration=iteration))
+                            rows.append(_run_one(client, tmp_path, scenario=scenario, variant=variant, iteration=iteration, transport=transport))
         finally:
             agent_runs.AgentRuntime = original_stream_runtime  # type: ignore[assignment]
             main_app.AgentRuntime = original_turn_runtime  # type: ignore[assignment]
@@ -96,7 +100,7 @@ def _run_fake_benchmark(*, scenarios: list[str], variants: list[str], iterations
     return rows
 
 
-def _run_one(client: TestClient, tmp_path: Path, *, scenario: str, variant: str, iteration: int) -> BenchRow:
+def _run_one(client: TestClient, tmp_path: Path, *, scenario: str, variant: str, iteration: int, transport: str) -> BenchRow:
     case_id = f"infra_{scenario}_{iteration}_{variant}"
     message = _message_for(scenario)
     attachments = _upload_attachments(client, tmp_path, case_id, scenario)
@@ -111,11 +115,14 @@ def _run_one(client: TestClient, tmp_path: Path, *, scenario: str, variant: str,
             return BenchRow(
                 scenario=scenario,
                 variant=variant,
+                transport="none",
                 iteration=iteration,
+                accepted_ms=None,
                 first_sse_ms=None,
                 first_delta_ms=None,
                 final_ms=_elapsed_ms(started),
                 approval_ms=None,
+                event_loop_lag_ms=None,
                 event_count=0,
             )
         if variant != "streaming":
@@ -125,8 +132,9 @@ def _run_one(client: TestClient, tmp_path: Path, *, scenario: str, variant: str,
             json={"case_id": case_id, "message": message, "attachments": attachments},
         )
         accepted.raise_for_status()
+        accepted_ms = _elapsed_ms(started)
         run = accepted.json()
-        events = _read_stream(run["run_id"], started)
+        events = _read_stream(client, run["run_id"], run["stream_url"], started, transport=transport)
         approval_ms = None
         if scenario == "report_approval":
             approval_started = time.perf_counter()
@@ -135,28 +143,42 @@ def _run_one(client: TestClient, tmp_path: Path, *, scenario: str, variant: str,
                 json={"case_id": case_id, "approved": True, "reason": "infra_bench"},
             )
             resumed.raise_for_status()
-            resume_events = _read_stream(run["run_id"], approval_started, after_seq=events[-1]["seq"])
+            after_seq = int(events[-1]["seq"]) if events else 0
+            resume_events = _read_stream(
+                client,
+                run["run_id"],
+                run["stream_url"],
+                approval_started,
+                after_seq=after_seq,
+                transport=transport,
+            )
             approval_ms = _elapsed_ms(approval_started)
             events.extend(resume_events)
         return BenchRow(
             scenario=scenario,
             variant=variant,
+            transport=transport,
             iteration=iteration,
+            accepted_ms=accepted_ms,
             first_sse_ms=_first_ms(events),
             first_delta_ms=_first_ms([event for event in events if event["event"] == "assistant_delta"]),
             final_ms=_elapsed_ms(started),
             approval_ms=approval_ms,
+            event_loop_lag_ms=_event_loop_lag_ms(events),
             event_count=len(events),
         )
     except Exception as exc:
         return BenchRow(
             scenario=scenario,
             variant=variant,
+            transport=transport if variant == "streaming" else "none",
             iteration=iteration,
+            accepted_ms=None,
             first_sse_ms=None,
             first_delta_ms=None,
             final_ms=_elapsed_ms(started),
             approval_ms=None,
+            event_loop_lag_ms=None,
             event_count=0,
             error=f"{type(exc).__name__}: {exc}",
         )
@@ -182,7 +204,43 @@ def _upload_attachments(client: TestClient, tmp_path: Path, case_id: str, scenar
     return attachments
 
 
-def _read_stream(run_id: str, started: float, after_seq: int = 0) -> list[dict[str, Any]]:
+def _read_stream(
+    client: TestClient,
+    run_id: str,
+    stream_url: str,
+    started: float,
+    *,
+    after_seq: int = 0,
+    transport: str,
+) -> list[dict[str, Any]]:
+    if transport == "hub":
+        return _read_stream_hub(run_id, started, after_seq=after_seq)
+    if transport != "sse":
+        raise ValueError(f"unknown transport: {transport}")
+    path = f"{stream_url}{'&' if '?' in stream_url else '?'}after_seq={after_seq}"
+    events: list[dict[str, Any]] = []
+    current: dict[str, Any] = {}
+    with client.stream("GET", path) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if not line:
+                if current:
+                    event = _stream_row(current, started)
+                    events.append(event)
+                    if event["event"] in {"final", "error", "approval_required"}:
+                        break
+                    current = {}
+                continue
+            if line.startswith("event: "):
+                current["event"] = line.split(": ", 1)[1]
+            elif line.startswith("data: "):
+                current["data"] = json.loads(line.split(": ", 1)[1])
+            elif line.startswith("id: "):
+                current["id"] = line.split(": ", 1)[1]
+    return events
+
+
+def _read_stream_hub(run_id: str, started: float, after_seq: int = 0) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     last_seq = after_seq
     deadline = time.perf_counter() + 10
@@ -190,13 +248,32 @@ def _read_stream(run_id: str, started: float, after_seq: int = 0) -> list[dict[s
         pending = stream_hub.events_after(run_id, after_seq=last_seq)
         for event in pending:
             last_seq = max(last_seq, event.seq)
-            row = {"event": event.kind, "kind": event.kind, "seq": event.seq, "received_ms": _elapsed_ms(started)}
+            row = {
+                "event": event.kind,
+                "kind": event.kind,
+                "seq": event.seq,
+                "received_ms": _elapsed_ms(started),
+                "payload": event.payload,
+            }
             events.append(row)
             if event.kind in {"final", "error", "approval_required"}:
                 return events
         time.sleep(0.005)
     raise TimeoutError(f"stream events did not finish for {run_id}")
     return events
+
+
+def _stream_row(current: dict[str, Any], started: float) -> dict[str, Any]:
+    data = current.get("data") if isinstance(current.get("data"), dict) else {}
+    payload = data.get("payload") if isinstance(data, dict) and isinstance(data.get("payload"), dict) else {}
+    event = str(current.get("event") or data.get("kind") or "")
+    return {
+        "event": event,
+        "kind": event,
+        "seq": int(data.get("seq") or 0),
+        "received_ms": _elapsed_ms(started),
+        "payload": payload,
+    }
 
 
 class _FakeRuntime:
@@ -209,7 +286,7 @@ class _FakeRuntime:
             case_id=request.case_id,
             reply=f"blocking final: {request.message}",
             case_state=CaseState(case_id=request.case_id),
-            trace={"run_id": "blocking", "status": "completed"},
+            trace={"run_id": "blocking", "status": "completed", "observability": _fake_observability()},
         )
 
     async def run_turn_streamed(self, request: AgentTurnRequest, *, run_id: str, event_sink: Any | None = None) -> AgentTurnResponse:
@@ -223,7 +300,7 @@ class _FakeRuntime:
                 case_id=request.case_id,
                 reply="approval required",
                 case_state=CaseState(case_id=request.case_id),
-                trace={"run_id": run_id, "status": "waiting_approval", "interrupts": interrupts},
+                trace={"run_id": run_id, "status": "waiting_approval", "interrupts": interrupts, "observability": _fake_observability()},
             )
         event_sink("model_started", {"role": "planner"}, summary="model started")
         await asyncio.sleep(0.02)
@@ -236,7 +313,7 @@ class _FakeRuntime:
             case_id=request.case_id,
             reply="ok",
             case_state=CaseState(case_id=request.case_id),
-            trace={"run_id": run_id, "status": "completed"},
+            trace={"run_id": run_id, "status": "completed", "observability": _fake_observability()},
         )
 
     async def resume_approval_streamed(self, case_id: str, run_id: str, approved: bool, reason: str = "", *, event_sink: Any | None = None) -> AgentTurnResponse:
@@ -248,8 +325,12 @@ class _FakeRuntime:
             case_id=case_id,
             reply="report done",
             case_state=CaseState(case_id=case_id),
-            trace={"run_id": run_id, "status": "completed"},
+            trace={"run_id": run_id, "status": "completed", "observability": _fake_observability()},
         )
+
+
+def _fake_observability() -> dict[str, Any]:
+    return {"event_loop_lag": {"max_ms": 0, "mean_ms": 0, "samples": 1, "p95_ms": 0}}
 
 
 def _message_for(scenario: str) -> str:
@@ -264,7 +345,7 @@ def _message_for(scenario: str) -> str:
 
 
 def _sleep_for(message: str) -> None:
-    time.sleep(0.02 + _async_delay_for(message))
+    time.sleep(0.035 + _async_delay_for(message))
 
 
 def _async_delay_for(message: str) -> float:
@@ -283,10 +364,12 @@ def _summary(rows: list[BenchRow]) -> dict[str, Any]:
         key: {
             "count": len(items),
             "errors": [item.error for item in items if item.error],
+            "accepted_ms": _stats([item.accepted_ms for item in items if item.accepted_ms is not None]),
             "final_ms": _stats([item.final_ms for item in items]),
             "first_sse_ms": _stats([item.first_sse_ms for item in items if item.first_sse_ms is not None]),
             "first_delta_ms": _stats([item.first_delta_ms for item in items if item.first_delta_ms is not None]),
             "approval_ms": _stats([item.approval_ms for item in items if item.approval_ms is not None]),
+            "event_loop_lag_ms": _stats([item.event_loop_lag_ms for item in items if item.event_loop_lag_ms is not None]),
             "event_count_mean": statistics.mean([item.event_count for item in items]) if items else 0,
         }
         for key, items in grouped.items()
@@ -322,16 +405,38 @@ def _first_ms(events: list[dict[str, Any]]) -> float | None:
     return float(events[0]["received_ms"]) if events else None
 
 
+def _event_loop_lag_ms(events: list[dict[str, Any]]) -> float | None:
+    for event in reversed(events):
+        response = (event.get("payload") or {}).get("response")
+        if not isinstance(response, dict):
+            continue
+        trace = response.get("trace")
+        if not isinstance(trace, dict):
+            continue
+        observability = trace.get("observability")
+        if not isinstance(observability, dict):
+            continue
+        lag = observability.get("event_loop_lag")
+        if isinstance(lag, dict) and lag.get("p95_ms") is not None:
+            return float(lag["p95_ms"])
+    return None
+
+
 def _elapsed_ms(started: float) -> float:
     return (time.perf_counter() - started) * 1000
 
 
 def _markdown(payload: dict[str, Any]) -> str:
-    lines = ["# Streaming Infra Benchmark", ""]
+    lines = ["# Streaming Infra Benchmark", "", f"- mode: `{payload.get('mode')}`", f"- transport: `{payload.get('transport')}`", ""]
     for key, summary in payload["summary"].items():
         final_p50 = (summary.get("final_ms") or {}).get("p50")
         first_sse = (summary.get("first_sse_ms") or {}).get("p50")
-        lines.append(f"- `{key}` final_p50={final_p50} first_sse_p50={first_sse} errors={len(summary.get('errors') or [])}")
+        accepted = (summary.get("accepted_ms") or {}).get("p50")
+        lag = (summary.get("event_loop_lag_ms") or {}).get("p95")
+        lines.append(
+            f"- `{key}` accepted_p50={accepted} first_sse_p50={first_sse} "
+            f"final_p50={final_p50} event_loop_lag_p95={lag} errors={len(summary.get('errors') or [])}"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -344,6 +449,7 @@ def _split_arg(value: str, default: list[str]) -> list[str]:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run local fake infra latency benchmarks.")
     parser.add_argument("--mode", default="fake", choices=["fake"])
+    parser.add_argument("--transport", default="sse", choices=["sse", "hub"])
     parser.add_argument("--variants", default=",".join(DEFAULT_VARIANTS))
     parser.add_argument("--scenarios", default=",".join(DEFAULT_SCENARIOS))
     parser.add_argument("--iterations", type=int, default=3)

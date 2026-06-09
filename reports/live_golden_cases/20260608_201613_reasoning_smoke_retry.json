@@ -1,0 +1,15 @@
+{
+  "case_id": "reasoning_smoke_golden03_retry_20260608_201613",
+  "run_id": "run_reasoning_smoke_20260608_201613",
+  "reply_chars": 463,
+  "event_count": 7554,
+  "thinking_events": 420,
+  "thinking_roles": [
+    "evidence_reviewer"
+  ],
+  "thinking_chars_max": 1115,
+  "allow_like_stream_events": 0,
+  "errors": 0,
+  "case_status": "collecting_materials",
+  "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：重复付款检查命中风险。\n- 识别到的核心对象：供应商 The Jackson Group；金额 579,675.62 EUR。\n- 当前案卷状态：status=collecting_materials；evidence=5；satisfied=invoice, purchase_order, goods_receipt_or_service_acceptance, vendor_identity；conflict=duplicate_payment_screen；missing=-；weak=-。\n- 风险标记：system_export_source_not_original_documents\n- 待核对问题：请提供并核对历史付款凭证PAY-FA05_2015_065587-HIST的付款日期、金额、付款对象，确认是否为同一笔交易\n结论：在上述冲突解释清楚前，duplicate_payment_screen 保持 conflict；不要把该项写成 satisfied。"
+}

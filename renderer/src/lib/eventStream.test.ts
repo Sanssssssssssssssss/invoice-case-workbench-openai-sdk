@@ -25,7 +25,14 @@ describe('parseLiveStatusMessage', () => {
 describe('parseAgentRunStreamMessage', () => {
   it('parses valid agent run stream payloads', () => {
     const event = parseAgentRunStreamMessage(JSON.stringify({ event_id: 'run_1:stream:1', run_id: 'run_1', kind: 'assistant_delta', payload: { delta: 'hi' } }))
-    expect(event.kind).toBe('assistant_delta')
+    expect(event?.kind).toBe('assistant_delta')
+  })
+
+  it('ignores empty agent run stream payloads', () => {
+    expect(parseAgentRunStreamMessage(undefined)).toBeNull()
+    expect(parseAgentRunStreamMessage('')).toBeNull()
+    expect(parseAgentRunStreamMessage('undefined')).toBeNull()
+    expect(parseAgentRunStreamMessage('null')).toBeNull()
   })
 
   it('rejects malformed agent run stream payloads', () => {

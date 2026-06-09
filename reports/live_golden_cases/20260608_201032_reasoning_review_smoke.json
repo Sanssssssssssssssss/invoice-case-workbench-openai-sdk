@@ -1,0 +1,13 @@
+{
+  "case_id": "reasoning_smoke_golden03_review_20260608_201032",
+  "run_id": "run_reasoning_smoke_review_20260608_201032",
+  "case_status": "collecting_materials",
+  "reply_chars": 460,
+  "event_count": 10911,
+  "thinking_events": 3689,
+  "thinking_roles": [
+    "evidence_reviewer"
+  ],
+  "thinking_chars_max": 15555,
+  "allow_like_stream_events": 0
+}

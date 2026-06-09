@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
@@ -16,7 +15,7 @@ from app.state.case_store import FileBoundaryError
 
 router = APIRouter(prefix="/api", tags=["live-status"])
 
-MAX_THINKING_CHARS = 1400
+MAX_THINKING_CHARS = 8000
 
 
 class LiveStatus(BaseModel):
@@ -128,26 +127,16 @@ def _latest_thinking_event(events: list[TraceEvent], run_id: str) -> TraceEvent 
 def _thinking_from_event(event: TraceEvent) -> dict[str, Any]:
     role = str(event.payload.get("role") or event.name or "model")
     text = str(event.payload.get("reasoning_excerpt") or "").strip()
-    if not text:
-        text = _role_thought_summary(role, event)
     return {
         "text": _clip(text),
-        "source": "reasoning_content" if event.payload.get("reasoning_excerpt") else "thought_summary",
+        "source": "reasoning_content" if text else "",
         "chars": _int_value(event.payload.get("reasoning_chars")),
         "chunks": _int_value(event.payload.get("reasoning_chunks")),
     }
 
 
 def _thinking_fallback(events: list[TraceEvent], run_id: str) -> dict[str, Any]:
-    for event in reversed(events):
-        if run_id and event.run_id != run_id:
-            continue
-        if event.raw_kind in {"planner_action", "supervisor_decision"}:
-            plan = event.payload.get("short_plan") or event.payload.get("plan_progress")
-            text = _json_text(plan) if plan else event.summary
-            return {"text": _clip(text), "source": "planner_action", "chars": len(str(text or "")), "chunks": 0}
-        if event.summary:
-            return {"text": _clip(event.summary), "source": "trace_summary", "chars": len(event.summary), "chunks": 0}
+    _ = events, run_id
     return {"text": "", "source": "", "chars": 0, "chunks": 0}
 
 
@@ -261,12 +250,6 @@ def _clip(value: str) -> str:
     if len(text) <= MAX_THINKING_CHARS:
         return text
     return text[: MAX_THINKING_CHARS - 18].rstrip() + "\n...[thinking trimmed]"
-
-
-def _json_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _int_value(value: Any) -> int:

@@ -16,8 +16,15 @@ export function parseLiveStatusMessage(data: string): LiveStatus {
   return parsed as LiveStatus
 }
 
-export function parseAgentRunStreamMessage(data: string): AgentRunStreamEvent {
-  const parsed = JSON.parse(data) as Partial<AgentRunStreamEvent>
+export function parseAgentRunStreamMessage(data: string | null | undefined): AgentRunStreamEvent | null {
+  if (typeof data !== 'string' || !data.trim()) {
+    return null
+  }
+  const text = data.trim()
+  if (text === 'undefined' || text === 'null') {
+    return null
+  }
+  const parsed = JSON.parse(text) as Partial<AgentRunStreamEvent>
   if (!parsed || typeof parsed.event_id !== 'string' || typeof parsed.run_id !== 'string' || typeof parsed.kind !== 'string') {
     throw new Error('Invalid agent run stream payload')
   }

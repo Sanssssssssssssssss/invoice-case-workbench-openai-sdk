@@ -1,0 +1,318 @@
+{
+  "started": "2026-06-08T16:38:04",
+  "results": [
+    {
+      "case_name": "case_01_clean_match_real_jpg_FACTU2015020048",
+      "case_id": "golden_live_20260608_163804_01_case_01_clean_match_real_jpg_FACTU2015020048",
+      "elapsed_seconds": 212.717,
+      "http_status": 200,
+      "status": "ready_for_report",
+      "expected_status": "ready_for_report",
+      "status_ok": true,
+      "satisfied": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity",
+        "duplicate_payment_screen"
+      ],
+      "missing": [],
+      "weak": [],
+      "conflict": [],
+      "expected_conflict_contains": [],
+      "conflict_ok": true,
+      "risk_flags": [],
+      "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：当前材料未显示重复付款命中。\n- 识别到的核心对象：供应商 Marc Demo；金额 82,003.30 EUR。\n- 当前案卷状态：status=ready_for_report；evidence=5；satisfied=invoice, purchase_order, goods_receipt_or_service_acceptance, vendor_identity, duplicate_payment_screen；conflict=-；missing=-；weak=-。\n结论：case_state=ready_for_report；可继续生成本地报告草稿。",
+      "run_id": "run_5884f2ab61a2",
+      "trace_phase": "finalized",
+      "trace_status": null,
+      "model_calls": 2,
+      "planner_actions": 5,
+      "interrupts": [],
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_source.md",
+          "content_type": "text/markdown",
+          "bytes": 1506,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_01_case_01_clean_match_real_jpg_FACTU2015020048\\attachments\\544c6695e5_01_invoice_extract_from_real_source.md",
+          "relative_path": "attachments/544c6695e5_01_invoice_extract_from_real_source.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "content_type": "text/markdown",
+          "bytes": 484,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_01_case_01_clean_match_real_jpg_FACTU2015020048\\attachments\\bd16622d70_02_purchase_order.md",
+          "relative_path": "attachments/bd16622d70_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "content_type": "text/markdown",
+          "bytes": 434,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_01_case_01_clean_match_real_jpg_FACTU2015020048\\attachments\\238dd45df9_03_goods_receipt.md",
+          "relative_path": "attachments/238dd45df9_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "content_type": "text/markdown",
+          "bytes": 459,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_01_case_01_clean_match_real_jpg_FACTU2015020048\\attachments\\42c1b317e9_04_vendor_record.md",
+          "relative_path": "attachments/42c1b317e9_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "content_type": "text/markdown",
+          "bytes": 581,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_01_case_01_clean_match_real_jpg_FACTU2015020048\\attachments\\6c0d034c3f_05_duplicate_payment_check.md",
+          "relative_path": "attachments/6c0d034c3f_05_duplicate_payment_check.md"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "case_name": "case_02_amount_conflict_real_jpg_FACTU2015040047",
+      "case_id": "golden_live_20260608_163804_02_case_02_amount_conflict_real_jpg_FACTU2015040047",
+      "elapsed_seconds": 172.811,
+      "http_status": 200,
+      "status": "collecting_materials",
+      "expected_status": "collecting_materials",
+      "status_ok": true,
+      "satisfied": [
+        "invoice_number",
+        "supplier",
+        "vendor_identity",
+        "duplicate_payment_screen",
+        "po_ref"
+      ],
+      "missing": [
+        "amount_reconciliation"
+      ],
+      "weak": [
+        "invoice_date",
+        "currency_tax"
+      ],
+      "conflict": [
+        "invoice",
+        "amount_total",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance"
+      ],
+      "expected_conflict_contains": [
+        "purchase_order",
+        "goods_receipt_or_service_acceptance"
+      ],
+      "conflict_ok": true,
+      "risk_flags": [
+        "amount_conflict_invoice_vs_po_grn",
+        "invoice_amount_exceeds_po_by_3046_90_eur",
+        "cross_evidence_amount_mismatch: invoice/PO/GRN amount mismatch"
+      ],
+      "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：当前材料未显示重复付款命中。\n- 识别到的核心对象：金额 38,086.30 EUR。\n- 当前案卷状态：status=collecting_materials；evidence=5；satisfied=invoice_number, supplier, vendor_identity, duplicate_payment_screen, po_ref；conflict=invoice, amount_total, purchase_order, goods_receipt_or_service_acceptance；missing=amount_reconciliation；weak=invoice_date, currency_tax。\n- 风险标记：amount_conflict_invoice_vs_po_grn\n- 待核对问题：请确认发票金额38,086.30 EUR与采购订单35,039.40 EUR之间的3,046.90 EUR差异原因（是否为运费、加急费、税率调整或其他附加费用）\n结论：请按当前 missing、weak、conflict 项继续补料或复核；不要把 weak 项写成 satisfied。",
+      "run_id": "run_b7b876ffb354",
+      "trace_phase": "finalized",
+      "trace_status": null,
+      "model_calls": 2,
+      "planner_actions": 5,
+      "interrupts": [],
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_source.md",
+          "content_type": "text/markdown",
+          "bytes": 1711,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_02_case_02_amount_conflict_real_jpg_FACTU2015040047\\attachments\\129335b13b_01_invoice_extract_from_real_source.md",
+          "relative_path": "attachments/129335b13b_01_invoice_extract_from_real_source.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "content_type": "text/markdown",
+          "bytes": 463,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_02_case_02_amount_conflict_real_jpg_FACTU2015040047\\attachments\\50e13770d1_02_purchase_order.md",
+          "relative_path": "attachments/50e13770d1_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "content_type": "text/markdown",
+          "bytes": 438,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_02_case_02_amount_conflict_real_jpg_FACTU2015040047\\attachments\\67e553ded0_03_goods_receipt.md",
+          "relative_path": "attachments/67e553ded0_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "content_type": "text/markdown",
+          "bytes": 466,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_02_case_02_amount_conflict_real_jpg_FACTU2015040047\\attachments\\4ba2875b0f_04_vendor_record.md",
+          "relative_path": "attachments/4ba2875b0f_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "content_type": "text/markdown",
+          "bytes": 585,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_02_case_02_amount_conflict_real_jpg_FACTU2015040047\\attachments\\70ca9571ea_05_duplicate_payment_check.md",
+          "relative_path": "attachments/70ca9571ea_05_duplicate_payment_check.md"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "case_name": "case_05_clean_match_real_pdf_flipkart",
+      "case_id": "golden_live_20260608_163804_03_case_05_clean_match_real_pdf_flipkart",
+      "elapsed_seconds": 420.195,
+      "http_status": 200,
+      "status": "ready_for_report",
+      "expected_status": "ready_for_report",
+      "status_ok": true,
+      "satisfied": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity",
+        "duplicate_payment_screen",
+        "invoice_number",
+        "supplier",
+        "buyer",
+        "invoice_date",
+        "amount_total",
+        "currency_tax",
+        "source_traceability"
+      ],
+      "missing": [],
+      "weak": [],
+      "conflict": [],
+      "expected_conflict_contains": [],
+      "conflict_ok": true,
+      "risk_flags": [],
+      "reply_preview": "根据当前案件状态，我来为您总结：\n\n## 📋 案件状态：ready_for_report ✅\n\n### 材料完整性检查\n\n| 要求项 | 状态 | 证据ID |\n|--------|------|--------|\n| 发票原件 | ✅ 已满足 | ev_001 |\n| 采购订单 | ✅ 已满足 | ev_002 |\n| 收货单/服务验收 | ✅ 已满足 | ev_003 |\n| 供应商身份验证 | ✅ 已满足 | ev_004 |\n| 重复付款筛查 | ✅ 已满足 | ev_005 |\n\n### 关键信息摘要\n\n- **发票号码**: BLR_WFLD20151000982590\n- **供应商**: WS Retail Services Pvt. Ltd.\n- **购买方**: Anushrut Singh\n- **金额**: 319.00 INR\n- **发票日期**: 2015-10-20\n- **PO编号**: OD304175096047380001\n- **GRN编号**: GRN-6047380001\n\n### 三单匹配结果\n- ✅ 发票金额 = PO金额 = 收货金额 (319.00 INR)\n- ✅ 供应商一致 (WS Retail Services)\n- ✅ 日期逻辑合理\n\n**所有必需材料已齐全，案件已准备好生成最终报告。**\n\n---\n\n您需要我生成 Markdown 报告和 PDF 文件吗？",
+      "run_id": "run_b687a5bfd2db",
+      "trace_phase": "finalized",
+      "trace_status": null,
+      "model_calls": 4,
+      "planner_actions": 7,
+      "interrupts": [],
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_pdf.md",
+          "content_type": "text/markdown",
+          "bytes": 1313,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_03_case_05_clean_match_real_pdf_flipkart\\attachments\\4bdc84acbc_01_invoice_extract_from_real_pdf.md",
+          "relative_path": "attachments/4bdc84acbc_01_invoice_extract_from_real_pdf.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "content_type": "text/markdown",
+          "bytes": 563,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_03_case_05_clean_match_real_pdf_flipkart\\attachments\\801861dda0_02_purchase_order.md",
+          "relative_path": "attachments/801861dda0_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "content_type": "text/markdown",
+          "bytes": 507,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_03_case_05_clean_match_real_pdf_flipkart\\attachments\\64bfba365c_03_goods_receipt.md",
+          "relative_path": "attachments/64bfba365c_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "content_type": "text/markdown",
+          "bytes": 546,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_03_case_05_clean_match_real_pdf_flipkart\\attachments\\e1b48e3c2f_04_vendor_record.md",
+          "relative_path": "attachments/e1b48e3c2f_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "content_type": "text/markdown",
+          "bytes": 625,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_03_case_05_clean_match_real_pdf_flipkart\\attachments\\1795b6d67b_05_duplicate_payment_check.md",
+          "relative_path": "attachments/1795b6d67b_05_duplicate_payment_check.md"
+        },
+        {
+          "name": "invoice2data_FlipkartInvoice.pdf",
+          "content_type": "application/pdf",
+          "bytes": 44791,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_03_case_05_clean_match_real_pdf_flipkart\\attachments\\c5a19a9db8_invoice2data_FlipkartInvoice.pdf",
+          "relative_path": "attachments/c5a19a9db8_invoice2data_FlipkartInvoice.pdf"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "case_name": "case_06_duplicate_hit_real_pdf_sap",
+      "case_id": "golden_live_20260608_163804_04_case_06_duplicate_hit_real_pdf_sap",
+      "elapsed_seconds": 610.109,
+      "http_status": 200,
+      "status": "collecting_materials",
+      "expected_status": "collecting_materials",
+      "status_ok": true,
+      "satisfied": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity"
+      ],
+      "missing": [],
+      "weak": [],
+      "conflict": [
+        "duplicate_payment_screen"
+      ],
+      "expected_conflict_contains": [
+        "duplicate_payment_check"
+      ],
+      "conflict_ok": false,
+      "risk_flags": [
+        "duplicate_payment_unresolved",
+        "historical_payment_document_found",
+        "clearing_document_found"
+      ],
+      "reply_preview": "根据案件状态分析，我为您提供当前审查结果：\n\n---\n\n## 📋 案件状态摘要\n\n**案件编号**: `golden_live_20260608_163804_04_case_06_duplicate_hit_real_pdf_sap`  \n**案件类型**: 发票付款审查 (AP Lite Payment Review)  \n**当前状态**: `collecting_materials`（收集中）\n\n---\n\n## ✅ 已满足的要求（4/5）\n\n| 要求 | 状态 | 证据 | 说明 |\n|:---|:---|:---|:---|\n| 发票 | ✅ satisfied | ev_001 | 发票5435569865439，金额36,592.33 EUR，字段完整，来源可追溯 |\n| 采购订单 | ✅ satisfied | ev_002 | PO 245675647654，金额与发票一致 |\n| 收货/服务确认 | ✅ satisfied | ev_003 | GRN-5675647654，关联PO，状态Complete |\n| 供应商身份 | ✅ satisfied | ev_004 | Electric Installations - Urs Schmid，银行信息匹配 |\n\n---\n\n## ⚠️ 冲突项（1/5）\n\n| 要求 | 状态 | 证据 | 说明 |\n|:---|:---|:---|:---|\n| **重复付款筛查** | 🔴 **conflict** | ev_005 | 系统发现历史付款凭证 **PAY-5435569865439-HIST** 及清账凭证 **CLR-5435569865439-HIST** |\n\n### 冲突详情\n- **问题**: 筛查结果显示存在历史付款记录，但尚未提供该历史付款的详细凭证\n- **风险**: 需要核对历史付款记录金额/日期/对象，排查重复付款风险\n- **待核实**: 清账凭证 CLR-5435569865439-HIST 的清账关系是否已完整结清历史付款\n\n---\n\n## 📌 关于报告生成\n\n**当前状态尚不满足 `ready_for_report`**，原因：\n1. 存在未解决的 `conflict` 状态（重复付款筛查）\n2. 需要补充历史付款凭证和清账凭证的详细记录\n\n### 可选操作\n\n| 选项 | 说明 |\n|:---|:---|\n| **A. 补充材料后生成报告**（推荐） | 提供历史付款凭证 PAY-5435569865439-HIST 和清账凭证 CLR-5435569865439-HIST 的ERP导出，解决冲突后生成完整报告 |\n| **B. 基于当前证据生成报告** | 可以生成报告，但会在报告中明确标注\"重复付款风险待排查\"的局限性 |\n\n---\n\n**您希望：**\n1. 先补充历史付款/清账凭证材料？\n2. 还是基于当前证据直接生成报告（含风险提示）？\n\n本系统用于本地材料收集、证据审查和报告/PDF生成，不执行 ERP 审批、付款、过账、路由或提交。",
+      "run_id": "run_725415ecc48c",
+      "trace_phase": "finalized",
+      "trace_status": null,
+      "model_calls": 6,
+      "planner_actions": 8,
+      "interrupts": [],
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_pdf.md",
+          "content_type": "text/markdown",
+          "bytes": 1203,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_04_case_06_duplicate_hit_real_pdf_sap\\attachments\\97cc2e674a_01_invoice_extract_from_real_pdf.md",
+          "relative_path": "attachments/97cc2e674a_01_invoice_extract_from_real_pdf.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "content_type": "text/markdown",
+          "bytes": 540,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_04_case_06_duplicate_hit_real_pdf_sap\\attachments\\c6ecd8816f_02_purchase_order.md",
+          "relative_path": "attachments/c6ecd8816f_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "content_type": "text/markdown",
+          "bytes": 499,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_04_case_06_duplicate_hit_real_pdf_sap\\attachments\\6115e2f21a_03_goods_receipt.md",
+          "relative_path": "attachments/6115e2f21a_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "content_type": "text/markdown",
+          "bytes": 505,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_04_case_06_duplicate_hit_real_pdf_sap\\attachments\\72512b33ea_04_vendor_record.md",
+          "relative_path": "attachments/72512b33ea_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "content_type": "text/markdown",
+          "bytes": 783,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_04_case_06_duplicate_hit_real_pdf_sap\\attachments\\664b39b8cc_05_duplicate_payment_check.md",
+          "relative_path": "attachments/664b39b8cc_05_duplicate_payment_check.md"
+        },
+        {
+          "name": "sap_5435569865439.pdf",
+          "content_type": "application/pdf",
+          "bytes": 193822,
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_163804_04_case_06_duplicate_hit_real_pdf_sap\\attachments\\a537555421_sap_5435569865439.pdf",
+          "relative_path": "attachments/a537555421_sap_5435569865439.pdf"
+        }
+      ],
+      "pass": false
+    }
+  ]
+}

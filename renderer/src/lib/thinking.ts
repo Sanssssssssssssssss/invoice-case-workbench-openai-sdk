@@ -1,7 +1,7 @@
 import type { LiveStatus } from '@/types'
 
 export function shouldShowThinking(status: LiveStatus | null | undefined, agentRunning: boolean) {
-  return Boolean(agentRunning && (status?.latestThoughtSummary?.trim() || status?.latestThinking?.trim()))
+  return Boolean(agentRunning && status?.thinkingSource === 'reasoning_content' && status.latestThinking?.trim())
 }
 
 export function thinkingLineClass(expanded: boolean) {
@@ -19,11 +19,14 @@ export function thinkingText(status: LiveStatus | null | undefined) {
 }
 
 export function thinkingSummary(status: LiveStatus | null | undefined) {
-  return status?.latestThoughtSummary?.trim() || status?.activeStep?.trim() || status?.latestThinking?.trim() || ''
+  if (status?.thinkingSource === 'reasoning_content' && status.latestThinking?.trim()) {
+    return status.latestThinking.trim()
+  }
+  return ''
 }
 
 export function thinkingRaw(status: LiveStatus | null | undefined) {
-  return status?.latestThinking?.trim() || ''
+  return status?.thinkingSource === 'reasoning_content' ? status.latestThinking?.trim() || '' : ''
 }
 
 export function formatThinkingElapsed(ms: number | null | undefined) {

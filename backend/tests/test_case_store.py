@@ -78,6 +78,136 @@ def test_evidence_without_requirements_does_not_make_case_ready(tmp_path) -> Non
     assert updated.status == "collecting_materials"
 
 
+def test_evidence_support_requirement_aliases_are_canonicalized(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    canonical_requirements = [
+        {"id": "invoice", "label": "Invoice"},
+        {"id": "purchase_order", "label": "Purchase order"},
+        {"id": "goods_receipt_or_service_acceptance", "label": "Goods receipt"},
+        {"id": "vendor_identity", "label": "Vendor identity"},
+        {"id": "duplicate_payment_screen", "label": "Duplicate payment screen"},
+    ]
+    updated = store.apply_patch(
+        "case_alias_supports",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": canonical_requirements,
+                "add_evidence": [
+                    {
+                        "id": "ev_grn",
+                        "type": "goods_receipt",
+                        "credibility": "high",
+                        "summary": "GRN confirms receipt.",
+                        "review_result": {"should_accept": True, "evidence_type": "goods_receipt"},
+                        "supports": [{"requirement": "goods_receipt", "support_level": "full", "quoted_text": "GRN"}],
+                    },
+                    {
+                        "id": "ev_vendor",
+                        "type": "vendor_record",
+                        "credibility": "high",
+                        "summary": "Vendor is active.",
+                        "review_result": {"should_accept": True, "evidence_type": "vendor_record"},
+                        "supports": [{"requirement": "vendor_record", "support_level": "full", "quoted_text": "Vendor"}],
+                    },
+                    {
+                        "id": "ev_dup",
+                        "type": "duplicate_payment_check",
+                        "credibility": "high",
+                        "summary": "No duplicate payment found.",
+                        "review_result": {"should_accept": True, "evidence_type": "duplicate_payment_check"},
+                        "supports": [{"requirement": "duplicate_payment_check", "support_level": "full", "quoted_text": "No duplicate"}],
+                    },
+                ],
+            },
+            "audit_note": "canonicalize legacy support aliases",
+        },
+    )
+
+    supports = {
+        support.requirement
+        for item in updated.evidence_items
+        for support in item.supports
+    }
+    assert "goods_receipt" not in supports
+    assert "vendor_record" not in supports
+    assert "duplicate_payment_check" not in supports
+    assert "goods_receipt_or_service_acceptance" in supports
+    assert "vendor_identity" in supports
+    assert "duplicate_payment_screen" in supports
+
+
+def test_cross_evidence_amount_mismatch_blocks_ready_for_report(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    canonical_requirements = [
+        {"id": "invoice", "label": "Invoice"},
+        {"id": "purchase_order", "label": "Purchase order"},
+        {"id": "goods_receipt_or_service_acceptance", "label": "Goods receipt"},
+        {"id": "vendor_identity", "label": "Vendor identity"},
+        {"id": "duplicate_payment_screen", "label": "Duplicate payment screen"},
+    ]
+    updated = store.apply_patch(
+        "case_amount_mismatch",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": canonical_requirements,
+                "add_evidence": [
+                    {
+                        "id": "ev_invoice",
+                        "type": "invoice",
+                        "credibility": "high",
+                        "summary": "Invoice total amount 38086.30 EUR.",
+                        "review_result": {"should_accept": True, "evidence_type": "invoice"},
+                        "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice"}],
+                        "metadata": {"extracted_fields": {"amount_total": {"value": "38,086.30"}}},
+                    },
+                    {
+                        "id": "ev_po",
+                        "type": "purchase_order",
+                        "credibility": "high",
+                        "summary": "PO total amount 35039.40 EUR.",
+                        "review_result": {"should_accept": True, "evidence_type": "purchase_order"},
+                        "supports": [{"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO"}],
+                        "metadata": {"extracted_fields": {"amount_total": {"value": "35,039.40"}}},
+                    },
+                    {
+                        "id": "ev_grn",
+                        "type": "goods_receipt",
+                        "credibility": "high",
+                        "summary": "Received value 35039.40 EUR.",
+                        "review_result": {"should_accept": True, "evidence_type": "goods_receipt"},
+                        "supports": [{"requirement": "goods_receipt", "support_level": "full", "quoted_text": "GRN"}],
+                        "metadata": {"extracted_fields": {"received_value": {"value": "35,039.40"}}},
+                    },
+                    {
+                        "id": "ev_vendor",
+                        "type": "vendor_record",
+                        "credibility": "high",
+                        "summary": "Vendor active.",
+                        "review_result": {"should_accept": True, "evidence_type": "vendor_record"},
+                        "supports": [{"requirement": "vendor_record", "support_level": "full", "quoted_text": "Vendor"}],
+                    },
+                    {
+                        "id": "ev_dup",
+                        "type": "duplicate_payment_check",
+                        "credibility": "high",
+                        "summary": "No duplicate payment found.",
+                        "review_result": {"should_accept": True, "evidence_type": "duplicate_payment_check"},
+                        "supports": [{"requirement": "duplicate_payment_check", "support_level": "full", "quoted_text": "No duplicate"}],
+                    },
+                ],
+            },
+            "audit_note": "amount mismatch should block report readiness",
+        },
+    )
+
+    assert updated.status == "collecting_materials"
+    assert "purchase_order" in updated.conflict_materials
+    assert "goods_receipt_or_service_acceptance" in updated.conflict_materials
+    assert any("cross_evidence_amount_mismatch" in item for item in updated.risk_flags)
+
+
 def test_accepted_core_documents_backfill_supports_to_ready(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(

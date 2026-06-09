@@ -110,6 +110,22 @@ def test_read_attachment_requires_declared_request_attachment(tmp_path) -> None:
         workspace.read_attachment("case_001", [], path=str(source))
 
 
+def test_read_attachment_accepts_case_relative_uploaded_path(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    source = store.resolve_case_path("case_uploaded_relative", "attachments/uploaded_invoice.md")
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("Invoice INV-REL-001 Amount 10000 CNY", encoding="utf-8")
+    workspace = FileWorkspace(store)
+
+    result = workspace.read_attachment(
+        "case_uploaded_relative",
+        [Attachment(name="uploaded_invoice.md", path="attachments/uploaded_invoice.md", content_type="text/markdown")],
+    )
+
+    assert result["successful_attachment_count"] == 1
+    assert "INV-REL-001" in result["content"]
+
+
 def test_read_attachment_reads_all_declared_attachments_by_default(tmp_path) -> None:
     first = tmp_path / "approval.md"
     second = tmp_path / "budget.md"

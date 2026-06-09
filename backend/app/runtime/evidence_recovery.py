@@ -7,7 +7,7 @@ from app.domain.invoice_requirements import AP_LITE_REQUIREMENTS, requirement_la
 from app.state.schemas import EvidenceReviewResult
 
 
-TEXT_DIRECT_METHODS = {"text_direct", "markdown_direct", "csv_direct"}
+TEXT_DIRECT_METHODS = {"text_direct", "markdown_direct", "csv_direct", "pdf_text"}
 EVIDENCE_REQUIREMENTS = {
     "invoice": ("invoice",),
     "purchase_order": ("purchase_order",),

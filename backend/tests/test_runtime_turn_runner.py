@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 from app.config import get_settings
 from app.harness import HarnessRuntime
 from app.llm import ModelCallRecord
-from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, TurnRunner, _report_requested_message, _runtime_final_answer
+from app.runtime.policy_gate import _report_requested as _policy_report_requested
+from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, SdkManagerRunner, TurnRunner, _report_requested_message, _runtime_final_answer
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, Attachment, CaseState, EvidenceItem, Requirement
 
@@ -151,8 +153,62 @@ def _fake_report_writer(role: str, role_input: dict[str, Any]) -> dict[str, Any]
 def test_report_intent_respects_negative_generation_request() -> None:
     assert not _report_requested_message("请审查这一批材料，判断证据链是否完整，不要生成报告。")
     assert not _report_requested_message("review the evidence without report generation")
+    assert not _report_requested_message("review materials and tell me whether the case is ready_for_report")
     assert _report_requested_message("请生成报告并渲染 PDF")
     assert _report_requested_message("final report and render PDF")
+    chinese_report_pdf = "\u7ee7\u7eed\u5904\u7406\uff0c\u751f\u6210\u4e2d\u6587\u5ba1\u6838\u62a5\u544a\uff0c\u5e76\u6e32\u67d3 PDF\u3002"
+    assert _report_requested_message(chinese_report_pdf)
+    assert _policy_report_requested(chinese_report_pdf)
+
+
+def test_sdk_manager_resume_passes_run_state_as_runner_input(monkeypatch) -> None:
+    class FakeRunState:
+        def __init__(self) -> None:
+            self.approved = False
+
+        def get_interruptions(self) -> list[str]:
+            return ["approval"]
+
+        def approve(self, _item: str) -> None:
+            self.approved = True
+
+    class FakeResult:
+        final_output = "resumed"
+        interruptions: list[Any] = []
+
+    run_state = FakeRunState()
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr("app.runtime.turn_runner.RunState.from_string", lambda *_args, **_kwargs: run_state)
+
+    def fake_run_agent_sync(*args: Any, **kwargs: Any) -> FakeResult:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeResult()
+
+    monkeypatch.setattr("app.runtime.turn_runner.run_agent_sync", fake_run_agent_sync)
+    runner = SimpleNamespace(
+        context_assembler=SimpleNamespace(build_planner_context=lambda *_args, **_kwargs: {}),
+        sdk_tools=lambda **_kwargs: [],
+        manager_factory=SimpleNamespace(build=lambda *_args, **_kwargs: "manager"),
+        run_config=lambda _state: "run_config",
+        record_manager_model_call=lambda *_args, **_kwargs: None,
+    )
+    state = SimpleNamespace(case_id="case_resume", run_id="run_resume", max_steps=10, step_count=1)
+
+    outcome = SdkManagerRunner().resume(
+        runner=runner,
+        request=AgentTurnRequest(case_id="case_resume", message="approve"),
+        state=state,
+        sdk_state="serialized",
+        approved=True,
+        reason="ok",
+    )
+
+    assert outcome.final_output == "resumed"
+    assert run_state.approved is True
+    assert captured["args"][:2] == ("manager", run_state)
+    assert captured["kwargs"]["run_config"] == "run_config"
 
 
 def test_agent_runtime_uses_manager_policy_loop(tmp_path, monkeypatch) -> None:
@@ -299,6 +355,18 @@ def test_evidence_reviewer_timeout_recovers_text_direct_batch(tmp_path, monkeypa
         ],
     )
     runner.invoke_manager_tool(state=state, request=request, planner_context={}, name="read_attachment", payload={})
+    extract_result = {
+        "mode": "extract",
+        "source_doc_id": "attachment_batch",
+        "evidence_type": "invoice",
+        "credibility": "high",
+        "extracted_fields": {},
+        "evidence_cards": [{"title": "extracted invoice"}],
+    }
+    runner.harness.record_role_call(state, "evidence_reviewer", {"mode": "extract"}, extract_result)
+    runner.harness.record_observation(state, runner.context.record_result(state, kind="role", name="evidence_reviewer", result=extract_result))
+    runner._update_phase_after_role(state, "evidence_reviewer", extract_result)  # noqa: SLF001
+    state.observations = [item for item in state.observations if item.get("kind") != "tool" or item.get("name") != "read_attachment"]
 
     class APITimeoutError(Exception):
         pass
@@ -318,9 +386,10 @@ def test_evidence_reviewer_timeout_recovers_text_direct_batch(tmp_path, monkeypa
         )
     )
 
+    review_request = AgentTurnRequest(case_id=state.case_id, message="continue review")
     result = runner.invoke_manager_tool(
         state=state,
-        request=request,
+        request=review_request,
         planner_context={},
         name="evidence_reviewer",
         payload={"mode": "review"},
@@ -338,6 +407,59 @@ def test_evidence_reviewer_timeout_recovers_text_direct_batch(tmp_path, monkeypa
     assert runner.llm.calls[-1].recovered_by == "text_direct_review_after_specialist_timeout"
     trace_events = (runner.store.resolve_case_path(state.case_id, f"traces/{state.run_id}/events.jsonl")).read_text(encoding="utf-8")
     assert "runtime_recovery" in trace_events
+
+
+def test_evidence_reviewer_timeout_recovers_pdf_text_batch(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    runner = runtime.runner
+    state = HarnessRuntime(runner.store).begin_run("case_reviewer_pdf_text_recovery", "review", run_id="run_reviewer_pdf_text_recovery")
+    batch = {
+        "attachments": [
+            {
+                "status": "success",
+                "content_kind": "pdf",
+                "extraction_method": "pdf_text",
+                "name": "invoice_extract.pdf",
+                "attachment_id": "att_pdf_text",
+                "body_markdown": "# Invoice INV-PDF-1\n\n- Evidence type: invoice\n- Supplier legal name: PDF Vendor Ltd.\n- Invoice total amount: 319.00 INR\n",
+            }
+        ]
+    }
+    ref = runner.context.artifacts.save(state.case_id, state.run_id, "attachment_batch", "read_attachment", batch)
+    state.observability["latest_attachment_batch_ref"] = ref
+
+    class APITimeoutError(Exception):
+        pass
+
+    def fail_call(role: str, payload: dict[str, Any]) -> dict[str, Any]:
+        runner.llm.calls.append(
+            ModelCallRecord(
+                role=role,
+                model="test",
+                prompt_version="test",
+                input_preview="{}",
+                output_preview="",
+                error="APITimeoutError: Request timed out.",
+            )
+        )
+        raise APITimeoutError("Request timed out.")
+
+    monkeypatch.setattr(runner.roles, "call", fail_call)
+    request = AgentTurnRequest(case_id=state.case_id, message="review pdf text")
+
+    review_request = AgentTurnRequest(case_id=state.case_id, message="continue review")
+    result = runner.invoke_manager_tool(
+        state=state,
+        request=review_request,
+        planner_context={},
+        name="evidence_reviewer",
+        payload={"mode": "review"},
+    )
+
+    role_result = runner.context.last_evidence_reviewer_result(state, mode="review")
+    assert result["status"] == "success"
+    assert role_result["suggested_patch"]["add_evidence"][0]["type"] == "invoice"
+    assert "PDF Vendor Ltd" in json.dumps(role_result, ensure_ascii=False)
 
 
 def test_case_patch_writer_timeout_persists_reviewer_suggested_patch(tmp_path, monkeypatch) -> None:
@@ -413,12 +535,13 @@ def test_case_patch_writer_timeout_persists_reviewer_suggested_patch(tmp_path, m
     assert "PAY-2026-4431" in json.dumps(case_state.model_dump(), ensure_ascii=False)
 
 
-def test_guard_blocked_manager_final_uses_runtime_final_recovery(tmp_path, monkeypatch) -> None:
+def test_manager_final_with_boundary_note_is_not_rewritten(tmp_path, monkeypatch) -> None:
+    final_answer = "材料已审查。本工具不会执行 ERP 付款或审批流程。"
     manager = ScriptedManagerRunner(
         [
             {
                 "action": "final_answer",
-                "final_answer": "材料已审查。本工具不会执行 ERP 付款或审批流程。",
+                "final_answer": final_answer,
             }
         ]
     )
@@ -426,14 +549,14 @@ def test_guard_blocked_manager_final_uses_runtime_final_recovery(tmp_path, monke
 
     response = runtime.run_turn(AgentTurnRequest(case_id="case_final_guard_recovery", message="看看当前材料状态"))
 
-    assert "ERP 付款" not in response.reply
-    assert response.trace["step_count"] == 2
-    assert [item["action"] for item in response.trace["planner_actions"]] == ["final_answer", "final_answer"]
-    assert any(item.get("kind") == "guard" for item in response.trace["observations"])
+    assert response.reply == final_answer
+    assert response.trace["step_count"] == 1
+    assert [item["action"] for item in response.trace["planner_actions"]] == ["final_answer"]
+    assert not any(item.get("kind") == "guard" for item in response.trace["observations"])
     events = (
         runtime.runner.store.resolve_case_path("case_final_guard_recovery", f"traces/{response.trace['run_id']}/events.jsonl")
     ).read_text(encoding="utf-8")
-    assert "final_answer_guard_rewrite" in events
+    assert "final_answer_guard_rewrite" not in events
 
 
 def test_runtime_final_answer_does_not_infer_duplicate_hit_from_screen_name(tmp_path) -> None:
@@ -591,7 +714,6 @@ def test_report_completion_wins_over_step_limit_after_pdf_render(tmp_path, monke
     assert final.trace["step_count"] >= final.trace["max_steps"]
     assert "报告已生成" in final.reply
     assert "当前运行已到本轮步数上限" not in final.reply
-    assert "final_answer_generic_boundary_template" not in final.reply
     assert {call["tool"] for call in final.trace["tool_calls"]} >= {"write_case_file", "render_pdf"}
     assert list((tmp_path / "cases" / "case_report_step_limit" / "reports").glob("*.pdf"))
 

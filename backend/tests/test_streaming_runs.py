@@ -10,9 +10,11 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.harness import HarnessRuntime
 from app.runtime import agents_sdk
+from app.runtime.reasoning_capture import extract_reasoning_from_result
 from app.runtime.streaming import stream_hub
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, AgentTurnResponse, CaseState
+from app.runtime.turn_runner import _stream_reasoning_delta, _stream_text_delta
 
 
 def test_streaming_run_api_emits_safe_ordered_final(tmp_path, monkeypatch) -> None:
@@ -29,11 +31,89 @@ def test_streaming_run_api_emits_safe_ordered_final(tmp_path, monkeypatch) -> No
     events = _read_stream_events(client, accepted["stream_url"])
 
     assert accepted["status"] == "accepted"
-    assert [event["event"] for event in events] == ["run_started", "context_loaded", "model_started", "assistant_delta", "tool_started", "tool_finished", "final"]
+    assert [event["event"] for event in events] == [
+        "run_started",
+        "context_loaded",
+        "model_started",
+        "model_thinking",
+        "assistant_delta",
+        "tool_started",
+        "tool_finished",
+        "final",
+    ]
+    thinking_payload = next(event["data"]["payload"] for event in events if event["event"] == "model_thinking")
+    assert thinking_payload["reasoning_excerpt"] == "real reasoning"
     final_payload = events[-1]["data"]["payload"]["response"]
     assert final_payload["case_id"] == "case_stream"
     assert final_payload["reply"] == "streamed final"
     assert "SECRET_RAW_ATTACHMENT" not in json.dumps(events, ensure_ascii=False)
+
+
+def test_stream_hub_subscriber_wakes_from_emit_without_polling() -> None:
+    stream_hub.clear()
+    stream_hub.create(run_id="run_push", case_id="case_push")
+
+    async def collect() -> list[str]:
+        rows: list[str] = []
+        async for event in stream_hub.subscribe("run_push"):
+            rows.append(event.kind)
+            if event.kind == "final":
+                break
+        return rows
+
+    async def scenario() -> list[str]:
+        task = asyncio.create_task(collect())
+        await asyncio.sleep(0)
+        stream_hub.emit("run_push", "assistant_delta", {"delta": "hello"}, summary="delta")
+        stream_hub.emit("run_push", "final", {"response": {"case_id": "case_push"}}, summary="done")
+        return await asyncio.wait_for(task, timeout=0.2)
+
+    assert asyncio.run(scenario()) == ["run_started", "assistant_delta", "final"]
+
+
+def test_reasoning_stream_delta_is_not_assistant_text() -> None:
+    event = SimpleNamespace(type="response.reasoning_text.delta", delta="真实 reasoning")
+    assert _stream_reasoning_delta(event) == "真实 reasoning"
+    assert _stream_text_delta(event) == ""
+
+
+def test_reasoning_extractor_handles_chat_completion_shapes() -> None:
+    event = SimpleNamespace(
+        type="chat.completion.chunk",
+        choices=[SimpleNamespace(delta=SimpleNamespace(reasoning_content="嵌套 reasoning"))],
+    )
+    assert _stream_reasoning_delta(event) == "嵌套 reasoning"
+    assert _stream_reasoning_delta({"type": "response.reasoning_summary_text.delta", "delta": "summary delta"}) == "summary delta"
+
+
+def test_reasoning_extractor_reads_completed_result_items() -> None:
+    reasoning_item = SimpleNamespace(
+        raw_item=SimpleNamespace(
+            type="reasoning",
+            summary=[SimpleNamespace(text="review summary")],
+            content=[SimpleNamespace(text="review detail")],
+        )
+    )
+    result = SimpleNamespace(new_items=[reasoning_item], raw_responses=[])
+
+    capture = extract_reasoning_from_result(result)
+
+    assert capture is not None
+    assert "review summary" in capture.text
+    assert "review detail" in capture.text
+    assert capture.chunks == 2
+
+
+def test_stream_safe_payload_keeps_long_reasoning_excerpt() -> None:
+    stream_hub.clear()
+    stream_hub.create(run_id="run_reasoning", case_id="case_reasoning")
+    long_reasoning = "r" * 2400
+
+    stream_hub.emit("run_reasoning", "model_thinking", {"reasoning_excerpt": long_reasoning, "content": "SECRET"}, summary="thinking")
+    event = stream_hub.events_after("run_reasoning")[-1]
+
+    assert event.payload["reasoning_excerpt"] == long_reasoning
+    assert event.payload["content"] == "[redacted]"
 
 
 def test_streaming_approval_resume_continues_same_run(tmp_path, monkeypatch) -> None:
@@ -110,6 +190,11 @@ class _FakeRuntime:
                 trace={"run_id": run_id, "status": "waiting_approval", "interrupts": interrupts},
             )
         event_sink("model_started", {"role": "planner"}, summary="model")
+        event_sink(
+            "model_thinking",
+            {"role": "planner", "reasoning_excerpt": "real reasoning", "reasoning_chars": 14, "reasoning_chunks": 1},
+            summary="planner reasoning",
+        )
         event_sink("assistant_delta", {"delta": "streamed final"}, summary="delta")
         event_sink("tool_started", {"tool": "list_case_files", "tool_input": {"secret": "SECRET_RAW_ATTACHMENT"}}, summary="tool")
         event_sink("tool_finished", {"tool": "list_case_files", "status": "success"}, summary="tool done")

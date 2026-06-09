@@ -200,6 +200,20 @@ class HarnessRuntime:
                 state.last_planner_model_event_id = state.last_model_event_id
             if call.get("schema_validation_error"):
                 self.record_observation(state, _schema_retry_observation(call))
+            if call.get("reasoning_excerpt"):
+                thinking = {
+                    "role": call.get("role") or "-",
+                    "model": call.get("model") or "",
+                    "prompt_version": call.get("prompt_version") or "",
+                    "reasoning_excerpt": call.get("reasoning_excerpt") or "",
+                    "reasoning_chars": call.get("reasoning_chars") or len(str(call.get("reasoning_excerpt") or "")),
+                    "reasoning_chunks": call.get("reasoning_chunks") or 1,
+                    "thinking_type": call.get("thinking_type") or "",
+                    "reasoning_source": call.get("reasoning_source") or "model_call",
+                    "status": "completed",
+                    "parent_event_id": state.last_model_event_id,
+                }
+                self.record_model_thinking(state, thinking)
         state.debug_model_event_count = len(calls)
 
     def record_model_thinking(self, state: HarnessRunState, thinking: dict[str, Any]) -> None:
@@ -213,17 +227,20 @@ class HarnessRuntime:
             "reasoning_excerpt": str(thinking.get("reasoning_excerpt") or ""),
             "reasoning_chars": chars,
             "reasoning_chunks": int(thinking.get("reasoning_chunks") or 0),
+            "thinking_type": str(thinking.get("thinking_type") or ""),
+            "reasoning_source": str(thinking.get("reasoning_source") or ""),
             "content_started": bool(thinking.get("content_started")),
             "status": status,
         }
+        parent_event_id = str(thinking.get("parent_event_id") or state.last_model_event_id or state.last_action_event_id)
         self.append_debug_event(
             state,
             kind="model_thinking",
             name=role,
             payload=payload,
             summary=f"{role} reasoning_content {status}; chars={chars}",
-            parent_event_id=state.last_action_event_id,
-            caused_by_event_id=state.last_action_event_id,
+            parent_event_id=parent_event_id,
+            caused_by_event_id=parent_event_id,
         )
 
     def finalize_run(self, state: HarnessRunState, final_answer: str | None = None) -> None:
@@ -810,7 +827,6 @@ def _completed_work_labels(state: HarnessRunState) -> str:
 def _feedback_label(error_type: str) -> str:
     return {
         "final_answer_internal_retry_instruction": "最终回复包含内部修复提示",
-        "final_answer_generic_boundary_template": "最终回复误加通用 ERP/付款边界模板",
         "final_answer_no_execution_wording": "最终回复包含执行性措辞",
         "final_answer_case_state_consistency": "最终回复与 case_state 不一致",
         "final_answer_invoice_only_scope": "单张发票范围越界",

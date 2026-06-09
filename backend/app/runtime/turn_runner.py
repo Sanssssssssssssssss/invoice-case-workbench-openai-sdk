@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -26,6 +27,7 @@ from app.runtime.context_assembler import ContextAssembler, context_budget
 from app.runtime.evidence_recovery import recover_text_direct_review
 from app.runtime.patch_normalizer import PatchNormalizer
 from app.runtime.policy_gate import PolicyGate, infer_reviewer_mode, requires_materials_advice
+from app.runtime.reasoning_capture import append_reasoning_delta, extract_reasoning_from_result, extract_reasoning_from_stream_item, extract_stream_reasoning_delta
 from app.runtime.recovery_policy import RecoveryPolicy
 from app.runtime.retry import is_transient_llm_error
 from app.runtime.supervisor_contract import CAPABILITY_CARDS, SPECIALIST_TOOL_DESCRIPTIONS, SPECIALIST_TOOL_MODELS
@@ -147,6 +149,7 @@ class SdkManagerRunner:
             else:
                 run_state.reject(item, rejection_message=reason or "User rejected this tool call.")
         result = run_agent_sync(
+            manager,
             run_state,
             max_turns=max(1, state.max_steps - state.step_count + 2),
             run_config=runner.run_config(state),
@@ -186,6 +189,7 @@ class SdkManagerRunner:
         run_config = runner.run_config(state)
         try:
             result = Runner.run_streamed(
+                manager,
                 run_state,
                 max_turns=max(1, state.max_steps - state.step_count + 2),
                 run_config=run_config,
@@ -284,6 +288,8 @@ class TurnRunner:
         self.manager_runner = manager_runner or SdkManagerRunner()
         self.checkpoints = RuntimeCheckpointStore(self.store)
         self._stream_emit: Any | None = None
+        self._run_lock_guard = threading.Lock()
+        self._run_locks: dict[str, threading.RLock] = {}
 
     def run_turn(self, request: AgentTurnRequest) -> AgentTurnResponse:
         if not request.message.strip():
@@ -320,6 +326,9 @@ class TurnRunner:
         self.llm.calls.clear()
         prior_emit = self._stream_emit
         self._stream_emit = event_sink
+        state: HarnessRunState | None = None
+        lag_stop: asyncio.Event | None = None
+        lag_task: asyncio.Task[None] | None = None
         case_id = self.store.validate_case_id(request.case_id)
         with self.observability.start_turn(
             case_id=case_id,
@@ -333,9 +342,12 @@ class TurnRunner:
         ) as turn:
             try:
                 started = time.perf_counter()
-                state = self.context_assembler.load_context(request, run_id=run_id)
+                state = await asyncio.to_thread(self.context_assembler.load_context, request, run_id=run_id)
                 state.observability.update(turn.to_dict())
                 self._record_timing(state, "context_loaded", started)
+                self._init_event_loop_lag(state)
+                lag_stop = asyncio.Event()
+                lag_task = asyncio.create_task(self._monitor_event_loop_lag(state, lag_stop))
                 self.emit_stream_event(
                     "context_loaded",
                     {
@@ -350,11 +362,14 @@ class TurnRunner:
                 return await self._run_until_final_streamed(request, state)
             finally:
                 try:
-                    if "state" in locals():
+                    if lag_stop is not None:
+                        lag_stop.set()
+                    if lag_task is not None:
+                        await lag_task
+                    if state is not None and not state.completed_at and state.phase != "waiting_approval":
                         started = time.perf_counter()
                         self.harness.write_trace(state)
                         self._record_timing(state, "trace_write_finally", started)
-                        self.harness.write_trace(state)
                 finally:
                     self._stream_emit = prior_emit
 
@@ -398,6 +413,8 @@ class TurnRunner:
     ) -> AgentTurnResponse:
         prior_emit = self._stream_emit
         self._stream_emit = event_sink
+        lag_stop: asyncio.Event | None = None
+        lag_task: asyncio.Task[None] | None = None
         state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
         with self.observability.start_turn(
             case_id=state.case_id,
@@ -412,6 +429,9 @@ class TurnRunner:
         ) as turn:
             try:
                 state.observability.update(turn.to_dict())
+                self._init_event_loop_lag(state)
+                lag_stop = asyncio.Event()
+                lag_task = asyncio.create_task(self._monitor_event_loop_lag(state, lag_stop))
                 self.emit_stream_event(
                     "approval_decision",
                     {"case_id": state.case_id, "run_id": state.run_id, "approved": approved},
@@ -432,6 +452,10 @@ class TurnRunner:
                     return self._handle_manager_outcome(request, state, outcome)
                 return await self._run_until_final_streamed(request, state)
             finally:
+                if lag_stop is not None:
+                    lag_stop.set()
+                if lag_task is not None:
+                    await lag_task
                 self._stream_emit = prior_emit
 
     def _resume_runtime_policy_approval(
@@ -526,6 +550,8 @@ class TurnRunner:
                 )
             except Exception as exc:
                 self._record_manager_failure(state, manager_input, exc)
+                if self._continue_after_manager_failure(request, state, exc):
+                    continue
                 self.harness.finalize_run(state, _manager_failure_answer(exc))
                 return self.trace_recorder.finalize_turn(state)
             response = self._handle_manager_outcome(request, state, outcome)
@@ -541,7 +567,7 @@ class TurnRunner:
     async def _run_until_final_streamed(self, request: AgentTurnRequest, state: HarnessRunState) -> AgentTurnResponse:
         while not state.completed_at and state.step_count < state.max_steps:
             started = time.perf_counter()
-            planner_context = self.context_assembler.build_planner_context(request, state)
+            planner_context = await asyncio.to_thread(self.context_assembler.build_planner_context, request, state)
             self._record_timing(state, "planner_context", started)
             forced = self._deterministic_policy_continuation(request, state)
             if forced:
@@ -595,6 +621,8 @@ class TurnRunner:
                     )
             except Exception as exc:
                 self._record_manager_failure(state, manager_input, exc)
+                if self._continue_after_manager_failure(request, state, exc):
+                    continue
                 self.harness.finalize_run(state, _manager_failure_answer(exc))
                 return self.trace_recorder.finalize_turn(state)
             response = self._handle_manager_outcome(request, state, outcome)
@@ -614,7 +642,7 @@ class TurnRunner:
     ) -> tuple[str, dict[str, Any]] | None:
         if request.attachments and not _latest_observation(state, kind="tool", name="read_attachment"):
             return "read_attachment", {}
-        if _latest_observation(state, kind="tool", name="read_attachment"):
+        if _latest_observation(state, kind="tool", name="read_attachment") or _latest_attachment_batch_artifact_ref(state, self.store):
             if not self.context.last_evidence_reviewer_result(state, mode=("review", "repair")):
                 if not _latest_observation_error(state, kind="role", name="evidence_reviewer"):
                     return "evidence_reviewer", {"mode": "review"}
@@ -676,6 +704,34 @@ class TurnRunner:
         if not state.final_answer:
             self.harness.finalize_run(state, self.harness.step_limit_answer(state))
         return self.trace_recorder.finalize_turn(state)
+
+    def _continue_after_manager_failure(self, request: AgentTurnRequest, state: HarnessRunState, exc: Exception) -> bool:
+        if not _is_recoverable_specialist_error(exc):
+            return False
+        attempts = int(state.observability.get("manager_failure_continuations") or 0)
+        if attempts >= 1:
+            return False
+        if not (
+            self._deterministic_policy_continuation(request, state)
+            or self._deterministic_final_after_patch(request, state)
+            or self._deterministic_final_after_report(request, state)
+            or self._deterministic_final_after_materials_advice(request, state)
+        ):
+            return False
+        state.observability["manager_failure_continuations"] = attempts + 1
+        self.harness.append_debug_event(
+            state,
+            kind="runtime_recovery",
+            name="manager_transient_continue",
+            payload={
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+                "attempt": attempts + 1,
+            },
+            summary="Continuing deterministic runtime path after transient case manager failure.",
+            parent_event_id=state.last_model_event_id,
+            caused_by_event_id=state.last_model_event_id,
+        )
+        return True
 
     def _finalize_manager_answer(
         self,
@@ -856,6 +912,7 @@ class TurnRunner:
     def record_manager_model_call(self, state: HarnessRunState, manager_input: dict[str, Any], result: Any) -> None:
         usage = _usage_from_result(result)
         output_preview = _manager_output_preview(result)
+        reasoning = extract_reasoning_from_result(result)
         record = ModelCallRecord(
             role="planner",
             model=self.settings.llm_model,
@@ -867,6 +924,11 @@ class TurnRunner:
             raw_response=output_preview,
             usage=usage,
             content_chars=len(output_preview),
+            reasoning_excerpt=reasoning.text if reasoning else "",
+            reasoning_chars=reasoning.chars if reasoning else 0,
+            reasoning_chunks=reasoning.chunks if reasoning else 0,
+            thinking_type=self.settings.llm_thinking_type or "",
+            reasoning_source=reasoning.source if reasoning else "",
         )
         self.llm.calls.append(record)
         self.trace_recorder.record_model_call_debug(state)
@@ -883,19 +945,40 @@ class TurnRunner:
         event_type = str(getattr(event, "type", "") or "")
         if event_type == "agent_updated_stream_event":
             agent = getattr(event, "new_agent", None)
+            role = _stream_agent_role(getattr(agent, "name", "") or "manager")
+            state.observability["_active_stream_role"] = role
             self.emit_stream_event(
                 "model_started",
-                {"role": getattr(agent, "name", "") or "manager", "model": self.settings.llm_model},
+                {"role": role, "model": self.settings.llm_model},
                 summary="Agent updated.",
             )
             return
         if event_type == "raw_response_event":
-            delta = _stream_text_delta(getattr(event, "data", None))
+            data = getattr(event, "data", None)
+            reasoning_delta = extract_stream_reasoning_delta(data)
+            if reasoning_delta:
+                role = str(state.observability.get("_active_stream_role") or "planner")
+                reasoning = _append_stream_reasoning(state, role, reasoning_delta)
+                self.emit_stream_event(
+                    "model_thinking",
+                    {
+                        "role": role,
+                        "model": self.settings.llm_model,
+                        "reasoning_excerpt": reasoning["text"],
+                        "reasoning_delta": reasoning_delta,
+                        "reasoning_chars": reasoning["chars"],
+                        "reasoning_chunks": reasoning["chunks"],
+                        "step_count": state.step_count,
+                        "status": "streaming",
+                    },
+                    summary=f"{role} reasoning_content streaming.",
+                )
+            delta = _stream_text_delta(data)
             if delta:
                 self.emit_stream_event(
                     "assistant_delta",
                     {"delta": delta, "role": "assistant", "step_count": state.step_count},
-                    summary="Assistant response delta.",
+                    summary="delta",
                 )
             return
         if event_type == "run_item_stream_event":
@@ -906,12 +989,79 @@ class TurnRunner:
                 self.emit_stream_event("tool_started", {"tool": tool_name, "source": "sdk"}, summary=f"{tool_name} called.")
             elif name == "tool_output" and tool_name:
                 self.emit_stream_event("tool_finished", {"tool": tool_name, "source": "sdk", "status": "completed"}, summary=f"{tool_name} output.")
+            elif name == "reasoning_item_created":
+                capture = extract_reasoning_from_stream_item(item)
+                if capture:
+                    role = str(state.observability.get("_active_stream_role") or "planner")
+                    bucket = state.observability.get("_stream_reasoning")
+                    current = bucket.get(role) if isinstance(bucket, dict) else None
+                    if isinstance(current, dict) and int(current.get("chars") or 0) > 0:
+                        return
+                    reasoning = _append_stream_reasoning(state, role, capture.text)
+                    self.emit_stream_event(
+                        "model_thinking",
+                        {
+                            "role": role,
+                            "model": self.settings.llm_model,
+                            "reasoning_excerpt": reasoning["text"],
+                            "reasoning_delta": capture.text,
+                            "reasoning_chars": reasoning["chars"],
+                            "reasoning_chunks": reasoning["chunks"],
+                            "step_count": state.step_count,
+                            "status": "streaming",
+                            "reasoning_source": capture.source,
+                        },
+                        summary=f"{role} reasoning_content streaming.",
+                    )
 
     def _record_timing(self, state: HarnessRunState, name: str, started: float) -> None:
         duration_ms = max(0, int((time.perf_counter() - started) * 1000))
         timings = state.observability.setdefault("timings", [])
         if isinstance(timings, list):
             timings.append({"name": name, "duration_ms": duration_ms, "ts": time.time()})
+
+    def _lock_for_run(self, run_id: str) -> threading.RLock:
+        with self._run_lock_guard:
+            lock = self._run_locks.get(run_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._run_locks[run_id] = lock
+            return lock
+
+    def _init_event_loop_lag(self, state: HarnessRunState) -> None:
+        state.observability.setdefault(
+            "event_loop_lag",
+            {"max_ms": 0, "mean_ms": 0, "samples": 0, "p95_ms": 0},
+        )
+
+    async def _monitor_event_loop_lag(self, state: HarnessRunState, stop: asyncio.Event, *, interval: float = 0.05) -> None:
+        loop = asyncio.get_running_loop()
+        expected = loop.time() + interval
+        samples: list[float] = []
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+                break
+            except asyncio.TimeoutError:
+                now = loop.time()
+                lag_ms = max(0.0, (now - expected) * 1000)
+                samples.append(lag_ms)
+                expected = now + interval
+                self._update_event_loop_lag(state, samples)
+        if samples:
+            self._update_event_loop_lag(state, samples)
+
+    def _update_event_loop_lag(self, state: HarnessRunState, samples: list[float]) -> None:
+        if not samples:
+            return
+        ordered = sorted(samples)
+        p95_index = min(len(ordered) - 1, max(0, int(len(ordered) * 0.95) - 1))
+        state.observability["event_loop_lag"] = {
+            "max_ms": int(max(ordered)),
+            "mean_ms": int(sum(ordered) / len(ordered)),
+            "samples": len(ordered),
+            "p95_ms": int(ordered[p95_index]),
+        }
 
     def _emit_tool_finished(self, state: HarnessRunState, name: str, result: dict[str, Any], started: float) -> None:
         duration_ms = max(0, int((time.perf_counter() - started) * 1000))
@@ -954,13 +1104,19 @@ class TurnRunner:
         async def invoke(_tool_context: Any, raw_input: str) -> str:
             try:
                 parsed = _parse_tool_input(raw_input, input_model)
-                result = self.invoke_manager_tool(
-                    state=state,
-                    request=request,
-                    planner_context=planner_context,
-                    name=name,
-                    payload=parsed,
-                )
+                run_lock = self._lock_for_run(state.run_id)
+
+                def call_tool() -> dict[str, Any]:
+                    with run_lock:
+                        return self.invoke_manager_tool(
+                            state=state,
+                            request=request,
+                            planner_context=planner_context,
+                            name=name,
+                            payload=parsed,
+                        )
+
+                result = await asyncio.to_thread(call_tool)
                 return json.dumps(result, ensure_ascii=False, default=str)
             except Exception as exc:
                 self.harness.record_observation(state, self.context.record_error(kind="tool", name=name, exc=exc))
@@ -1031,7 +1187,11 @@ class TurnRunner:
             as_type="agent",
         ) as span:
             try:
-                result = self.roles.call(role, role_input)
+                stream_handler = self._specialist_stream_handler(state, role)
+                if stream_handler is None:
+                    result = self.roles.call(role, role_input)
+                else:
+                    result = self.roles.call(role, role_input, on_stream=stream_handler)
                 _mark_prior_specialist_errors_recovered(
                     state,
                     self.llm.calls,
@@ -1078,6 +1238,19 @@ class TurnRunner:
                 span.update(output=safe_role_output({}, error=f"{type(exc).__name__}: {exc}"), level="ERROR", status_message=str(exc))
                 return {"status": "error", "role": role, "error": {"type": type(exc).__name__, "message": str(exc)}}
 
+    def _specialist_stream_handler(self, state: HarnessRunState, role: str) -> Any | None:
+        if not callable(self._stream_emit):
+            return None
+
+        def handle(payload: dict[str, Any]) -> None:
+            event = payload.get("event") if isinstance(payload, dict) else None
+            if event is None:
+                return
+            state.observability["_active_stream_role"] = role
+            self.record_sdk_stream_event(state, event)
+
+        return handle
+
     def _recover_evidence_reviewer_timeout(
         self,
         state: HarnessRunState,
@@ -1092,7 +1265,7 @@ class TurnRunner:
             return None
         if not _is_recoverable_specialist_error(exc):
             return None
-        artifact_ref = str(_latest_observation(state, kind="tool", name="read_attachment").get("artifact_ref") or "")
+        artifact_ref = _latest_attachment_batch_artifact_ref(state, self.store)
         if not artifact_ref:
             return None
         try:
@@ -1522,6 +1695,38 @@ def _latest_observation(state: HarnessRunState, *, kind: str, name: str) -> dict
     return {}
 
 
+def _latest_attachment_batch_artifact_ref(state: HarnessRunState, store: CaseStore) -> str:
+    ref = str(_latest_observation(state, kind="tool", name="read_attachment").get("artifact_ref") or "").strip()
+    if ref:
+        return ref
+
+    ref = str(state.observability.get("latest_attachment_batch_ref") or "").strip()
+    if ref:
+        return ref
+
+    refs = state.observability.get("attachment_batch_refs")
+    if isinstance(refs, list):
+        for item in reversed(refs):
+            ref = str(item or "").strip()
+            if ref:
+                return ref
+
+    try:
+        root = store.resolve_case_path(state.case_id, f"traces/artifacts/{state.run_id}")
+    except Exception:
+        return ""
+    if not root.exists():
+        return ""
+    for path in sorted(root.glob("art_*_attachment_batch_read_attachment.json"), key=lambda item: item.stat().st_mtime_ns, reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("artifact_type") == "attachment_batch" and data.get("name") == "read_attachment":
+            return path.relative_to(store.case_dir(state.case_id)).as_posix()
+    return ""
+
+
 def _latest_observation_error(state: HarnessRunState, *, kind: str, name: str) -> dict[str, Any]:
     observation = _latest_observation(state, kind=kind, name=name)
     error = observation.get("error") if isinstance(observation, dict) else None
@@ -1647,6 +1852,8 @@ def _manager_outcome_from_result(result: Any) -> ManagerRunOutcome:
 
 def _stream_text_delta(data: Any) -> str:
     event_type = str(getattr(data, "type", "") or "")
+    if "reasoning" in event_type or "thinking" in event_type:
+        return ""
     if event_type.endswith("output_text.delta") or event_type.endswith("text.delta"):
         return str(getattr(data, "delta", "") or "")
     if event_type.endswith("message.delta"):
@@ -1664,6 +1871,25 @@ def _stream_text_delta(data: Any) -> str:
                 chunks.append(str(content))
         return "".join(chunks)
     return ""
+
+
+def _stream_reasoning_delta(data: Any) -> str:
+    return extract_stream_reasoning_delta(data)
+
+
+def _append_stream_reasoning(state: HarnessRunState, role: str, delta: str) -> dict[str, Any]:
+    bucket = state.observability.setdefault("_stream_reasoning", {})
+    if not isinstance(bucket, dict):
+        bucket = {}
+        state.observability["_stream_reasoning"] = bucket
+    return append_reasoning_delta(bucket, role, delta)
+
+
+def _stream_agent_role(agent_name: str) -> str:
+    name = str(agent_name or "").strip().lower()
+    if name in {"case_manager", "manager", "supervisor"}:
+        return "planner"
+    return name or "planner"
 
 
 def _stream_item_tool_name(item: Any) -> str:
@@ -1898,6 +2124,7 @@ def _case_updates_have_content(updates: dict[str, Any]) -> bool:
 
 def _report_requested_message(message: str) -> bool:
     text = str(message or "").lower()
+    compact = re.sub(r"\s+", "", text)
     if any(
         term in text
         for term in (
@@ -1915,9 +2142,28 @@ def _report_requested_message(message: str) -> bool:
             "do not generate report",
             "don't generate report",
         )
-    ):
+    ) or any(term in compact for term in ("不要生成报告", "不要生成pdf", "不生成报告", "不需要报告", "无需报告", "不用生成报告", "不用报告", "别生成报告")):
         return False
-    return any(term in text for term in ("生成报告", "最终报告", "导出报告", "渲染pdf", "生成 pdf", "pdf report", "report", "final report"))
+    text = text.replace("ready_for_report", "")
+    compact = compact.replace("ready_for_report", "")
+    if re.search(r"(生成|撰写|写入|写|输出|导出|渲染).{0,16}(报告|pdf)", text, flags=re.I):
+        return True
+    return any(
+        term in text
+        for term in (
+            "生成报告",
+            "最终报告",
+            "导出报告",
+            "渲染pdf",
+            "生成 pdf",
+            "pdf report",
+            "final report",
+            "generate report",
+            "write report",
+            "render report",
+            "export report",
+        )
+    ) or any(term in compact for term in ("生成报告", "最终报告", "导出报告", "渲染pdf", "生成pdf", "导出pdf"))
 
 
 def _markdown_only_report_message(message: str) -> bool:

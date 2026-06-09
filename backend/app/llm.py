@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.agents.thinking import model_extra_body_for_thinking, role_thinking_type, temperature_for_thinking
 from app.config import Settings, get_settings
 from app.observability.langfuse_tracer import (
     LangfuseTracer,
@@ -16,6 +17,7 @@ from app.observability.langfuse_tracer import (
     generation_output,
     usage_details,
 )
+from app.runtime.reasoning_capture import extract_reasoning_from_result
 
 
 @dataclass
@@ -39,6 +41,11 @@ class ModelCallRecord:
     content_chars: int = 0
     recovered_by: str = ""
     runtime: str = "openai_agents_sdk"
+    reasoning_excerpt: str = ""
+    reasoning_chars: int = 0
+    reasoning_chunks: int = 0
+    thinking_type: str = ""
+    reasoning_source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +61,10 @@ class ModelCallRecord:
             "error": self.error,
             "content_chars": self.content_chars,
             "recovered_by": self.recovered_by,
+            "reasoning_chars": self.reasoning_chars,
+            "reasoning_chunks": self.reasoning_chunks,
+            "thinking_type": self.thinking_type,
+            "reasoning_source": self.reasoning_source,
         }
 
     def to_debug_dict(self) -> dict[str, Any]:
@@ -77,6 +88,11 @@ class ModelCallRecord:
             "error": self.error,
             "content_chars": self.content_chars,
             "recovered_by": self.recovered_by,
+            "reasoning_excerpt": self.reasoning_excerpt,
+            "reasoning_chars": self.reasoning_chars,
+            "reasoning_chunks": self.reasoning_chunks,
+            "thinking_type": self.thinking_type,
+            "reasoning_source": self.reasoning_source,
         }
 
 
@@ -108,6 +124,7 @@ class LlmClient:
         input_preview = json.dumps(payload, ensure_ascii=False, default=str)[:1400]
         selected_model = model or self.settings.llm_model
         timeout_seconds = self.settings.timeout_for_role(role)
+        thinking_type = role_thinking_type(role, payload, self.settings.llm_thinking_type)
         started = time.perf_counter()
         trace_input = generation_input(
             role,
@@ -119,7 +136,8 @@ class LlmClient:
         trace_metadata = {
             "role": role,
             "prompt_version": prompt_version,
-            "temperature": self._temperature(selected_model),
+            "temperature": temperature_for_thinking(selected_model, self.settings.llm_temperature, thinking_type),
+            "thinking_type": thinking_type,
             "provider": self.settings.llm_provider,
             "base_url": self.settings.llm_base_url,
             "schema": model_type.__name__,
@@ -167,8 +185,8 @@ class LlmClient:
                     instructions=system_prompt,
                     model=selected_model,
                     model_settings=ModelSettings(
-                        temperature=self._temperature(selected_model),
-                        extra_body=_model_extra_body(selected_model, self.settings.llm_thinking_type),
+                        temperature=temperature_for_thinking(selected_model, self.settings.llm_temperature, thinking_type),
+                        extra_body=_model_extra_body(selected_model, thinking_type),
                     ),
                     output_type=AgentOutputSchema(model_type, strict_json_schema=False),
                 )
@@ -194,6 +212,7 @@ class LlmClient:
                     parsed = model_type.model_validate(parsed)
                 raw_response = parsed.model_dump_json()
                 usage = _usage_from_result(result)
+                reasoning = extract_reasoning_from_result(result)
                 record = ModelCallRecord(
                     role=role,
                     model=selected_model,
@@ -207,6 +226,11 @@ class LlmClient:
                     latency_ms=_elapsed_ms(started),
                     content_chars=len(raw_response),
                     runtime="openai_agents_sdk_direct",
+                    reasoning_excerpt=reasoning.text if reasoning else "",
+                    reasoning_chars=reasoning.chars if reasoning else 0,
+                    reasoning_chunks=reasoning.chunks if reasoning else 0,
+                    thinking_type=thinking_type,
+                    reasoning_source=reasoning.source if reasoning else "",
                 )
                 self.calls.append(record)
                 generation.update(
@@ -277,10 +301,7 @@ def _elapsed_ms(started: float) -> float:
 
 
 def _model_extra_body(model_name: str, thinking_type: str | None) -> dict[str, Any] | None:
-    model = str(model_name or "").lower()
-    if model == "kimi-k2.5":
-        return {"thinking": {"type": str(thinking_type or "disabled")}}
-    return None
+    return model_extra_body_for_thinking(model_name, thinking_type)
 
 
 def _usage_from_result(result: Any) -> dict[str, Any]:

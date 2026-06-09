@@ -1,0 +1,144 @@
+{
+  "finished": "2026-06-08T17:29:12",
+  "cases_total": 2,
+  "cases_passed": 2,
+  "results": [
+    {
+      "case_name": "case_03_duplicate_hit_real_jpg_FACTU2015050046",
+      "case_id": "golden_live_20260608_171513_03_case_03_duplicate_hit_real_jpg_FACTU2015050046",
+      "elapsed_seconds": 555.507,
+      "http_status": 200,
+      "status": "collecting_materials",
+      "expected_status": "collecting_materials",
+      "status_ok": true,
+      "conflict": [
+        "duplicate_payment_screen"
+      ],
+      "expected_conflict_contains": [
+        "duplicate_payment_screen"
+      ],
+      "conflict_ok": true,
+      "risk_flags": [
+        "duplicate_payment_positive_hit",
+        "historical_payment_detected",
+        "clearing_document_exists",
+        "reconciliation_required"
+      ],
+      "missing": [],
+      "weak": [],
+      "satisfied": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity"
+      ],
+      "run_id": "run_c0fb566c964a",
+      "trace_phase": "finalized",
+      "reply_preview": "材料审查已完成。以下是本轮审查结果汇总：\n\n## 证据审查结果\n\n### 已审查材料（5份）\n\n| 序号 | 材料类型 | 可信度 | 状态 |\n|------|----------|--------|------|\n| 1 | 发票 (Invoice) | 高 | ✅ 完整 |\n| 2 | 采购订单 (PO) | 高 | ✅ 完整 |\n| 3 | 收货单 (GRN) | 高 | ✅ 完整 |\n| 4 | 供应商主数据 | 高 | ✅ 完整 |\n| 5 | 重复付款检查 | 中 | ⚠️ 部分/冲突 |\n\n### 关键字段提取\n\n**发票信息 (FA05/2015/065587)**\n- 发票日期：2015-05-07\n- 总金额：579,675.62 EUR\n- 采购订单号：BC01963\n\n**三单匹配核对**\n- ✅ 发票金额 (579,675.62 EUR) = PO金额 (579,675.62 EUR)\n- ✅ PO号一致：BC01963\n- ✅ 币种一致：EUR\n- ✅ GRN日期 (2015-06-21) 在发票日期之后\n\n**供应商/银行信息**\n- 供应商：The Jackson Group\n- 银行账户尾号：5581\n\n### ⚠️ 发现的冲突\n\n**重复付款检查显示潜在风险**\n- 重复付款检查材料中检测到与历史记录可能存在重复\n- 建议进一步核对历史付款记录金额/日期/对象，排查重复付款风险\n\n### 案件状态\n\n- **当前状态**: `collecting_materials`\n- **证据数量**: 5\n- **是否可生成报告**: ❌ 否（存在未解决的冲突）\n\n### 下一步建议\n\n1. **优先处理**：解决重复付款检查的冲突 - 需核对历史付款记录与清账关系\n2. 待冲突解决后，案件状态可更新为 `ready_for_report`\n\n---\n\n*本系统用于本地材料收集、证据审查和报告/PDF生成，不执行 ERP 审批、付款、过账、路由或提交。*",
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_source.md",
+          "bytes": 1737,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_03_case_03_duplicate_hit_real_jpg_FACTU2015050046\\attachments\\fcb956e193_01_invoice_extract_from_real_source.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "bytes": 489,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_03_case_03_duplicate_hit_real_jpg_FACTU2015050046\\attachments\\21a963e332_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "bytes": 451,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_03_case_03_duplicate_hit_real_jpg_FACTU2015050046\\attachments\\8b0f46ad43_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "bytes": 469,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_03_case_03_duplicate_hit_real_jpg_FACTU2015050046\\attachments\\0a93a233e6_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "bytes": 784,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_03_case_03_duplicate_hit_real_jpg_FACTU2015050046\\attachments\\f015d9b9c6_05_duplicate_payment_check.md"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "case_name": "case_04_bank_change_risk_real_jpg_FACTU2015060039",
+      "case_id": "golden_live_20260608_171513_04_case_04_bank_change_risk_real_jpg_FACTU2015060039",
+      "elapsed_seconds": 283.884,
+      "http_status": 200,
+      "status": "collecting_materials",
+      "expected_status": "collecting_materials",
+      "status_ok": true,
+      "conflict": [
+        "vendor_identity"
+      ],
+      "expected_conflict_contains": [
+        "vendor_identity"
+      ],
+      "conflict_ok": true,
+      "risk_flags": [
+        "vendor_bank_change_request_without_master_approval",
+        "email_bank_change_unverified",
+        "bank_account_mismatch_9012_vs_7788"
+      ],
+      "missing": [],
+      "weak": [],
+      "satisfied": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "duplicate_payment_screen"
+      ],
+      "run_id": "run_c32b164ab838",
+      "trace_phase": "finalized",
+      "reply_preview": "## 材料审查结果\n\n### 证据抽取完成\n\n已抽取并审查6份材料：\n\n| 序号 | 材料类型 | 关键字段 | 可信度 |\n|------|----------|----------|--------|\n| 1 | 发票 | 编号FA06/2015/088665，金额347,064.06 EUR，日期2015-06-02，PO: BC05603 | 高 |\n| 2 | 采购订单 | 编号BC05603，金额347,064.06 EUR，日期2015-06-02，币种EUR | 高 |\n| 3 | 收货单 | GRN-BC05603，日期2015-08-31，PO: BC05603 | 中 |\n| 4 | 供应商主数据 | Biotech，银行账户尾号9012，币种EUR | 中 |\n| 5 | 重复付款检查 | 无历史重复付款记录 | 高 |\n| 6 | 银行变更邮件 | 供应商请求变更银行账户（未经主数据审批） | 低 |\n\n### 三单匹配结果\n\n| 匹配项 | 发票 | 采购订单 | 收货单 | 匹配状态 |\n|--------|------|----------|--------|----------|\n| 金额 | 347,064.06 EUR | 347,064.06 EUR | - | ✅ 一致 |\n| 币种 | EUR | EUR | EUR | ✅ 一致 |\n| 订单号 | BC05603 | BC05603 | BC05603 | ✅ 一致 |\n| 日期 | 2015-06-02 | 2015-06-02 | 2015-08-31 | ⚠️ 收货日期晚于发票/订单 |\n\n**结论**：三单匹配基本一致，收货日期晚于发票日期属正常业务场景（先开票后收货或系统录入时差）。\n\n### 供应商/银行信息\n\n- **供应商**：Biotech\n- **主数据账户**：尾号9012（EUR）\n- **邮件请求变更**：未显示具体新账户，但标注\"bank-change request without vendor-master approval\"\n- **风险**：银行账户变更请求未经主数据审批流程，存在潜在欺诈风险\n\n### 重复付款检查\n\n- 无相同发票编号的历史付款记录\n- 无相同金额/供应商/日期的重复交易\n- 重复付款风险：低\n\n### 冲突与风险\n\n| 风险项 | 级别 | 说明 |\n|--------|------|------|\n| 银行变更未审批 | 🔴 高 | 邮件请求的银行账户变更未经过供应商主数据审批流程 |\n| 账户信息不一致 | 🟡 中 | 发票/邮件中的银行信息与主数据尾号9012可能存在差异 |\n| 收货日期差异 | 🟢 低 | 收货日期晚于发票日期，属正常业务场景 |\n\n### 报告就绪状态判断\n\n**当前状态**：`ready_for_report = 条件满足但存在风险待确认`\n\n- ✅ 三单匹配（发票-采购订单-收货单）一致\n- ✅ 重复付款检查通过\n- ⚠️ **银行变更冲突待核实**：供应商邮件请求变更银行账户，但未经主数据审批，且与主数据账户尾号9012不一致\n\n**建议**：在生成报告前，建议补充以下材料之一：\n1. 经审批的银行账户变更授权文件\n2. 供应商正式书面确认函\n3. 财务部门对银行变更的审批记录\n\n如需继续生成报告，可基于现有材料生成包含风险提示的审查报告。",
+      "uploads": [
+        {
+          "name": "01_invoice_extract_from_real_source.md",
+          "bytes": 1784,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_04_case_04_bank_change_risk_real_jpg_FACTU2015060039\\attachments\\48348ec2a6_01_invoice_extract_from_real_source.md"
+        },
+        {
+          "name": "02_purchase_order.md",
+          "bytes": 469,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_04_case_04_bank_change_risk_real_jpg_FACTU2015060039\\attachments\\949119294d_02_purchase_order.md"
+        },
+        {
+          "name": "03_goods_receipt.md",
+          "bytes": 431,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_04_case_04_bank_change_risk_real_jpg_FACTU2015060039\\attachments\\c26e9eba78_03_goods_receipt.md"
+        },
+        {
+          "name": "04_vendor_record.md",
+          "bytes": 441,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_04_case_04_bank_change_risk_real_jpg_FACTU2015060039\\attachments\\5ecdf5c6a1_04_vendor_record.md"
+        },
+        {
+          "name": "05_duplicate_payment_check.md",
+          "bytes": 579,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_04_case_04_bank_change_risk_real_jpg_FACTU2015060039\\attachments\\e1701d55db_05_duplicate_payment_check.md"
+        },
+        {
+          "name": "06_supplier_bank_change_email.md",
+          "bytes": 566,
+          "content_type": "text/markdown",
+          "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\golden_live_20260608_171513_04_case_04_bank_change_risk_real_jpg_FACTU2015060039\\attachments\\7378e5fc17_06_supplier_bank_change_email.md"
+        }
+      ],
+      "pass": true
+    }
+  ]
+}

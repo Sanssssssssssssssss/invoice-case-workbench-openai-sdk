@@ -184,7 +184,7 @@ def _read_attachment_item(
     *,
     max_chars: int,
 ) -> dict[str, Any]:
-    source = Path(attachment.path).expanduser().resolve()
+    source = _attachment_source_path(store, case_id, attachment.path)
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(f"Attachment path does not exist: {attachment.path}")
     suffix = source.suffix.lower()
@@ -236,6 +236,13 @@ def _read_attachment_item(
         "warnings": warnings,
         "visual_notes": visual_notes,
     }
+
+
+def _attachment_source_path(store: CaseStore, case_id: str, path: str) -> Path:
+    raw = Path(path).expanduser()
+    if raw.is_absolute():
+        return raw.resolve()
+    return store.resolve_case_path(case_id, str(path))
 
 
 def _read_text(path: Path) -> str:

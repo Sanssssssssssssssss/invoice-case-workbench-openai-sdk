@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-06-06T23:01:52",
+  "message": "Review these invoice payment materials. Determine completeness, risks, and whether it is ready for report. Do not generate, write, render, or export any report or PDF in this turn.",
+  "rows": [
+    {
+      "case": "case_01_clean_match_real_jpg_FACTU2015020048",
+      "case_id": "golden_live_amountfix_01_case_01_clean_match_real_jpg_FACTU2015020048_225557",
+      "accepted_ms": 18.8,
+      "first_event_ms": 350695.3,
+      "final_ms": 350696.0,
+      "terminal_kind": "final",
+      "error": "",
+      "status": "ready_for_report",
+      "conflict_materials": [],
+      "risk_flags": [],
+      "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：当前材料未显示重复付款命中。\n- 识别到的核心对象：供应商 Marc Demo；金额 82,003.30 EUR。\n- 当前案卷状态：status=ready_for_report；evidence=5；satisfied=invoice, purchase_order, goods_receipt_or_service_acceptance, vendor_identity, duplicate_payment_screen；conflict=-；missing=-；weak=-。\n结论：case_state=ready_for_report；可继续生成本地报告草稿。"
+    },
+    {
+      "case": "case_02_amount_conflict_real_jpg_FACTU2015040047",
+      "case_id": "golden_live_amountfix_02_case_02_amount_conflict_real_jpg_FACTU201504_230148",
+      "accepted_ms": 17.2,
+      "first_event_ms": 4115.4,
+      "final_ms": 4116.8,
+      "terminal_kind": "final",
+      "error": "",
+      "status": "collecting_materials",
+      "conflict_materials": [
+        "purchase_order",
+        "goods_receipt_or_service_acceptance"
+      ],
+      "risk_flags": [
+        "cross_evidence_amount_mismatch: invoice/PO/GRN amount mismatch"
+      ],
+      "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：当前材料未显示重复付款命中。\n- 识别到的核心对象：发票 FA04/2015/027622；供应商 Deco Addict；金额 38,086.30。\n- 当前案卷状态：status=collecting_materials；evidence=5；satisfied=invoice, vendor_identity, duplicate_payment_screen；conflict=purchase_order, goods_receipt_or_service_acceptance；missing=-；weak=-。\n- 风险标记：cross_evidence_amount_mismatch: invoice/PO/GRN amount mismatch\n结论：请按当前 missing、weak、conflict 项继续补料或复核；不要把 weak 项写成 satisfied。"
+    }
+  ]
+}

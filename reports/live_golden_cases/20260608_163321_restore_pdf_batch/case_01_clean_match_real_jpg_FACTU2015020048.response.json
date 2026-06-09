@@ -1,0 +1,2668 @@
+{
+  "case_id": "golden_live_20260608_163321_01_case_01_clean_match_real_jpg_FACTU2015020048",
+  "reply": "根据系统检查，当前附件路径不存在。从附件清单中可以看到以下5个文件均显示为 **error** 状态：\n\n| 文件名 | 状态 | 原因 |\n|--------|------|------|\n| 01_invoice_extract_from_real_source.md | error | FileNotFoundError |\n| 02_purchase_order.md | error | FileNotFoundError |\n| 03_goods_receipt.md | error | FileNotFoundError |\n| 04_vendor_record.md | error | FileNotFoundError |\n| 05_duplicate_payment_check.md | error | FileNotFoundError |\n\n---\n\n## 问题说明\n\n您上传的5个证据文件（发票、采购订单、收货单、供应商记录、重复付款检查）在本轮请求中**路径不存在或未被正确声明**。\n\n---\n\n## 建议操作\n\n请**重新上传这5个文件**，我将为您：\n\n1. **提取并审查**所有证据内容\n2. **检查材料完整性**（invoice、PO、GRN、vendor、duplicate payment）\n3. **评估是否满足** `ready_for_report` 条件\n4. **生成中文审查报告** 和 **PDF文件**\n\n---\n\n## 本系统说明\n\n本系统用于**本地材料收集、证据审查和报告/PDF生成**，不执行 ERP 审批、付款、过账、路由或提交。\n\n请重新上传文件后，我会立即开始审查流程。",
+  "case_state": {
+    "case_id": "golden_live_20260608_163321_01_case_01_clean_match_real_jpg_FACTU2015020048",
+    "case_type": "invoice_payment_review",
+    "status": "new",
+    "summary": "",
+    "case_profile": {},
+    "requirements": [],
+    "evidence_items": [],
+    "evidence_cards": [],
+    "risk_flags": [],
+    "missing_materials": [],
+    "weak_materials": [],
+    "conflict_materials": [],
+    "satisfied_materials": [],
+    "conversation_summary": "",
+    "next_questions": [],
+    "next_action_hint": "",
+    "reply_brief": ""
+  },
+  "trace": {
+    "run_id": "run_c0056ea51cf2",
+    "case_id": "golden_live_20260608_163321_01_case_01_clean_match_real_jpg_FACTU2015020048",
+    "step_count": 2,
+    "max_steps": 10,
+    "phase": "finalized",
+    "session_compacted": false,
+    "pre_run_context_estimate_chars": 10204,
+    "pre_run_context_limit_chars": 200000,
+    "session_id": "golden_live_20260608_163321_01_case_01_clean_match_real_jpg_FACTU2015020048:main",
+    "turn_id": "turn_001",
+    "feedback_summary": {
+      "total": 9,
+      "ok": 1,
+      "warning": 7,
+      "error": 1,
+      "worst_status": "error"
+    },
+    "feedback": [
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: error; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=final_answer.",
+        "status": "error",
+        "score": 0.1,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "pass",
+            "expected": "tool/read_attachment",
+            "observed": "tool/read_attachment"
+          },
+          {
+            "name": "error_scan",
+            "status": "fail",
+            "observed": 1
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [
+            "attachments/15842711d6_04_vendor_record.md",
+            "attachments/40ceaa8195_03_goods_receipt.md",
+            "attachments/a4c85f7a23_02_purchase_order.md",
+            "attachments/attachment_manifest.json",
+            "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "case_state.json",
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "modified": [],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 11794,
+            "mtime_ns": 1780932803165290200
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 11794,
+            "mtime_ns": 1780932803164289500
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "final_answer",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [
+          "read_attachment failed: RuntimeError: All attachment reads failed: FileNotFoundError: Attachment path does not exist: attachments/dd360da7b0_01_invoice_extract_from_real_source.md; FileNotFoundError: Attachment path does not exist: attachments/a4c85f7a23_02_purchase_order.md; FileNotFoundError: Attachment path does not exist: attachments/40ceaa8195_03_goods_receipt.md; FileNotFoundError: Attachment path does not exist: attachments/15842711d6_04_vendor_record.md; FileNotFoundError: Attachment path does not exist: attachments/d2cbc955a9_05_duplicate_payment_check.md"
+        ],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {
+          "status": "terminal",
+          "error_type": "attachment_missing",
+          "retry_allowed": false,
+          "recommended_action": "final_answer",
+          "blocked_action": "call_tool:read_attachment",
+          "user_message_hint": "附件路径不存在或本轮请求没有声明该附件，请重新上传。"
+        }
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=delegate_agent:evidence_reviewer; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Choose call_tool target=read_attachment with empty input for current-turn files..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "delegate_agent:evidence_reviewer",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "role/evidence_reviewer",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/context_manifest_001_planner.json"
+          ],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 36793,
+            "mtime_ns": 1780932803271839900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 42188,
+            "mtime_ns": 1780932803205296600
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 36793,
+            "mtime_ns": 1780932803271839900
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Choose call_tool target=read_attachment with empty input for current-turn files.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_case_state; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Choose call_tool target=read_attachment with empty input for current-turn files..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_case_state",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_case_state",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 62829,
+            "mtime_ns": 1780932808597524700
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 87211,
+            "mtime_ns": 1780932803312374100
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 62829,
+            "mtime_ns": 1780932808597524700
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Choose call_tool target=read_attachment with empty input for current-turn files.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 92599,
+            "mtime_ns": 1780932817171372900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 142305,
+            "mtime_ns": 1780932808637748600
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 92599,
+            "mtime_ns": 1780932817171372900
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 120272,
+            "mtime_ns": 1780932817262415800
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 193449,
+            "mtime_ns": 1780932817215380200
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 120272,
+            "mtime_ns": 1780932817262415800
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 147676,
+            "mtime_ns": 1780932817356463800
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 244008,
+            "mtime_ns": 1780932817307937500
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 147676,
+            "mtime_ns": 1780932817356463800
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 175084,
+            "mtime_ns": 1780932817454033800
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 294318,
+            "mtime_ns": 1780932817403503900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 175084,
+            "mtime_ns": 1780932817454033800
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 202574,
+            "mtime_ns": 1780932817563601200
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 344631,
+            "mtime_ns": 1780932817509548700
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 202574,
+            "mtime_ns": 1780932817563601200
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 2: ok; action=final_answer; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=-.",
+        "status": "ok",
+        "score": 0.9,
+        "step_count": 2,
+        "action": "final_answer",
+        "quality_checks": [
+          {
+            "name": "final_answer_present",
+            "status": "pass",
+            "observed": "728 chars"
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 258113,
+            "mtime_ns": 1780932826848245300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 395025,
+            "mtime_ns": 1780932817621144000
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 258113,
+            "mtime_ns": 1780932826848245300
+          }
+        ],
+        "recent_observation_count": 0,
+        "next_action_hint": "",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      }
+    ],
+    "observations": [
+      {
+        "kind": "tool",
+        "name": "read_attachment",
+        "summary": "read_attachment failed: RuntimeError: All attachment reads failed: FileNotFoundError: Attachment path does not exist: attachments/dd360da7b0_01_invoice_extract_from_real_source.md; FileNotFoundError: Attachment path does not exist: attachments/a4c85f7a23_02_purchase_order.md; FileNotFoundError: Attachment path does not exist: attachments/40ceaa8195_03_goods_receipt.md; FileNotFoundError: Attachment path does not exist: attachments/15842711d6_04_vendor_record.md; FileNotFoundError: Attachment path does not exist: attachments/d2cbc955a9_05_duplicate_payment_check.md",
+        "key_facts": [],
+        "risks": [
+          "RuntimeError: All attachment reads failed: FileNotFoundError: Attachment path does not exist: attachments/dd360da7b0_01_invoice_extract_from_real_source.md; FileNotFoundError: Attachment path does not exist: attachments/a4c85f7a23_02_purchase_order.md; FileNotFoundError: Attachment path does not exist: attachments/40ceaa8195_03_goods_receipt.md; FileNotFoundError: Attachment path does not exist: attachments/15842711d6_04_vendor_record.md; FileNotFoundError: Attachment path does not exist: attachments/d2cbc955a9_05_duplicate_payment_check.md"
+        ],
+        "missing_items": [],
+        "next_action_hint": "final_answer",
+        "must_preserve_refs": [],
+        "error": {
+          "type": "RuntimeError",
+          "message": "All attachment reads failed: FileNotFoundError: Attachment path does not exist: attachments/dd360da7b0_01_invoice_extract_from_real_source.md; FileNotFoundError: Attachment path does not exist: attachments/a4c85f7a23_02_purchase_order.md; FileNotFoundError: Attachment path does not exist: attachments/40ceaa8195_03_goods_receipt.md; FileNotFoundError: Attachment path does not exist: attachments/15842711d6_04_vendor_record.md; FileNotFoundError: Attachment path does not exist: attachments/d2cbc955a9_05_duplicate_payment_check.md"
+        },
+        "runtime_feedback": {
+          "status": "terminal",
+          "error_type": "attachment_missing",
+          "retry_allowed": false,
+          "recommended_action": "final_answer",
+          "blocked_action": "call_tool:read_attachment",
+          "user_message_hint": "附件路径不存在或本轮请求没有声明该附件，请重新上传。"
+        }
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: error; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=final_answer.",
+        "status": "error",
+        "score": 0.1,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "pass",
+            "expected": "tool/read_attachment",
+            "observed": "tool/read_attachment"
+          },
+          {
+            "name": "error_scan",
+            "status": "fail",
+            "observed": 1
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [
+            "attachments/15842711d6_04_vendor_record.md",
+            "attachments/40ceaa8195_03_goods_receipt.md",
+            "attachments/a4c85f7a23_02_purchase_order.md",
+            "attachments/attachment_manifest.json",
+            "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "case_state.json",
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "modified": [],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 11794,
+            "mtime_ns": 1780932803165290200
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 11794,
+            "mtime_ns": 1780932803164289500
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "final_answer",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [
+          "read_attachment failed: RuntimeError: All attachment reads failed: FileNotFoundError: Attachment path does not exist: attachments/dd360da7b0_01_invoice_extract_from_real_source.md; FileNotFoundError: Attachment path does not exist: attachments/a4c85f7a23_02_purchase_order.md; FileNotFoundError: Attachment path does not exist: attachments/40ceaa8195_03_goods_receipt.md; FileNotFoundError: Attachment path does not exist: attachments/15842711d6_04_vendor_record.md; FileNotFoundError: Attachment path does not exist: attachments/d2cbc955a9_05_duplicate_payment_check.md"
+        ],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {
+          "status": "terminal",
+          "error_type": "attachment_missing",
+          "retry_allowed": false,
+          "recommended_action": "final_answer",
+          "blocked_action": "call_tool:read_attachment",
+          "user_message_hint": "附件路径不存在或本轮请求没有声明该附件，请重新上传。"
+        }
+      },
+      {
+        "kind": "policy",
+        "name": "attachment_unread",
+        "summary": "The current turn includes attachments. Read them before reviewing or answering their content.",
+        "key_facts": [
+          "Choose call_tool target=read_attachment with empty input for current-turn files."
+        ],
+        "risks": [],
+        "missing_items": [],
+        "next_action_hint": "Choose call_tool target=read_attachment with empty input for current-turn files.",
+        "must_preserve_refs": [],
+        "policy_feedback": {
+          "allowed": false,
+          "error_type": "attachment_unread",
+          "feedback_to_supervisor": "The current turn includes attachments. Read them before reviewing or answering their content.",
+          "recommended_constraints": [
+            "Choose call_tool target=read_attachment with empty input for current-turn files."
+          ],
+          "risk_level": "read",
+          "requires_approval": false,
+          "approval_reason": "",
+          "approval_payload": {}
+        }
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=delegate_agent:evidence_reviewer; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Choose call_tool target=read_attachment with empty input for current-turn files..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "delegate_agent:evidence_reviewer",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "role/evidence_reviewer",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/context_manifest_001_planner.json"
+          ],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 36793,
+            "mtime_ns": 1780932803271839900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 42188,
+            "mtime_ns": 1780932803205296600
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 36793,
+            "mtime_ns": 1780932803271839900
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Choose call_tool target=read_attachment with empty input for current-turn files.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "policy",
+        "name": "attachment_unread",
+        "summary": "The current turn includes attachments. Read them before reviewing or answering their content.",
+        "key_facts": [
+          "Choose call_tool target=read_attachment with empty input for current-turn files."
+        ],
+        "risks": [],
+        "missing_items": [],
+        "next_action_hint": "Choose call_tool target=read_attachment with empty input for current-turn files.",
+        "must_preserve_refs": [],
+        "policy_feedback": {
+          "allowed": false,
+          "error_type": "attachment_unread",
+          "feedback_to_supervisor": "The current turn includes attachments. Read them before reviewing or answering their content.",
+          "recommended_constraints": [
+            "Choose call_tool target=read_attachment with empty input for current-turn files."
+          ],
+          "risk_level": "read",
+          "requires_approval": false,
+          "approval_reason": "",
+          "approval_payload": {}
+        }
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_case_state; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Choose call_tool target=read_attachment with empty input for current-turn files..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_case_state",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_case_state",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 62829,
+            "mtime_ns": 1780932808597524700
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 87211,
+            "mtime_ns": 1780932803312374100
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 62829,
+            "mtime_ns": 1780932808597524700
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Choose call_tool target=read_attachment with empty input for current-turn files.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "policy",
+        "name": "attachment_missing",
+        "summary": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+        "key_facts": [
+          "Do not repeat call_tool:read_attachment. Choose final_answer."
+        ],
+        "risks": [],
+        "missing_items": [],
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "must_preserve_refs": [],
+        "policy_feedback": {
+          "allowed": false,
+          "error_type": "attachment_missing",
+          "feedback_to_supervisor": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+          "recommended_constraints": [
+            "Do not repeat call_tool:read_attachment. Choose final_answer."
+          ],
+          "risk_level": "read",
+          "requires_approval": false,
+          "approval_reason": "",
+          "approval_payload": {}
+        }
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 92599,
+            "mtime_ns": 1780932817171372900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 142305,
+            "mtime_ns": 1780932808637748600
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 92599,
+            "mtime_ns": 1780932817171372900
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "policy",
+        "name": "attachment_missing",
+        "summary": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+        "key_facts": [
+          "Do not repeat call_tool:read_attachment. Choose final_answer."
+        ],
+        "risks": [],
+        "missing_items": [],
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "must_preserve_refs": [],
+        "policy_feedback": {
+          "allowed": false,
+          "error_type": "attachment_missing",
+          "feedback_to_supervisor": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+          "recommended_constraints": [
+            "Do not repeat call_tool:read_attachment. Choose final_answer."
+          ],
+          "risk_level": "read",
+          "requires_approval": false,
+          "approval_reason": "",
+          "approval_payload": {}
+        }
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 120272,
+            "mtime_ns": 1780932817262415800
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 193449,
+            "mtime_ns": 1780932817215380200
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 120272,
+            "mtime_ns": 1780932817262415800
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "policy",
+        "name": "attachment_missing",
+        "summary": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+        "key_facts": [
+          "Do not repeat call_tool:read_attachment. Choose final_answer."
+        ],
+        "risks": [],
+        "missing_items": [],
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "must_preserve_refs": [],
+        "policy_feedback": {
+          "allowed": false,
+          "error_type": "attachment_missing",
+          "feedback_to_supervisor": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+          "recommended_constraints": [
+            "Do not repeat call_tool:read_attachment. Choose final_answer."
+          ],
+          "risk_level": "read",
+          "requires_approval": false,
+          "approval_reason": "",
+          "approval_payload": {}
+        }
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 147676,
+            "mtime_ns": 1780932817356463800
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 244008,
+            "mtime_ns": 1780932817307937500
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 147676,
+            "mtime_ns": 1780932817356463800
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "policy",
+        "name": "attachment_missing",
+        "summary": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+        "key_facts": [
+          "Do not repeat call_tool:read_attachment. Choose final_answer."
+        ],
+        "risks": [],
+        "missing_items": [],
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "must_preserve_refs": [],
+        "policy_feedback": {
+          "allowed": false,
+          "error_type": "attachment_missing",
+          "feedback_to_supervisor": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+          "recommended_constraints": [
+            "Do not repeat call_tool:read_attachment. Choose final_answer."
+          ],
+          "risk_level": "read",
+          "requires_approval": false,
+          "approval_reason": "",
+          "approval_payload": {}
+        }
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 175084,
+            "mtime_ns": 1780932817454033800
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 294318,
+            "mtime_ns": 1780932817403503900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 175084,
+            "mtime_ns": 1780932817454033800
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "policy",
+        "name": "attachment_missing",
+        "summary": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+        "key_facts": [
+          "Do not repeat call_tool:read_attachment. Choose final_answer."
+        ],
+        "risks": [],
+        "missing_items": [],
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "must_preserve_refs": [],
+        "policy_feedback": {
+          "allowed": false,
+          "error_type": "attachment_missing",
+          "feedback_to_supervisor": "附件路径不存在或本轮请求没有声明该附件，请重新上传。",
+          "recommended_constraints": [
+            "Do not repeat call_tool:read_attachment. Choose final_answer."
+          ],
+          "risk_level": "read",
+          "requires_approval": false,
+          "approval_reason": "",
+          "approval_payload": {}
+        }
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 1: warning; action=call_tool:read_attachment; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=Do not repeat call_tool:read_attachment. Choose final_answer..",
+        "status": "warning",
+        "score": 0.45,
+        "step_count": 1,
+        "action": "call_tool:read_attachment",
+        "quality_checks": [
+          {
+            "name": "expected_observation",
+            "status": "fail",
+            "expected": "tool/read_attachment",
+            "observed": ""
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 202574,
+            "mtime_ns": 1780932817563601200
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 344631,
+            "mtime_ns": 1780932817509548700
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 202574,
+            "mtime_ns": 1780932817563601200
+          }
+        ],
+        "recent_observation_count": 1,
+        "next_action_hint": "Do not repeat call_tool:read_attachment. Choose final_answer.",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      },
+      {
+        "kind": "feedback",
+        "name": "step_result",
+        "summary": "Feedback after step 2: ok; action=final_answer; case=new evidence=0 missing=0 weak=0 conflict=0 risks=0; next=-.",
+        "status": "ok",
+        "score": 0.9,
+        "step_count": 2,
+        "action": "final_answer",
+        "quality_checks": [
+          {
+            "name": "final_answer_present",
+            "status": "pass",
+            "observed": "728 chars"
+          },
+          {
+            "name": "error_scan",
+            "status": "pass",
+            "observed": 0
+          }
+        ],
+        "case_snapshot": {
+          "status": "new",
+          "evidence_count": 0,
+          "missing_count": 0,
+          "weak_count": 0,
+          "conflict_count": 0,
+          "satisfied_count": 0,
+          "missing_materials": [],
+          "weak_materials": [],
+          "conflict_materials": [],
+          "satisfied_materials": [],
+          "risk_count": 0,
+          "requirements": []
+        },
+        "file_changes": {
+          "added": [],
+          "modified": [
+            "traces/events.jsonl",
+            "traces/run_c0056ea51cf2.json",
+            "traces/run_c0056ea51cf2/events.jsonl"
+          ],
+          "removed": []
+        },
+        "workspace_files": [
+          {
+            "path": "attachments/15842711d6_04_vendor_record.md",
+            "bytes": 459,
+            "mtime_ns": 1780932801981418600
+          },
+          {
+            "path": "attachments/40ceaa8195_03_goods_receipt.md",
+            "bytes": 434,
+            "mtime_ns": 1780932801978421200
+          },
+          {
+            "path": "attachments/a4c85f7a23_02_purchase_order.md",
+            "bytes": 484,
+            "mtime_ns": 1780932801974422800
+          },
+          {
+            "path": "attachments/attachment_manifest.json",
+            "bytes": 10577,
+            "mtime_ns": 1780932803098714800
+          },
+          {
+            "path": "attachments/d2cbc955a9_05_duplicate_payment_check.md",
+            "bytes": 581,
+            "mtime_ns": 1780932801987926700
+          },
+          {
+            "path": "attachments/dd360da7b0_01_invoice_extract_from_real_source.md",
+            "bytes": 1506,
+            "mtime_ns": 1780932801968409300
+          },
+          {
+            "path": "case_state.json",
+            "bytes": 510,
+            "mtime_ns": 1780932803039191700
+          },
+          {
+            "path": "traces/events.jsonl",
+            "bytes": 258113,
+            "mtime_ns": 1780932826848245300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2.json",
+            "bytes": 395025,
+            "mtime_ns": 1780932817621144000
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_000_planner.json",
+            "bytes": 6713,
+            "mtime_ns": 1780932803072716900
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/context_manifest_001_planner.json",
+            "bytes": 17777,
+            "mtime_ns": 1780932803211297300
+          },
+          {
+            "path": "traces/run_c0056ea51cf2/events.jsonl",
+            "bytes": 258113,
+            "mtime_ns": 1780932826848245300
+          }
+        ],
+        "recent_observation_count": 0,
+        "next_action_hint": "",
+        "key_facts": [
+          "case_status=new",
+          "evidence_count=0",
+          "missing_count=0",
+          "weak_count=0",
+          "conflict_count=0",
+          "risk_count=0"
+        ],
+        "risks": [],
+        "missing_items": [],
+        "must_preserve_refs": [],
+        "runtime_feedback": {}
+      }
+    ],
+    "interrupts": [],
+    "supervisor_decisions": [
+      {
+        "action": "call_tool",
+        "target": "read_attachment",
+        "input": {},
+        "short_plan": [],
+        "plan_progress": "",
+        "reason": "sdk_tool:read_attachment",
+        "confidence": 0.5,
+        "supervisor_model_call_event_id": ""
+      },
+      {
+        "action": "final_answer",
+        "target": "",
+        "input": {},
+        "final_answer": "根据系统检查，当前附件路径不存在。从附件清单中可以看到以下5个文件均显示为 **error** 状态：\n\n| 文件名 | 状态 | 原因 |\n|--------|------|------|\n| 01_invoice_extract_from_real_source.md | error | FileNotFoundError |\n| 02_purchase_order.md | error | FileNotFoundError |\n| 03_goods_receipt.md | error | FileNotFoundError |\n| 04_vendor_record.md | error | FileNotFoundError |\n| 05_duplicate_payment_check.md | error | FileNotFoundError |\n\n---\n\n## 问题说明\n\n您上传的5个证据文件（发票、采购订单、收货单、供应商记录、重复付款检查）在本轮请求中**路径不存在或未被正确声明**。\n\n---\n\n## 建议操作\n\n请**重新上传这5个文件**，我将为您：\n\n1. **提取并审查**所有证据内容\n2. **检查材料完整性**（invoice、PO、GRN、vendor、duplicate payment）\n3. **评估是否满足** `ready_for_report` 条件\n4. **生成中文审查报告** 和 **PDF文件**\n\n---\n\n## 本系统说明\n\n本系统用于**本地材料收集、证据审查和报告/PDF生成**，不执行 ERP 审批、付款、过账、路由或提交。\n\n请重新上传文件后，我会立即开始审查流程。",
+        "short_plan": [],
+        "plan_progress": "",
+        "reason": "case_manager final output",
+        "confidence": 0.7,
+        "supervisor_model_call_event_id": "run_c0056ea51cf2_evt_000044"
+      }
+    ],
+    "planner_actions": [
+      {
+        "action": "call_tool",
+        "target": "read_attachment",
+        "input": {},
+        "short_plan": [],
+        "plan_progress": "",
+        "reason": "sdk_tool:read_attachment",
+        "confidence": 0.5,
+        "supervisor_model_call_event_id": ""
+      },
+      {
+        "action": "final_answer",
+        "target": "",
+        "input": {},
+        "final_answer": "根据系统检查，当前附件路径不存在。从附件清单中可以看到以下5个文件均显示为 **error** 状态：\n\n| 文件名 | 状态 | 原因 |\n|--------|------|------|\n| 01_invoice_extract_from_real_source.md | error | FileNotFoundError |\n| 02_purchase_order.md | error | FileNotFoundError |\n| 03_goods_receipt.md | error | FileNotFoundError |\n| 04_vendor_record.md | error | FileNotFoundError |\n| 05_duplicate_payment_check.md | error | FileNotFoundError |\n\n---\n\n## 问题说明\n\n您上传的5个证据文件（发票、采购订单、收货单、供应商记录、重复付款检查）在本轮请求中**路径不存在或未被正确声明**。\n\n---\n\n## 建议操作\n\n请**重新上传这5个文件**，我将为您：\n\n1. **提取并审查**所有证据内容\n2. **检查材料完整性**（invoice、PO、GRN、vendor、duplicate payment）\n3. **评估是否满足** `ready_for_report` 条件\n4. **生成中文审查报告** 和 **PDF文件**\n\n---\n\n## 本系统说明\n\n本系统用于**本地材料收集、证据审查和报告/PDF生成**，不执行 ERP 审批、付款、过账、路由或提交。\n\n请重新上传文件后，我会立即开始审查流程。",
+        "short_plan": [],
+        "plan_progress": "",
+        "reason": "case_manager final output",
+        "confidence": 0.7,
+        "supervisor_model_call_event_id": "run_c0056ea51cf2_evt_000044"
+      }
+    ],
+    "model_calls": [
+      {
+        "role": "planner",
+        "model": "kimi-k2.5",
+        "prompt_version": "case_manager_agents_sdk_v1",
+        "runtime": "openai_agents_sdk",
+        "input_preview": "{\"user_message\": \"????????????????????????????/???????????????? ready_for_report????????????????/PDF??????????\", \"context_pack\": {\"case_brief\": \"case_id=golden_live_20260608_163321_01_case_01_clean_match_real_jpg_FACTU2015020048; status=new; profile={}; requirements=; evidence_count=0; missing=; weak=; conflict=; satisfied=; risk_count=0; next_action_hint=\", \"case_profile\": {}, \"case_next_action_hint\": \"\", \"reply_brief\": \"\", \"evidence_cards\": [], \"session_summary\": \"\", \"recent_turns\": [{\"turn_id\": \"turn_001\", \"user_summary\": \"????????????????????????????/???????????????? ready_for_report????????????????/PDF??????????\", \"assistant_summary\": \"\", \"attachments\": [{\"name\": \"01_invoice_extract_from_real_source.md\", \"path\": \"attachments/dd360da7b0_01_invoice_extract_from_real_source.md\"}, {\"name\": \"02_purchase_order.md\", \"path\": \"attachments/a4c85f7a23_02_purchase_order.md\"}, {\"name\": \"03_goods_receipt.md\", \"path\": \"attachments/40ceaa8195_03_goods_receipt.md\"}, {\"name\": \"04_vendor_record.md\", \"path\": \"attachments/15842711d6_04_vendor_record.md\"}, {\"name\": \"05_duplicate_payment_check.md\", \"path\": \"attachments/d2cbc955a9_05_duplicate_payment_check.md\"}], \"run_ids\": [\"run_c0056ea51cf2\"]}], \"memory_hints\": [], \"current_goal\": \"????????????????????????????/???????????????? ready_for_report????????????????/PDF??????????\", \"current_plan\": [], \"attachments\": [{\"name\": \"01_invoice_extract_from",
+        "output_preview": "{\"final_output_preview\": \"根据系统检查，当前附件路径不存在。从附件清单中可以看到以下5个文件均显示为 **error** 状态：\\n\\n| 文件名 | 状态 | 原因 |\\n|--------|------|------|\\n| 01_invoice_extract_from_real_source.md | error | FileNotFoundError |\\n| 02_purchase_order.md | error | FileNotFoundError |\\n| 03_goods_receipt.md | error | FileNotFoundError |\\n| 04_vendor_record.md | error | FileNotFoundError |\\n| 05_duplicate_payment_check.md | error | FileNotFoundError |\\n\\n---\\n\\n## 问题说明\\n\\n您上传的5个证据文件（发票、采购订单、收货单、供应商记录、重复付款检查）在本轮请求中**路径不存在或未被正确声明**。\\n\\n---\\n\\n## 建议操作\\n\\n请**重新上传这5个文件**，我将为您：\\n\\n1. **提取并审查**所有证据内容\\n2. **检查材料完整性**（invoice、PO、GRN、vendor、duplicate payment）\\n3. **评估是否满足** `ready_for_report` 条件\\n4. **生成中文审查报告** 和 **PDF文件**\\n\\n---\\n\\n## 本系统说明\\n\\n本系统用于**本地材料收集、证据审查和报告/PDF生成**，不执行 ERP 审批、付款、过账、路由或提交。\\n\\n请重新上传文件后，我会立即开始审查流程。\", \"new_item_types\": [\"ToolCallItem\", \"ToolCallOutputItem\", \"ToolCallItem\", \"ToolCallItem\", \"ToolCallItem\", \"ToolCallItem\", \"ToolCallItem\", \"ToolCallOutputItem\", \"ToolCallOutputItem\", \"ToolCallOutputItem\", \"ToolCallOutputItem\", \"ToolCallOutputItem\", \"MessageOutputItem\"], \"raw_response_count\": 3, \"interruption_count\": 0, \"last_response_id\": \"\", \"last_agent\": \"case_manager\"}",
+        "schema_validation_error": "",
+        "schema_retry_attempted": false,
+        "retry_of": "",
+        "error": "",
+        "content_chars": 1162,
+        "recovered_by": ""
+      }
+    ],
+    "tool_calls": [
+      {
+        "tool": "read_attachment",
+        "input": {},
+        "result_preview": "{}",
+        "error": "RuntimeError: All attachment reads failed: FileNotFoundError: Attachment path does not exist: attachments/dd360da7b0_01_invoice_extract_from_real_source.md; FileNotFoundError: Attachment path does not exist: attachments/a4c85f7a23_02_purchase_order.md; FileNotFoundError: Attachment path does not exist: attachments/40ceaa8195_03_goods_receipt.md; FileNotFoundError: Attachment path does not exist: attachments/15842711d6_04_vendor_record.md; FileNotFoundError: Attachment path does not exist: attachments/d2cbc955a9_05_duplicate_payment_check.md",
+        "capability": {
+          "side_effect": "file_extract",
+          "idempotency": "side_effectful",
+          "context_exposure": "artifact_ref",
+          "error_taxonomy": [
+            "attachment_missing",
+            "unsupported_attachment_type",
+            "attachment_decode_error",
+            "document_open_error",
+            "ocr_unavailable",
+            "unsafe_workspace_path"
+          ],
+          "precondition": "attachment must be declared on this turn or resolvable from the case manifest",
+          "postcondition": "stores original refs, extraction artifacts, previews, and manifest rows",
+          "risk_level": "extract",
+          "approval_mode": "never",
+          "internal_only": false,
+          "tool_protocol": "tool_catalog_v1"
+        },
+        "ts": "2026-06-08T15:33:23.143774+00:00"
+      }
+    ],
+    "role_calls": [],
+    "plan_progress": [],
+    "observability": {
+      "langfuse": {
+        "status": "enabled",
+        "trace_id": "63c02c438cc8311433c8ff0302dcb1e8",
+        "trace_url": "https://cloud.langfuse.com/project/cmpuj6mtt0737ad0eqi8pkdxu/traces/63c02c438cc8311433c8ff0302dcb1e8",
+        "root_observation_id": "36c350af83732078",
+        "warning": ""
+      },
+      "timings": [
+        {
+          "name": "tool:read_attachment",
+          "duration_ms": 131,
+          "ts": 1780932803.2052968
+        },
+        {
+          "name": "tool:evidence_reviewer",
+          "duration_ms": 77,
+          "ts": 1780932803.312374
+        },
+        {
+          "name": "tool:read_case_state",
+          "duration_ms": 90,
+          "ts": 1780932808.6377485
+        },
+        {
+          "name": "tool:read_attachment",
+          "duration_ms": 175,
+          "ts": 1780932817.2153802
+        },
+        {
+          "name": "tool:read_attachment",
+          "duration_ms": 92,
+          "ts": 1780932817.3089383
+        },
+        {
+          "name": "tool:read_attachment",
+          "duration_ms": 94,
+          "ts": 1780932817.403504
+        },
+        {
+          "name": "tool:read_attachment",
+          "duration_ms": 106,
+          "ts": 1780932817.509549
+        },
+        {
+          "name": "tool:read_attachment",
+          "duration_ms": 111,
+          "ts": 1780932817.621144
+        }
+      ]
+    },
+    "trace_checkpoints": [
+      {
+        "checkpoint_id": "trace_ckpt_001",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_002",
+        "step_count": 1,
+        "supervisor_decision": "delegate_agent"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_003",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_004",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_005",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_006",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_007",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_008",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_009",
+        "step_count": 2,
+        "supervisor_decision": "final_answer"
+      }
+    ],
+    "checkpoints": [
+      {
+        "checkpoint_id": "trace_ckpt_001",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_002",
+        "step_count": 1,
+        "supervisor_decision": "delegate_agent"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_003",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_004",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_005",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_006",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_007",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_008",
+        "step_count": 1,
+        "supervisor_decision": "call_tool"
+      },
+      {
+        "checkpoint_id": "trace_ckpt_009",
+        "step_count": 2,
+        "supervisor_decision": "final_answer"
+      }
+    ]
+  }
+}

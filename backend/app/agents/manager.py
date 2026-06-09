@@ -4,6 +4,7 @@ from typing import Any
 
 from agents import Agent, FunctionTool, ModelSettings
 
+from app.agents.thinking import manager_tool_loop_thinking_type, model_extra_body_for_thinking, temperature_for_thinking
 from app.config import Settings
 from app.prompt_loader import load_system_prompt
 
@@ -29,14 +30,14 @@ class CaseManagerAgentFactory:
         )
 
     def _temperature(self) -> float:
-        model = self.settings.llm_model.lower()
-        if model == "kimi-k2.5" and (self.settings.llm_thinking_type or "").lower() == "disabled":
-            return 0.6
-        if model.startswith("kimi-k2"):
-            return 1.0
-        return self.settings.llm_temperature
+        return temperature_for_thinking(
+            self.settings.llm_model,
+            self.settings.llm_temperature,
+            manager_tool_loop_thinking_type(self.settings.llm_model, self.settings.llm_thinking_type),
+        )
 
     def _extra_body(self) -> dict[str, Any] | None:
-        if self.settings.llm_model.lower() == "kimi-k2.5":
-            return {"thinking": {"type": str(self.settings.llm_thinking_type or "disabled")}}
-        return None
+        return model_extra_body_for_thinking(
+            self.settings.llm_model,
+            manager_tool_loop_thinking_type(self.settings.llm_model, self.settings.llm_thinking_type),
+        )

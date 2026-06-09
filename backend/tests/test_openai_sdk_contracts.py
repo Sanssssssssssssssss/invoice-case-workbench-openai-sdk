@@ -79,3 +79,13 @@ def test_frontend_exposes_approval_resume_client() -> None:
     assert "/approval" in api_text
     assert "pendingApprovals" in app_text
     assert "ApprovalPanel" in chat_text
+
+
+def test_streaming_runtime_uses_push_sse_and_threaded_tools() -> None:
+    streaming_text = _read(BACKEND_APP / "runtime" / "streaming.py")
+    api_text = _read(BACKEND_APP / "api" / "agent_runs.py")
+    runner_text = _read(BACKEND_APP / "runtime" / "turn_runner.py")
+    assert "async def subscribe" in streaming_text
+    assert "await asyncio.sleep(0.1)" not in api_text
+    assert "asyncio.to_thread(call_tool)" in runner_text
+    assert "threading.RLock" in runner_text

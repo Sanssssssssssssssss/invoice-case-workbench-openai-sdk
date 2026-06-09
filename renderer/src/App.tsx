@@ -3,10 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api, createEventSource } from '@/lib/api'
 import { approvalInterruptsFromEvents, approvalInterruptsFromTrace } from '@/lib/approvals'
-import { createOptimisticAssistantMessage, createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic } from '@/lib/chat'
+import { createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic } from '@/lib/chat'
 import { parseAgentRunStreamMessage, parseLiveStatusMessage, parseTraceEventMessage } from '@/lib/eventStream'
 import { mergeEvents } from '@/lib/trace'
-import type { AgentRunStreamEvent, AgentTurnResponse, ApprovalInterrupt, AttachmentUpload, ConversationItem, LiveStatus, TraceEvent } from '@/types'
+import type { AgentRunStreamEvent, AgentTurnResponse, ApprovalInterrupt, ArtifactItem, AttachmentUpload, ConversationItem, LiveStatus, TraceEvent } from '@/types'
 import { useUiStore } from '@/store/uiStore'
 import { TitleBar } from '@/components/TitleBar'
 import { CaseRail } from '@/components/CaseRail'
@@ -142,7 +142,8 @@ export default function App() {
       }
       source = eventSource
       source.addEventListener('live_status', (event) => {
-        setLiveStatus(parseLiveStatusMessage((event as MessageEvent).data))
+        const status = parseLiveStatusMessage((event as MessageEvent).data)
+        setLiveStatus((current) => mergeLiveStatusFromServer(status, current))
       })
     })
 
@@ -161,6 +162,10 @@ export default function App() {
   const visibleMessages = useMemo(
     () => mergeConversationWithOptimistic(conversationQuery.data ?? [], optimisticMessages),
     [conversationQuery.data, optimisticMessages]
+  )
+  const reportArtifacts = useMemo(
+    () => latestReportArtifacts(artifactsQuery.data ?? []),
+    [artifactsQuery.data]
   )
 
   useEffect(() => {
@@ -214,17 +219,24 @@ export default function App() {
     setSelectedCaseId(caseId)
   }
 
-  const refreshCaseData = async (caseId: string, runId = '') => {
+  const refreshCaseData = async (caseId: string, runId = '', options: { deferSecondary?: boolean } = {}) => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['cases'] }),
       queryClient.invalidateQueries({ queryKey: ['case', caseId] }),
-      queryClient.invalidateQueries({ queryKey: ['conversation', caseId] }),
+      queryClient.invalidateQueries({ queryKey: ['conversation', caseId] })
+    ])
+    const secondaryRefresh = Promise.all([
       queryClient.invalidateQueries({ queryKey: ['runs', caseId] }),
       queryClient.invalidateQueries({ queryKey: ['liveStatus', caseId] }),
       queryClient.invalidateQueries({ queryKey: ['artifacts', caseId] }),
       queryClient.invalidateQueries({ queryKey: ['evidence', caseId] }),
       runId ? queryClient.invalidateQueries({ queryKey: ['runEvents', caseId, runId] }) : Promise.resolve()
     ])
+    if (options.deferSecondary) {
+      void secondaryRefresh.catch(() => undefined)
+      return
+    }
+    await secondaryRefresh
   }
 
   const applyResponse = async (response: AgentTurnResponse) => {
@@ -237,19 +249,7 @@ export default function App() {
     if (response.case_id !== selectedCaseId) {
       setSelectedCaseId(response.case_id)
     }
-    await refreshCaseData(response.case_id, runId)
-  }
-
-  const upsertStreamingAssistant = (runId: string, content: string) => {
-    if (!content) return
-    setOptimisticMessages((current) => {
-      const id = `stream:${runId}`
-      const existing = current.findIndex((item) => item.metadata?.client_id === id)
-      if (existing >= 0) {
-        return current.map((item, index) => (index === existing ? { ...item, content } : item))
-      }
-      return [...current, createOptimisticAssistantMessage(content, id)]
-    })
+    await refreshCaseData(response.case_id, runId, { deferSecondary: true })
   }
 
   const updateFromRunStreamEvent = (event: AgentRunStreamEvent) => {
@@ -258,7 +258,7 @@ export default function App() {
       selectedRunIdRef.current = event.run_id
       setSelectedRunId(event.run_id)
     }
-    setLiveStatus(liveStatusFromRunStream(event))
+    setLiveStatus((current) => liveStatusFromRunStream(event, current))
   }
 
   const waitForRunStream = async (caseId: string, runId: string, streamUrl: string) => {
@@ -266,16 +266,18 @@ export default function App() {
     const path = `${streamUrl}${streamUrl.includes('?') ? '&' : '?'}after_seq=${afterSeq}`
     return new Promise<'final' | 'approval'>((resolve, reject) => {
       let source: EventSource | null = null
-      let assistantText = ''
       let settled = false
+      let terminalReceived = false
       const finish = (result: 'final' | 'approval') => {
         if (settled) return
+        terminalReceived = true
         settled = true
         source?.close()
         resolve(result)
       }
       const fail = (error: unknown) => {
         if (settled) return
+        terminalReceived = true
         settled = true
         source?.close()
         reject(error)
@@ -283,24 +285,24 @@ export default function App() {
       const handle = async (raw: MessageEvent) => {
         try {
           const event = parseAgentRunStreamMessage(raw.data)
+          if (!event) return
           updateFromRunStreamEvent(event)
           if (event.kind === 'assistant_delta') {
-            const delta = stringValue(event.payload.delta)
-            if (delta) {
-              assistantText += delta
-              upsertStreamingAssistant(runId, assistantText)
-            }
+            return
           } else if (event.kind === 'approval_required') {
+            terminalReceived = true
             const approvals = approvalsFromRunStream(event, caseId, runId)
             setPendingApprovals(approvals)
-            await refreshCaseData(caseId, runId)
+            await refreshCaseData(caseId, runId, { deferSecondary: true })
             finish('approval')
           } else if (event.kind === 'final') {
+            terminalReceived = true
             const response = agentTurnResponseFromPayload(event.payload)
             if (!response) throw new Error('Streaming final event did not include a valid response.')
             await applyResponse(response)
             finish('final')
           } else if (event.kind === 'error') {
+            terminalReceived = true
             fail(new Error(stringValue(event.payload.message) || event.summary || 'Streaming run failed.'))
           }
         } catch (error) {
@@ -314,7 +316,8 @@ export default function App() {
             source.addEventListener(kind, (event) => void handle(event as MessageEvent))
           }
           source.onerror = () => {
-            if (!settled) fail(new Error('Streaming connection failed.'))
+            if (settled || terminalReceived) return
+            fail(new Error('Streaming connection failed.'))
           }
         })
         .catch(fail)
@@ -406,8 +409,10 @@ export default function App() {
         <PanelResizeHandle className="resize-handle" />
         <Panel minSize={33} defaultSize={41}>
           <CaseChat
+            caseId={caseQuery.data?.case_id ?? selectedCaseId}
             caseState={caseQuery.data}
             messages={visibleMessages}
+            reportArtifacts={reportArtifacts}
             liveEvents={liveEvents}
             liveStatus={liveStatus}
             running={running}
@@ -447,6 +452,7 @@ const STREAM_EVENT_KINDS = [
   'run_started',
   'context_loaded',
   'model_started',
+  'model_thinking',
   'assistant_delta',
   'tool_started',
   'tool_finished',
@@ -456,30 +462,113 @@ const STREAM_EVENT_KINDS = [
   'error'
 ]
 
-function liveStatusFromRunStream(event: AgentRunStreamEvent): LiveStatus {
+function liveStatusFromRunStream(event: AgentRunStreamEvent, current: LiveStatus | null): LiveStatus | null {
+  if (event.kind === 'assistant_delta') {
+    return current
+  }
   const tool = stringValue(event.payload.tool)
   const role = stringValue(event.payload.role)
   const label = tool || role || event.kind
   const isDone = event.kind === 'final' || event.kind === 'error' || event.kind === 'approval_required'
+  const thoughtSummary = streamThoughtSummary(event, label)
+  const isThinking = event.kind === 'model_thinking'
+  const reasoningText = isThinking ? stringValue(event.payload.reasoning_excerpt || event.payload.thinking || event.payload.thought) : ''
+  const sameRun = current?.runId === event.run_id
+  const latestThinking = reasoningText || (sameRun ? current.latestThinking : '')
+  const latestThoughtSummary = isThinking && reasoningText ? thoughtSummary || current?.latestThoughtSummary || '' : sameRun ? current.latestThoughtSummary || '' : ''
+  const activeStep = isThinking && reasoningText ? thoughtSummary || event.summary || label : sameRun ? current.activeStep || '' : ''
+  const hasCurrentReasoning = sameRun && current?.thinkingSource === 'reasoning_content' && Boolean(current.latestThinking?.trim())
   return {
     runId: event.run_id,
     phase: event.kind,
     activeAgent: isDone ? statusLabelForStream(event.kind) : label,
-    activeRole: role || tool || '',
+    activeRole: isThinking ? role || tool || '' : hasCurrentReasoning ? current?.activeRole || '' : role || tool || '',
     currentStep: numberValue(event.payload.step_count),
     latestSummary: event.summary || statusLabelForStream(event.kind),
-    latestThinking: '',
+    latestThinking,
     latestEventId: event.event_id,
     isRunning: !isDone,
-    thinkingSource: 'run_stream',
-    reasoningChars: 0,
-    reasoningChunks: 0,
-    runStartedAt: '',
+    thinkingSource: isThinking && reasoningText ? 'reasoning_content' : sameRun ? current.thinkingSource : '',
+    reasoningChars: isThinking ? numberValue(event.payload.reasoning_chars) : sameRun ? current.reasoningChars : 0,
+    reasoningChunks: isThinking ? numberValue(event.payload.reasoning_chunks) : sameRun ? current.reasoningChunks : 0,
+    runStartedAt: stringValue(event.payload.run_started_at) || event.ts,
     elapsedMs: numberValue(event.payload.duration_ms),
-    activeStep: event.summary || label,
-    latestThoughtSummary: event.summary || label,
+    activeStep,
+    latestThoughtSummary,
     updatedAt: event.ts
   }
+}
+
+function mergeLiveStatusFromServer(status: LiveStatus, current: LiveStatus | null): LiveStatus {
+  if (
+    current?.runId === status.runId &&
+    current.thinkingSource === 'reasoning_content' &&
+    current.latestThinking?.trim() &&
+    status.thinkingSource !== 'reasoning_content'
+  ) {
+    return {
+      ...status,
+      activeRole: current.activeRole,
+      latestThinking: current.latestThinking,
+      thinkingSource: current.thinkingSource,
+      reasoningChars: current.reasoningChars,
+      reasoningChunks: current.reasoningChunks,
+      activeStep: current.activeStep,
+      latestThoughtSummary: current.latestThoughtSummary
+    }
+  }
+  if (
+    current?.runId === status.runId &&
+    current.thinkingSource === 'reasoning_content' &&
+    status.thinkingSource === 'reasoning_content' &&
+    current.reasoningChars > status.reasoningChars
+  ) {
+    return {
+      ...status,
+      activeRole: current.activeRole,
+      latestThinking: current.latestThinking,
+      reasoningChars: current.reasoningChars,
+      reasoningChunks: current.reasoningChunks,
+      activeStep: current.activeStep,
+      latestThoughtSummary: current.latestThoughtSummary
+    }
+  }
+  return status
+}
+
+function latestReportArtifacts(artifacts: ArtifactItem[]): ArtifactItem[] {
+  return artifacts
+    .filter((item) => item.type === 'report' || item.path.startsWith('reports/'))
+    .slice()
+    .sort((left, right) => Date.parse(right.updated_at || '') - Date.parse(left.updated_at || ''))
+    .slice(0, 6)
+}
+
+function streamThoughtSummary(event: AgentRunStreamEvent, label: string) {
+  if (event.summary && event.summary !== 'delta') return event.summary
+  const role = stringValue(event.payload.role)
+  const tool = stringValue(event.payload.tool)
+  if (event.kind === 'context_loaded') return '正在读取案卷、附件摘要和当前材料状态。'
+  if (event.kind === 'model_started') return `${roleLabel(role || label)}正在判断下一步处理路径。`
+  if (event.kind === 'tool_started') return `正在执行工具：${tool || label}。`
+  if (event.kind === 'tool_finished') return `工具已返回：${tool || label}，正在复核结果。`
+  if (event.kind === 'approval_decision') return '已收到人工确认，正在继续执行。'
+  if (event.kind === 'approval_required') return '需要人工确认后才能继续写入或渲染文件。'
+  if (event.kind === 'final') return '运行已完成，正在刷新聊天和产物。'
+  if (event.kind === 'error') return '运行失败，正在保留已有 trace 供排查。'
+  return label
+}
+
+function roleLabel(role: string) {
+  const labels: Record<string, string> = {
+    planner: '规划器',
+    materials_advisor: '材料顾问',
+    evidence_reviewer: '证据审核员',
+    case_patch_writer: '案卷更新员',
+    report_writer: '报告撰写员',
+    summarizer: '附件摘要器'
+  }
+  return labels[role] ?? (role || 'Agent')
 }
 
 function statusLabelForStream(kind: string) {
@@ -487,7 +576,7 @@ function statusLabelForStream(kind: string) {
     run_started: '运行已开始',
     context_loaded: '上下文已加载',
     model_started: '模型调用中',
-    assistant_delta: '回复生成中',
+    assistant_delta: '',
     tool_started: '工具执行中',
     tool_finished: '工具已完成',
     approval_decision: '审批已提交',

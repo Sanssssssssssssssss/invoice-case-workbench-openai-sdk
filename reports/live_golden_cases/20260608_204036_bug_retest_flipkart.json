@@ -1,0 +1,31 @@
+{
+  "case_id": "bug_retest_flipkart_20260608_204036",
+  "run_id": "run_bug_retest_20260608_204036",
+  "reply": "案例已成功创建并审查完成！以下是当前状态摘要：\n\n## 📋 案例状态\n\n| 项目 | 内容 |\n|------|------|\n| **案例编号** | bug_retest_flipkart_20260608_204036 |\n| **案例类型** | 发票付款审查 |\n| **当前状态** | ✅ 就绪生成报告 (ready_for_report) |\n\n---\n\n## 📄 已审查的发票信息\n\n| 字段 | 内容 | 状态 |\n|------|------|------|\n| **发票编号** | BLR_WFLD20151000982590 | ✅ 已满足 |\n| **供应商** | WS Retail Services Pvt. Ltd. | ✅ 已满足 |\n| **购买方** | Anushrut Singh | ✅ 已满足 |\n| **发票日期** | 2015-10-20 | ✅ 已满足 |\n| **总金额** | 319.00 INR | ✅ 已满足 |\n| **币种/税额** | INR/Rs | ✅ 已满足 |\n| **商品信息** | SanDisk Ultra 16GB MicroSDHC 存储卡 | ✅ 已满足 |\n| **授权签署** | (Authorized Signatory) | ✅ 已满足 |\n\n---\n\n## ✅ 审查结论\n\n- **证据可信度**: 高\n- **已满足要求**: 10项（发票编号、供应商、购买方、发票日期、总金额、币种/税额、来源可追溯性、行项目商品、签章区域、模板匹配）\n- **缺失材料**: 无\n- **弱证据**: 无\n- **冲突**: 无\n- **风险标记**: 无\n\n---\n\n## 📝 下一步\n\n本系统用于本地材料收集、证据审查和报告/PDF生成，不执行 ERP 审批、付款、过账、路由或提交。\n\n如需生成正式审查报告，请告诉我，我可以为您生成 Markdown 报告和 PDF 文件。",
+  "case_status": "ready_for_report",
+  "evidence_count": 1,
+  "satisfied": [
+    "invoice_number",
+    "supplier",
+    "buyer",
+    "invoice_date",
+    "amount_total",
+    "currency_tax",
+    "source_traceability",
+    "line_items_product_title",
+    "signature_or_authorized_signatory",
+    "template_match"
+  ],
+  "missing": [],
+  "weak": [],
+  "conflict": [],
+  "stream_event_count": 13571,
+  "thinking_events": 415,
+  "thinking_roles": [
+    "evidence_reviewer"
+  ],
+  "allow_like_stream_events": 0,
+  "trace_runtime_recovery": [],
+  "trace_role_errors": [],
+  "trace_model_errors": []
+}

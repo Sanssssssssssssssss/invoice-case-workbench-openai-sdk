@@ -75,6 +75,10 @@ class ContextManager:
         artifact_ref = self.artifacts.save(state.case_id, state.run_id, artifact_type, name, result)
         summary = self._summarize(artifact_type=artifact_type, name=name, result=result)
         if artifact_type == "attachment_batch" and isinstance(result, dict):
+            state.observability["latest_attachment_batch_ref"] = artifact_ref
+            refs = state.observability.setdefault("attachment_batch_refs", [])
+            if isinstance(refs, list):
+                refs.append(artifact_ref)
             update_manifest_summaries(
                 self.store,
                 state.case_id,

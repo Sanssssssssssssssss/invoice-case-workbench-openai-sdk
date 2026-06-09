@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -188,7 +189,13 @@ class PolicyGate:
                     constraints=["Choose delegate_agent target=materials_advisor or answer briefly only if no case-specific task is needed."],
                 )
 
-        if not _report_requested(user_message):
+        report_pipeline_started = has_observation(state, kind="role", name="report_writer") or has_observation(
+            state, kind="tool", name="write_case_file"
+        )
+        approved_report_tool = decision.action == "call_tool" and decision.target in {"write_case_file", "render_pdf"} and _last_approval_approved_same_tool(
+            state, decision.target
+        )
+        if not _report_requested(user_message) and not report_pipeline_started and not approved_report_tool:
             if decision.action == "delegate_agent" and decision.target == "report_writer":
                 return block(
                     "report_not_requested",
@@ -546,6 +553,17 @@ def _last_approval_rejected_same_tool(state: Any, tool: str) -> bool:
     return False
 
 
+def _last_approval_approved_same_tool(state: Any, tool: str) -> bool:
+    for observation in reversed(getattr(state, "observations", []) or []):
+        if not isinstance(observation, dict) or observation.get("kind") != "approval":
+            continue
+        facts = " ".join(str(item) for item in observation.get("key_facts") or [])
+        if f"tool={tool}" not in facts:
+            continue
+        return str(observation.get("name") or "").lower() == "approved"
+    return False
+
+
 def _user_explicitly_retries_rejected_tool(message: str) -> bool:
     text = str(message or "").lower()
     return any(
@@ -628,9 +646,29 @@ def _report_requested(message: str) -> bool:
     text = str(message or "").lower()
     if not text:
         return False
-    if any(term in text for term in ("不要生成报告", "不要生成 pdf", "不生成报告", "先不生成", "不用生成")):
+    compact = re.sub(r"\s+", "", text)
+    if any(term in compact for term in ("不要生成报告", "不要生成pdf", "不生成报告", "先不生成", "不用生成")):
         return False
-    return any(term in text for term in ("生成报告", "最终报告", "导出报告", "渲染pdf", "生成 pdf", "pdf report", "report", "final report"))
+    text = text.replace("ready_for_report", "")
+    compact = compact.replace("ready_for_report", "")
+    if re.search(r"(生成|撰写|写入|写|输出|导出|渲染).{0,16}(报告|pdf)", text, flags=re.I):
+        return True
+    return any(
+        term in text
+        for term in (
+            "生成报告",
+            "最终报告",
+            "导出报告",
+            "渲染pdf",
+            "生成 pdf",
+            "pdf report",
+            "final report",
+            "generate report",
+            "write report",
+            "render report",
+            "export report",
+        )
+    ) or any(term in compact for term in ("生成报告", "最终报告", "导出报告", "渲染pdf", "生成pdf", "导出pdf"))
 
 
 def _evidence_pipeline_pending(request: AgentTurnRequest, state: HarnessRunState) -> bool:

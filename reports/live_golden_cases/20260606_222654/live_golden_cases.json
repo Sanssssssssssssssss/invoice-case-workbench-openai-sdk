@@ -1,0 +1,4742 @@
+{
+  "message": "Review these invoice payment materials. Determine whether the evidence package is complete, identify amount, vendor, duplicate-payment, bank-change, and source-traceability risks, and state whether it is ready for report. Do not generate, write, render, or export any report or PDF in this turn.",
+  "generated_at": "2026-06-06T22:52:43",
+  "cases": 6,
+  "passed": 6,
+  "failed": 0,
+  "rows": [
+    {
+      "case": "case_01_clean_match_real_jpg_FACTU2015020048",
+      "case_id": "golden_live_fix_01_01_clean_match_real_jpg_FACTU2015020048_222654",
+      "variant": "clean",
+      "source": "mouadhamri/invoice_dataset",
+      "upload_files": [
+        "01_invoice_extract_from_real_source.md",
+        "02_purchase_order.md",
+        "03_goods_receipt.md",
+        "04_vendor_record.md",
+        "05_duplicate_payment_check.md"
+      ],
+      "accepted_ms": 17.8,
+      "first_event_ms": 282757.2,
+      "first_delta_ms": null,
+      "final_ms": 282757.9,
+      "event_count": 11,
+      "terminal_kind": "final",
+      "error": "",
+      "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：当前材料未显示重复付款命中。\n- 识别到的核心对象：供应商 Marc Demo；金额 82,003.30 EUR。\n- 当前案卷状态：status=ready_for_report；evidence=5；satisfied=invoice, purchase_order, goods_receipt_or_service_acceptance, vendor_identity, duplicate_payment_screen；conflict=-；missing=-；weak=-。\n- 风险标记：limited_bank_detail_visibility_only_last_four_digits_shown\n结论：case_state=ready_for_report；可继续生成本地报告草稿。",
+      "status": "ready_for_report",
+      "requirements": {
+        "invoice": "satisfied",
+        "purchase_order": "satisfied",
+        "goods_receipt_or_service_acceptance": "satisfied",
+        "vendor_identity": "satisfied",
+        "duplicate_payment_screen": "satisfied"
+      },
+      "missing_materials": [],
+      "weak_materials": [],
+      "conflict_materials": [],
+      "satisfied_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity",
+        "duplicate_payment_screen"
+      ],
+      "risk_flags": [
+        "limited_bank_detail_visibility_only_last_four_digits_shown"
+      ],
+      "events": [
+        {
+          "kind": "run_started",
+          "seq": 1,
+          "received_ms": 282757.2,
+          "summary": "Run accepted."
+        },
+        {
+          "kind": "context_loaded",
+          "seq": 2,
+          "received_ms": 282757.2,
+          "summary": "Case context loaded."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 3,
+          "received_ms": 282757.2,
+          "summary": "read_attachment started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 4,
+          "received_ms": 282757.3,
+          "summary": "read_attachment success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 5,
+          "received_ms": 282757.3,
+          "summary": "evidence_reviewer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 6,
+          "received_ms": 282757.3,
+          "summary": "evidence_reviewer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 7,
+          "received_ms": 282757.3,
+          "summary": "case_patch_writer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 8,
+          "received_ms": 282757.3,
+          "summary": "case_patch_writer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 9,
+          "received_ms": 282757.3,
+          "summary": "write_case_patch started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 10,
+          "received_ms": 282757.3,
+          "summary": "write_case_patch success."
+        },
+        {
+          "kind": "final",
+          "seq": 11,
+          "received_ms": 282757.9,
+          "summary": "Run completed."
+        }
+      ]
+    },
+    {
+      "case": "case_02_amount_conflict_real_jpg_FACTU2015040047",
+      "case_id": "golden_live_fix_02_02_amount_conflict_real_jpg_FACTU2015040047_223137",
+      "variant": "amount_conflict",
+      "source": "mouadhamri/invoice_dataset",
+      "upload_files": [
+        "01_invoice_extract_from_real_source.md",
+        "02_purchase_order.md",
+        "03_goods_receipt.md",
+        "04_vendor_record.md",
+        "05_duplicate_payment_check.md"
+      ],
+      "accepted_ms": 17.3,
+      "first_event_ms": 4084.7,
+      "first_delta_ms": null,
+      "final_ms": 4085.5,
+      "event_count": 9,
+      "terminal_kind": "final",
+      "error": "",
+      "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：当前材料未显示重复付款命中。\n- 识别到的核心对象：发票 FA04/2015/027622；供应商 Deco Addict；金额 38,086.30。\n- 当前案卷状态：status=ready_for_report；evidence=5；satisfied=invoice, purchase_order, goods_receipt_or_service_acceptance, vendor_identity, duplicate_payment_screen；conflict=-；missing=-；weak=-。\n结论：case_state=ready_for_report；可继续生成本地报告草稿。",
+      "status": "ready_for_report",
+      "requirements": {
+        "invoice": "satisfied",
+        "purchase_order": "satisfied",
+        "goods_receipt_or_service_acceptance": "satisfied",
+        "vendor_identity": "satisfied",
+        "duplicate_payment_screen": "satisfied"
+      },
+      "missing_materials": [],
+      "weak_materials": [],
+      "conflict_materials": [],
+      "satisfied_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity",
+        "duplicate_payment_screen"
+      ],
+      "risk_flags": [],
+      "events": [
+        {
+          "kind": "run_started",
+          "seq": 1,
+          "received_ms": 4084.7,
+          "summary": "Run accepted."
+        },
+        {
+          "kind": "context_loaded",
+          "seq": 2,
+          "received_ms": 4084.7,
+          "summary": "Case context loaded."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 3,
+          "received_ms": 4084.7,
+          "summary": "read_attachment started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 4,
+          "received_ms": 4084.7,
+          "summary": "read_attachment success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 5,
+          "received_ms": 4084.7,
+          "summary": "evidence_reviewer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 6,
+          "received_ms": 4084.7,
+          "summary": "evidence_reviewer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 7,
+          "received_ms": 4084.7,
+          "summary": "case_patch_writer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 8,
+          "received_ms": 4084.7,
+          "summary": "case_patch_writer success."
+        },
+        {
+          "kind": "final",
+          "seq": 9,
+          "received_ms": 4085.5,
+          "summary": "Run completed."
+        }
+      ]
+    },
+    {
+      "case": "case_03_duplicate_hit_real_jpg_FACTU2015050046",
+      "case_id": "golden_live_fix_03_03_duplicate_hit_real_jpg_FACTU2015050046_223141",
+      "variant": "duplicate",
+      "source": "mouadhamri/invoice_dataset",
+      "upload_files": [
+        "01_invoice_extract_from_real_source.md",
+        "02_purchase_order.md",
+        "03_goods_receipt.md",
+        "04_vendor_record.md",
+        "05_duplicate_payment_check.md"
+      ],
+      "accepted_ms": 16.7,
+      "first_event_ms": 309216.0,
+      "first_delta_ms": null,
+      "final_ms": 309216.7,
+      "event_count": 11,
+      "terminal_kind": "final",
+      "error": "",
+      "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：重复付款检查命中风险。\n- 识别到的核心对象：供应商 The Jackson Group；金额 579,675.62 EUR。\n- 当前案卷状态：status=collecting_materials；evidence=5；satisfied=invoice, purchase_order, goods_receipt_or_service_acceptance, vendor_identity；conflict=duplicate_payment_screen；missing=-；weak=-。\n- 风险标记：duplicate_payment_positive_hit\n- 待核对问题：请提供历史付款凭证PAY-FA05_2015_065587-HIST的详细清账状态及关联凭证\n结论：在上述冲突解释清楚前，duplicate_payment_screen 保持 conflict；不要把该项写成 satisfied。",
+      "status": "collecting_materials",
+      "requirements": {
+        "invoice": "satisfied",
+        "purchase_order": "satisfied",
+        "goods_receipt_or_service_acceptance": "satisfied",
+        "vendor_identity": "satisfied",
+        "duplicate_payment_screen": "conflict"
+      },
+      "missing_materials": [],
+      "weak_materials": [],
+      "conflict_materials": [
+        "duplicate_payment_screen"
+      ],
+      "satisfied_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity"
+      ],
+      "risk_flags": [
+        "duplicate_payment_positive_hit",
+        "historical_payment_found",
+        "clearing_document_found",
+        "potential_duplicate_payment_risk_unresolved"
+      ],
+      "events": [
+        {
+          "kind": "run_started",
+          "seq": 1,
+          "received_ms": 309216.0,
+          "summary": "Run accepted."
+        },
+        {
+          "kind": "context_loaded",
+          "seq": 2,
+          "received_ms": 309216.0,
+          "summary": "Case context loaded."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 3,
+          "received_ms": 309216.0,
+          "summary": "read_attachment started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 4,
+          "received_ms": 309216.0,
+          "summary": "read_attachment success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 5,
+          "received_ms": 309216.0,
+          "summary": "evidence_reviewer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 6,
+          "received_ms": 309216.0,
+          "summary": "evidence_reviewer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 7,
+          "received_ms": 309216.0,
+          "summary": "case_patch_writer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 8,
+          "received_ms": 309216.0,
+          "summary": "case_patch_writer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 9,
+          "received_ms": 309216.0,
+          "summary": "write_case_patch started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 10,
+          "received_ms": 309216.0,
+          "summary": "write_case_patch success."
+        },
+        {
+          "kind": "final",
+          "seq": 11,
+          "received_ms": 309216.6,
+          "summary": "Run completed."
+        }
+      ]
+    },
+    {
+      "case": "case_04_bank_change_risk_real_jpg_FACTU2015060039",
+      "case_id": "golden_live_fix_04_04_bank_change_risk_real_jpg_FACTU2015060039_223650",
+      "variant": "bank_change",
+      "source": "mouadhamri/invoice_dataset",
+      "upload_files": [
+        "01_invoice_extract_from_real_source.md",
+        "02_purchase_order.md",
+        "03_goods_receipt.md",
+        "04_vendor_record.md",
+        "05_duplicate_payment_check.md",
+        "06_supplier_bank_change_email.md"
+      ],
+      "accepted_ms": 17.8,
+      "first_event_ms": 246514.9,
+      "first_delta_ms": 246515.0,
+      "final_ms": 246519.1,
+      "event_count": 693,
+      "terminal_kind": "final",
+      "error": "",
+      "reply_preview": "根据审查结果，现对发票付款材料包进行完整评估：\n\n## 材料完整性评估\n\n**已提交材料（6项）：**\n1. **发票原件** (01_invoice_extract_from_real_source.md) — 完整\n2. **采购订单** (02_purchase_order.md) — 完整\n3. **收货凭证/服务验收** (03_goods_receipt.md) — 完整\n4. **供应商主数据** (04_vendor_record.md) — 部分\n5. **重复付款核查** (05_duplicate_payment_check.md) — 完整\n6. **供应商银行账户变更邮件** (06_supplier_bank_change_email.md) — 完整\n\n## 风险识别\n\n### 1. 金额风险 — **低风险**\n- 发票金额：347,064.06 EUR\n- 采购订单金额：347,064.06 EUR\n- **核对结果**：金额一致，无差异\n\n### 2. 供应商风险 — **中等风险**\n- 供应商：Biotech\n- 供应商主数据存在，但**供应商字段在发票中缺失**（仅能从其他材料推断）\n- 建议补充发票上的供应商完整信息\n\n### 3. 重复付款风险 — **低风险**\n- 重复付款核查结果：**未发现重复付款记录**\n- 历史付款记录无冲突\n\n### 4. 银行账户变更风险 — **高风险 ⚠️**\n- **关键发现**：供应商通过邮件请求银行账户变更\n- **风险点**：邮件中提及\"bank-change request without vendor-master approval\"（未经供应商主数据审批的银行变更请求）\n- **尾号核对**：\n  - 供应商主数据记录尾号：9012\n  - 变更请求涉及新账户信息\n- **建议**：该变更缺乏正式的供应商主数据审批流程，存在潜在的欺诈或误操作风险，需进一步核实变更的合法性和真实性\n\n### 5. 来源可追溯性风险 — **中等风险**\n- 发票-采购订单-收货凭证三单匹配：\n  - 发票号：FA06/2015/088665\n  - 采购订单号：BC05603\n  - 收货凭证号：GRN-BC05603\n- **匹配结果**：PO/GRN引用一致，可追溯\n- **不足**：",
+      "status": "collecting_materials",
+      "requirements": {
+        "invoice": "satisfied",
+        "purchase_order": "satisfied",
+        "goods_receipt_or_service_acceptance": "satisfied",
+        "vendor_identity": "conflict",
+        "duplicate_payment_screen": "satisfied"
+      },
+      "missing_materials": [],
+      "weak_materials": [],
+      "conflict_materials": [
+        "vendor_identity"
+      ],
+      "satisfied_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "duplicate_payment_screen"
+      ],
+      "risk_flags": [
+        "bank_change_without_vendor_master_approval",
+        "supplier_bank_account_mismatch",
+        "vendor_bank_change_email_without_workflow_approval"
+      ],
+      "events": [
+        {
+          "kind": "run_started",
+          "seq": 1,
+          "received_ms": 246514.9,
+          "summary": "Run accepted."
+        },
+        {
+          "kind": "context_loaded",
+          "seq": 2,
+          "received_ms": 246514.9,
+          "summary": "Case context loaded."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 3,
+          "received_ms": 246514.9,
+          "summary": "read_attachment started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 4,
+          "received_ms": 246514.9,
+          "summary": "read_attachment success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 5,
+          "received_ms": 246514.9,
+          "summary": "evidence_reviewer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 6,
+          "received_ms": 246514.9,
+          "summary": "evidence_reviewer error."
+        },
+        {
+          "kind": "model_started",
+          "seq": 7,
+          "received_ms": 246515.0,
+          "summary": "Case manager model call started."
+        },
+        {
+          "kind": "model_started",
+          "seq": 8,
+          "received_ms": 246515.0,
+          "summary": "Agent updated."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 9,
+          "received_ms": 246515.0,
+          "summary": "evidence_reviewer called."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 10,
+          "received_ms": 246515.0,
+          "summary": "evidence_reviewer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 11,
+          "received_ms": 246515.0,
+          "summary": "evidence_reviewer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 12,
+          "received_ms": 246515.0,
+          "summary": "case_patch_writer called."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 13,
+          "received_ms": 246515.0,
+          "summary": "case_patch_writer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 14,
+          "received_ms": 246515.0,
+          "summary": "case_patch_writer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 15,
+          "received_ms": 246515.0,
+          "summary": "write_case_patch called."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 16,
+          "received_ms": 246515.0,
+          "summary": "write_case_patch started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 17,
+          "received_ms": 246515.0,
+          "summary": "write_case_patch success."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 18,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 19,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 20,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 21,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 22,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 23,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 24,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 25,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 26,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 27,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 28,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 29,
+          "received_ms": 246515.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 30,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 31,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 32,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 33,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 34,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 35,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 36,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 37,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 38,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 39,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 40,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 41,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 42,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 43,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 44,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 45,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 46,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 47,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 48,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 49,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 50,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 51,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 52,
+          "received_ms": 246515.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 53,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 54,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 55,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 56,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 57,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 58,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 59,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 60,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 61,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 62,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 63,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 64,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 65,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 66,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 67,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 68,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 69,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 70,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 71,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 72,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 73,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 74,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 75,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 76,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 77,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 78,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 79,
+          "received_ms": 246515.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 80,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 81,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 82,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 83,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 84,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 85,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 86,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 87,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 88,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 89,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 90,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 91,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 92,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 93,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 94,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 95,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 96,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 97,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 98,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 99,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 100,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 101,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 102,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 103,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 104,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 105,
+          "received_ms": 246515.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 106,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 107,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 108,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 109,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 110,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 111,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 112,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 113,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 114,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 115,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 116,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 117,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 118,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 119,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 120,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 121,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 122,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 123,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 124,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 125,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 126,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 127,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 128,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 129,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 130,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 131,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 132,
+          "received_ms": 246515.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 133,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 134,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 135,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 136,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 137,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 138,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 139,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 140,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 141,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 142,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 143,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 144,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 145,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 146,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 147,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 148,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 149,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 150,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 151,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 152,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 153,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 154,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 155,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 156,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 157,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 158,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 159,
+          "received_ms": 246515.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 160,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 161,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 162,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 163,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 164,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 165,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 166,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 167,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 168,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 169,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 170,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 171,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 172,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 173,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 174,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 175,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 176,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 177,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 178,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 179,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 180,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 181,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 182,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 183,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 184,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 185,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 186,
+          "received_ms": 246515.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 187,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 188,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 189,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 190,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 191,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 192,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 193,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 194,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 195,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 196,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 197,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 198,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 199,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 200,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 201,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 202,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 203,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 204,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 205,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 206,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 207,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 208,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 209,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 210,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 211,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 212,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 213,
+          "received_ms": 246515.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 214,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 215,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 216,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 217,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 218,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 219,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 220,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 221,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 222,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 223,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 224,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 225,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 226,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 227,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 228,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 229,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 230,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 231,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 232,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 233,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 234,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 235,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 236,
+          "received_ms": 246515.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 237,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 238,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 239,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 240,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 241,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 242,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 243,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 244,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 245,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 246,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 247,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 248,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 249,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 250,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 251,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 252,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 253,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 254,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 255,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 256,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 257,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 258,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 259,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 260,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 261,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 262,
+          "received_ms": 246515.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 263,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 264,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 265,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 266,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 267,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 268,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 269,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 270,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 271,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 272,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 273,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 274,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 275,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 276,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 277,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 278,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 279,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 280,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 281,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 282,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 283,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 284,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 285,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 286,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 287,
+          "received_ms": 246516.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 288,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 289,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 290,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 291,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 292,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 293,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 294,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 295,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 296,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 297,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 298,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 299,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 300,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 301,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 302,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 303,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 304,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 305,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 306,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 307,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 308,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 309,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 310,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 311,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 312,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 313,
+          "received_ms": 246516.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 314,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 315,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 316,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 317,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 318,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 319,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 320,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 321,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 322,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 323,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 324,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 325,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 326,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 327,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 328,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 329,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 330,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 331,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 332,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 333,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 334,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 335,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 336,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 337,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 338,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 339,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 340,
+          "received_ms": 246516.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 341,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 342,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 343,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 344,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 345,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 346,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 347,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 348,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 349,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 350,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 351,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 352,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 353,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 354,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 355,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 356,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 357,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 358,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 359,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 360,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 361,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 362,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 363,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 364,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 365,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 366,
+          "received_ms": 246516.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 367,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 368,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 369,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 370,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 371,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 372,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 373,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 374,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 375,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 376,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 377,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 378,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 379,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 380,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 381,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 382,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 383,
+          "received_ms": 246516.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 384,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 385,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 386,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 387,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 388,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 389,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 390,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 391,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 392,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 393,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 394,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 395,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 396,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 397,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 398,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 399,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 400,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 401,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 402,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 403,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 404,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 405,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 406,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 407,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 408,
+          "received_ms": 246516.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 409,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 410,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 411,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 412,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 413,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 414,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 415,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 416,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 417,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 418,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 419,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 420,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 421,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 422,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 423,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 424,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 425,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 426,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 427,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 428,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 429,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 430,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 431,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 432,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 433,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 434,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 435,
+          "received_ms": 246516.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 436,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 437,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 438,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 439,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 440,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 441,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 442,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 443,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 444,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 445,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 446,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 447,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 448,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 449,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 450,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 451,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 452,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 453,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 454,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 455,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 456,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 457,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 458,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 459,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 460,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 461,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 462,
+          "received_ms": 246516.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 463,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 464,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 465,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 466,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 467,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 468,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 469,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 470,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 471,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 472,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 473,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 474,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 475,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 476,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 477,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 478,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 479,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 480,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 481,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 482,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 483,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 484,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 485,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 486,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 487,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 488,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 489,
+          "received_ms": 246516.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 490,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 491,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 492,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 493,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 494,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 495,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 496,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 497,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 498,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 499,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 500,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 501,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 502,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 503,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 504,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 505,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 506,
+          "received_ms": 246516.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 507,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 508,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 509,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 510,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 511,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 512,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 513,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 514,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 515,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 516,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 517,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 518,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 519,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 520,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 521,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 522,
+          "received_ms": 246517.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 523,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 524,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 525,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 526,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 527,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 528,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 529,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 530,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 531,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 532,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 533,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 534,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 535,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 536,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 537,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 538,
+          "received_ms": 246517.1,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 539,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 540,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 541,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 542,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 543,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 544,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 545,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 546,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 547,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 548,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 549,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 550,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 551,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 552,
+          "received_ms": 246517.2,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 553,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 554,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 555,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 556,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 557,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 558,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 559,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 560,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 561,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 562,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 563,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 564,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 565,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 566,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 567,
+          "received_ms": 246517.3,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 568,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 569,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 570,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 571,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 572,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 573,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 574,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 575,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 576,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 577,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 578,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 579,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 580,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 581,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 582,
+          "received_ms": 246517.4,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 583,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 584,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 585,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 586,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 587,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 588,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 589,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 590,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 591,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 592,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 593,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 594,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 595,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 596,
+          "received_ms": 246517.5,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 597,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 598,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 599,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 600,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 601,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 602,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 603,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 604,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 605,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 606,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 607,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 608,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 609,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 610,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 611,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 612,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 613,
+          "received_ms": 246517.6,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 614,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 615,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 616,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 617,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 618,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 619,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 620,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 621,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 622,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 623,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 624,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 625,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 626,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 627,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 628,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 629,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 630,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 631,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 632,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 633,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 634,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 635,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 636,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 637,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 638,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 639,
+          "received_ms": 246517.7,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 640,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 641,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 642,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 643,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 644,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 645,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 646,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 647,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 648,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 649,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 650,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 651,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 652,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 653,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 654,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 655,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 656,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 657,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 658,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 659,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 660,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 661,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 662,
+          "received_ms": 246517.8,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 663,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 664,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 665,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 666,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 667,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 668,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 669,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 670,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 671,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 672,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 673,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 674,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 675,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 676,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 677,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 678,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 679,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 680,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 681,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 682,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 683,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 684,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 685,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 686,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 687,
+          "received_ms": 246517.9,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 688,
+          "received_ms": 246518.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 689,
+          "received_ms": 246518.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 690,
+          "received_ms": 246518.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 691,
+          "received_ms": 246518.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "assistant_delta",
+          "seq": 692,
+          "received_ms": 246518.0,
+          "summary": "Assistant response delta."
+        },
+        {
+          "kind": "final",
+          "seq": 693,
+          "received_ms": 246518.9,
+          "summary": "Run completed."
+        }
+      ]
+    },
+    {
+      "case": "case_05_clean_match_real_pdf_flipkart",
+      "case_id": "golden_live_fix_05_05_clean_match_real_pdf_flipkart_224057",
+      "variant": "clean_pdf",
+      "source": "invoice-x/invoice2data",
+      "upload_files": [
+        "01_invoice_extract_from_real_pdf.md",
+        "02_purchase_order.md",
+        "03_goods_receipt.md",
+        "04_vendor_record.md",
+        "05_duplicate_payment_check.md"
+      ],
+      "accepted_ms": 16.4,
+      "first_event_ms": 101114.6,
+      "first_delta_ms": null,
+      "final_ms": 101116.0,
+      "event_count": 11,
+      "terminal_kind": "final",
+      "error": "",
+      "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：当前材料未显示重复付款命中。\n- 识别到的核心对象：发票 BLR_WFLD20151000982590；供应商 WS Retail Services Pvt. Ltd.；金额 319.00。\n- 当前案卷状态：status=ready_for_report；evidence=5；satisfied=invoice, purchase_order, goods_receipt_or_service_acceptance, vendor_identity, duplicate_payment_screen；conflict=-；missing=-；weak=-。\n结论：case_state=ready_for_report；可继续生成本地报告草稿。",
+      "status": "ready_for_report",
+      "requirements": {
+        "invoice": "satisfied",
+        "purchase_order": "satisfied",
+        "goods_receipt_or_service_acceptance": "satisfied",
+        "vendor_identity": "satisfied",
+        "duplicate_payment_screen": "satisfied"
+      },
+      "missing_materials": [],
+      "weak_materials": [],
+      "conflict_materials": [],
+      "satisfied_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity",
+        "duplicate_payment_screen"
+      ],
+      "risk_flags": [],
+      "events": [
+        {
+          "kind": "run_started",
+          "seq": 1,
+          "received_ms": 101114.6,
+          "summary": "Run accepted."
+        },
+        {
+          "kind": "context_loaded",
+          "seq": 2,
+          "received_ms": 101114.6,
+          "summary": "Case context loaded."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 3,
+          "received_ms": 101114.6,
+          "summary": "read_attachment started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 4,
+          "received_ms": 101114.6,
+          "summary": "read_attachment success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 5,
+          "received_ms": 101114.6,
+          "summary": "evidence_reviewer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 6,
+          "received_ms": 101114.6,
+          "summary": "evidence_reviewer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 7,
+          "received_ms": 101114.6,
+          "summary": "case_patch_writer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 8,
+          "received_ms": 101114.7,
+          "summary": "case_patch_writer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 9,
+          "received_ms": 101114.7,
+          "summary": "write_case_patch started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 10,
+          "received_ms": 101114.7,
+          "summary": "write_case_patch success."
+        },
+        {
+          "kind": "final",
+          "seq": 11,
+          "received_ms": 101115.9,
+          "summary": "Run completed."
+        }
+      ]
+    },
+    {
+      "case": "case_06_duplicate_hit_real_pdf_sap",
+      "case_id": "golden_live_fix_06_06_duplicate_hit_real_pdf_sap_224238",
+      "variant": "duplicate_pdf",
+      "source": "SAP-samples/btp-cap-dox-invoice-validation",
+      "upload_files": [
+        "01_invoice_extract_from_real_pdf.md",
+        "02_purchase_order.md",
+        "03_goods_receipt.md",
+        "04_vendor_record.md",
+        "05_duplicate_payment_check.md"
+      ],
+      "accepted_ms": 22.7,
+      "first_event_ms": 605302.3,
+      "first_delta_ms": null,
+      "final_ms": 605303.2,
+      "event_count": 9,
+      "terminal_kind": "final",
+      "error": "",
+      "reply_preview": "本轮本地材料审查已经记录到案卷，重点结论：重复付款检查命中风险。\n- 识别到的核心对象：发票 5435569865439；供应商 Electric Installations；金额 36,592.33。\n- 重复付款线索：历史付款记录 PAY-5435569865439-HIST。\n- 当前案卷状态：status=collecting_materials；evidence=5；satisfied=invoice, purchase_order, goods_receipt_or_service_acceptance, vendor_identity；conflict=duplicate_payment_screen；missing=-；weak=-。\n- 风险标记：duplicate_payment_risk: prior payment or clearing record found\n- 待核对问题：Please reconcile the historical payment and clearing document before treating the invoice as clear.\n结论：在上述冲突解释清楚前，duplicate_payment_screen 保持 conflict；不要把该项写成 satisfied。",
+      "status": "collecting_materials",
+      "requirements": {
+        "invoice": "satisfied",
+        "purchase_order": "satisfied",
+        "goods_receipt_or_service_acceptance": "satisfied",
+        "vendor_identity": "satisfied",
+        "duplicate_payment_screen": "conflict"
+      },
+      "missing_materials": [],
+      "weak_materials": [],
+      "conflict_materials": [
+        "duplicate_payment_screen"
+      ],
+      "satisfied_materials": [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity"
+      ],
+      "risk_flags": [
+        "duplicate_payment_risk: prior payment or clearing record found"
+      ],
+      "events": [
+        {
+          "kind": "run_started",
+          "seq": 1,
+          "received_ms": 605302.3,
+          "summary": "Run accepted."
+        },
+        {
+          "kind": "context_loaded",
+          "seq": 2,
+          "received_ms": 605302.4,
+          "summary": "Case context loaded."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 3,
+          "received_ms": 605302.4,
+          "summary": "read_attachment started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 4,
+          "received_ms": 605302.4,
+          "summary": "read_attachment success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 5,
+          "received_ms": 605302.4,
+          "summary": "evidence_reviewer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 6,
+          "received_ms": 605302.4,
+          "summary": "evidence_reviewer success."
+        },
+        {
+          "kind": "tool_started",
+          "seq": 7,
+          "received_ms": 605302.4,
+          "summary": "case_patch_writer started."
+        },
+        {
+          "kind": "tool_finished",
+          "seq": 8,
+          "received_ms": 605302.4,
+          "summary": "case_patch_writer success."
+        },
+        {
+          "kind": "final",
+          "seq": 9,
+          "received_ms": 605303.2,
+          "summary": "Run completed."
+        }
+      ]
+    }
+  ]
+}
