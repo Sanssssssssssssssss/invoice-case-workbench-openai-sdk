@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel
@@ -18,6 +18,12 @@ from app.observability.langfuse_tracer import (
     usage_details,
 )
 from app.runtime.reasoning_capture import extract_reasoning_from_result
+from app.runtime.context_partition import (
+    build_context_packet,
+    prompt_cache_model_settings_kwargs,
+    usage_from_result,
+    with_usage_metrics,
+)
 
 
 @dataclass
@@ -46,6 +52,7 @@ class ModelCallRecord:
     reasoning_chunks: int = 0
     thinking_type: str = ""
     reasoning_source: str = ""
+    prompt_partition: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +72,19 @@ class ModelCallRecord:
             "reasoning_chunks": self.reasoning_chunks,
             "thinking_type": self.thinking_type,
             "reasoning_source": self.reasoning_source,
+            "prompt_partition": {
+                key: self.prompt_partition.get(key)
+                for key in (
+                    "stable_prefix_hash",
+                    "dynamic_context_hash",
+                    "volatile_tail_hash",
+                    "prompt_cache_key",
+                    "prompt_tokens",
+                    "cached_tokens",
+                    "cache_hit_ratio",
+                )
+                if key in self.prompt_partition
+            },
         }
 
     def to_debug_dict(self) -> dict[str, Any]:
@@ -93,6 +113,7 @@ class ModelCallRecord:
             "reasoning_chunks": self.reasoning_chunks,
             "thinking_type": self.thinking_type,
             "reasoning_source": self.reasoning_source,
+            "prompt_partition": self.prompt_partition,
         }
 
 
@@ -145,6 +166,16 @@ class LlmClient:
             "timeout_seconds": timeout_seconds,
             **generation_hash_metadata(system_prompt, payload),
         }
+        packet = build_context_packet(
+            role=role,
+            prompt_version=prompt_version,
+            prompt_file="",
+            system_prompt=system_prompt,
+            context_payload=payload,
+            settings=self.settings,
+            output_model=model_type,
+        )
+        trace_metadata.update(packet.debug_metadata())
         managed_prompt = self.tracer.managed_prompt(
             role=role,
             prompt_version=prompt_version,
@@ -170,11 +201,12 @@ class LlmClient:
                     payload=payload,
                     latency_ms=_elapsed_ms(started),
                     runtime="openai_agents_sdk_direct",
+                    prompt_partition=packet.debug_metadata(),
                 )
                 self.calls.append(record)
                 generation.update(
                     output=generation_output("", error="llm_unavailable", mode=self.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms, "runtime": record.runtime},
+                    metadata={"latency_ms": record.latency_ms, "runtime": record.runtime, **packet.debug_metadata()},
                     level="ERROR",
                     status_message="llm_unavailable",
                 )
@@ -187,6 +219,7 @@ class LlmClient:
                     model_settings=ModelSettings(
                         temperature=temperature_for_thinking(selected_model, self.settings.llm_temperature, thinking_type),
                         extra_body=_model_extra_body(selected_model, thinking_type),
+                        **prompt_cache_model_settings_kwargs(self.settings, packet),
                     ),
                     output_type=AgentOutputSchema(model_type, strict_json_schema=False),
                 )
@@ -203,6 +236,7 @@ class LlmClient:
                             "payload_sha256": trace_metadata["payload_sha256"],
                             "runtime": "openai_agents_sdk_direct",
                             "timeout_seconds": timeout_seconds,
+                            **packet.debug_metadata(),
                         },
                         timeout_seconds=timeout_seconds,
                     ),
@@ -211,7 +245,8 @@ class LlmClient:
                 if not isinstance(parsed, model_type):
                     parsed = model_type.model_validate(parsed)
                 raw_response = parsed.model_dump_json()
-                usage = _usage_from_result(result)
+                usage = usage_from_result(result)
+                partition = with_usage_metrics(packet.debug_metadata(), usage)
                 reasoning = extract_reasoning_from_result(result)
                 record = ModelCallRecord(
                     role=role,
@@ -231,6 +266,7 @@ class LlmClient:
                     reasoning_chunks=reasoning.chunks if reasoning else 0,
                     thinking_type=thinking_type,
                     reasoning_source=reasoning.source if reasoning else "",
+                    prompt_partition=partition,
                 )
                 self.calls.append(record)
                 generation.update(
@@ -246,7 +282,7 @@ class LlmClient:
                         output_cost_per_1m=self.settings.llm_output_cost_per_1m,
                         cached_input_cost_per_1m=self.settings.llm_cached_input_cost_per_1m,
                     ),
-                    metadata={"latency_ms": record.latency_ms, "runtime": record.runtime},
+                    metadata={"latency_ms": record.latency_ms, "runtime": record.runtime, **partition},
                 )
                 return parsed
             except Exception as exc:
@@ -261,11 +297,17 @@ class LlmClient:
                     payload=payload,
                     latency_ms=_elapsed_ms(started),
                     runtime="openai_agents_sdk_direct",
+                    prompt_partition=packet.debug_metadata(),
                 )
                 self.calls.append(record)
                 generation.update(
                     output=generation_output("", error=record.error, mode=self.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms, "schema": model_type.__name__, "runtime": record.runtime},
+                    metadata={
+                        "latency_ms": record.latency_ms,
+                        "schema": model_type.__name__,
+                        "runtime": record.runtime,
+                        **record.prompt_partition,
+                    },
                     level="ERROR",
                     status_message=record.error,
                 )
@@ -302,16 +344,6 @@ def _elapsed_ms(started: float) -> float:
 
 def _model_extra_body(model_name: str, thinking_type: str | None) -> dict[str, Any] | None:
     return model_extra_body_for_thinking(model_name, thinking_type)
-
-
-def _usage_from_result(result: Any) -> dict[str, Any]:
-    totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    for response in getattr(result, "raw_responses", []) or []:
-        usage = _model_dump(getattr(response, "usage", None))
-        totals["prompt_tokens"] += int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
-        totals["completion_tokens"] += int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
-        totals["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
-    return {key: value for key, value in totals.items() if value}
 
 
 def _model_dump(value: Any) -> dict[str, Any]:

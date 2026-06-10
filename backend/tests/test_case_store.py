@@ -316,6 +316,46 @@ def test_duplicate_payment_conflict_support_is_not_upgraded_to_satisfied(tmp_pat
     assert updated.status == "collecting_materials"
 
 
+def test_negative_duplicate_payment_check_is_not_derived_as_conflict(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    updated = store.apply_patch(
+        "case_duplicate_negative",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": [{"id": "duplicate_payment_screen", "kind": "risk_check"}],
+                "add_evidence": [
+                    {
+                        "type": "duplicate_payment_check",
+                        "summary": "ERP重复付款检查导出，未发现重复发票或历史付款记录，无重复风险信号",
+                        "content": (
+                            "Duplicate invoice found = No. "
+                            "Historical payment record found: No matching record in current search result. "
+                            "Clearing document found: No matching record in current search result."
+                        ),
+                        "review_result": {"should_accept": True, "evidence_type": "duplicate_payment_check"},
+                        "supports": [
+                            {
+                                "requirement": "duplicate_payment_screen",
+                                "support_level": "full",
+                                "quoted_text": "duplicate invoice found = No; No matching record in current search result",
+                            }
+                        ],
+                        "conflicts": [],
+                    }
+                ],
+            },
+            "audit_note": "negative duplicate check remains satisfied",
+        },
+    )
+
+    requirement = updated.requirements[0]
+    evidence = updated.evidence_items[0]
+    assert evidence.conflicts == []
+    assert requirement.status == "satisfied"
+    assert updated.status == "ready_for_report"
+
+
 def test_prompt_injection_evidence_is_quarantined_before_state_write(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(

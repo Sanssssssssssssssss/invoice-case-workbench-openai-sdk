@@ -94,7 +94,9 @@ class MemoryService:
                 scored.append((score, row))
         scored.sort(key=lambda item: (item[0], int(item[1]["id"])), reverse=True)
         result = []
-        for _, row in scored[: max(0, int(limit))]:
+        token_count = max(1, len(tokens))
+        for score, row in scored[: max(0, int(limit))]:
+            relevance = min(1.0, float(score) / token_count)
             result.append(
                 {
                     "id": int(row["id"]),
@@ -104,6 +106,9 @@ class MemoryService:
                     "source_ref": str(row["source_ref"] or ""),
                     "metadata": _loads_dict(row["metadata_json"]),
                     "created_at": str(row["created_at"] or ""),
+                    "score": score,
+                    "relevance_score": round(relevance, 4),
+                    "confidence": round(relevance, 4),
                     "boundary": "memory_hint_only_not_case_truth",
                 }
             )

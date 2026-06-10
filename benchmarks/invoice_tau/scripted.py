@@ -110,7 +110,16 @@ class ScriptedRoleRegistry:
                 self.outputs[role] = [dict(value)]
         self._metadata = RoleRegistry()
 
-    def call(self, role: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def call(
+        self,
+        role: str,
+        payload: dict[str, Any],
+        *,
+        on_stream: Any | None = None,
+        prompt_partition: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _ = on_stream
+        _ = prompt_partition
         items = self.outputs.get(role) or []
         if items:
             return dict(items.pop(0))

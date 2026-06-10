@@ -144,7 +144,7 @@ def _seed_ready_case(store: CaseStore, case_id: str) -> None:
     )
 
 
-def _fake_report_writer(role: str, role_input: dict[str, Any]) -> dict[str, Any]:
+def _fake_report_writer(role: str, role_input: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
     assert role == "report_writer"
     assert role_input["case_state"]["status"] == "ready_for_report"
     return {"title": "INV-5001 审核报告", "markdown": "# INV-5001 审核报告\n\n五项核心材料均已满足。\n"}
@@ -371,7 +371,7 @@ def test_evidence_reviewer_timeout_recovers_text_direct_batch(tmp_path, monkeypa
     class APITimeoutError(Exception):
         pass
 
-    def fail_call(role: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def fail_call(role: str, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         raise APITimeoutError("Request timed out.")
 
     monkeypatch.setattr(runner.roles, "call", fail_call)
@@ -431,7 +431,7 @@ def test_evidence_reviewer_timeout_recovers_pdf_text_batch(tmp_path, monkeypatch
     class APITimeoutError(Exception):
         pass
 
-    def fail_call(role: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def fail_call(role: str, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         runner.llm.calls.append(
             ModelCallRecord(
                 role=role,
@@ -500,7 +500,7 @@ def test_case_patch_writer_timeout_persists_reviewer_suggested_patch(tmp_path, m
     class APITimeoutError(Exception):
         pass
 
-    def fail_call(role: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def fail_call(role: str, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         runner.llm.calls.append(
             ModelCallRecord(
                 role=role,

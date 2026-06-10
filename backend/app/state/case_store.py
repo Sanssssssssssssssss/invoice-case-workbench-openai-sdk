@@ -294,6 +294,8 @@ class CaseStore:
         active_evidence = _active_evidence_items(state)
         evidence_by_requirement: dict[str, list[EvidenceItem]] = {}
         for item in active_evidence:
+            if _is_advisory_memory_evidence(item):
+                continue
             for support in item.supports:
                 if support.requirement:
                     evidence_by_requirement.setdefault(support.requirement, []).append(item)
@@ -384,6 +386,21 @@ def _material_buckets(state: CaseState) -> dict[str, list[str]]:
 def _active_evidence_items(state: CaseState) -> list[EvidenceItem]:
     superseded = _superseded_evidence_ids(state.evidence_items)
     return [item for item in state.evidence_items if item.id not in superseded]
+
+
+def _is_advisory_memory_evidence(item: EvidenceItem) -> bool:
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    review_result = item.review_result if isinstance(item.review_result, dict) else {}
+    boundary = str(metadata.get("boundary") or review_result.get("boundary") or "").lower()
+    truth_status = str(metadata.get("truth_status") or review_result.get("truth_status") or "").lower()
+    source_ref = str(metadata.get("source_ref") or review_result.get("source_ref") or "").lower()
+    if item.source == "rag":
+        return True
+    if boundary == "memory_hint_only_not_case_truth":
+        return True
+    if truth_status == "advisory":
+        return True
+    return "memory_hint_only_not_case_truth" in source_ref
 
 
 def _superseded_evidence_ids(items: list[EvidenceItem]) -> set[str]:
@@ -1321,13 +1338,33 @@ NO_CONFLICT_TERMS = (
     "no duplicate invoice found",
     "no duplicate found",
     "duplicate invoice found: no",
+    "duplicate invoice found = no",
     "no prior payment found",
+    "historical payment record found: no",
+    "historical payment record found = no",
+    "historical payment record found: no matching record",
+    "historical payment record found = no matching record",
+    "no matching historical payment record",
     "no clearing document exists",
     "prior payment found: no",
+    "prior payment found = no",
     "clearing document found: no",
+    "clearing document found = no",
+    "clearing document found: no matching record",
+    "clearing document found = no matching record",
+    "no matching record in current search result",
+    "negative duplicate check",
+    "negative duplicate-payment check",
     "未发现历史付款",
     "未发现重复付款",
     "未发现重复风险",
+    "未发现重复发票",
+    "未发现历史付款记录",
+    "未发现重复风险信号",
+    "无重复风险",
+    "无重复风险信号",
+    "无历史付款记录",
+    "无清账凭证",
     "均未发现重复",
     "不存在历史付款",
     "无未解决的重复付款冲突",

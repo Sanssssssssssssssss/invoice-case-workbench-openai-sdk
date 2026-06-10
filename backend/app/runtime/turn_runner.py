@@ -24,6 +24,7 @@ from app.observability.openai_trace_bridge import sdk_run_summary
 from app.runtime.agents_sdk import build_run_config, close_run_config_client, run_agent_sync
 from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.runtime.context_assembler import ContextAssembler, context_budget
+from app.runtime.context_partition import build_context_packet, usage_from_result as extract_usage_from_result, with_usage_metrics
 from app.runtime.evidence_recovery import recover_text_direct_review
 from app.runtime.patch_normalizer import PatchNormalizer
 from app.runtime.policy_gate import PolicyGate, infer_reviewer_mode, requires_materials_advice
@@ -77,7 +78,7 @@ class SdkManagerRunner:
     ) -> ManagerRunOutcome:
         _ = planner_context
         tools = runner.sdk_tools(state=state, request=request, planner_context=planner_context)
-        manager = runner.manager_factory.build(tools, metadata={"case_id": state.case_id, "run_id": state.run_id})
+        manager = runner.manager_factory.build(tools, metadata=_manager_metadata(runner, state))
         result = run_agent_sync(
             manager,
             json.dumps(manager_input, ensure_ascii=False, default=str),
@@ -105,7 +106,7 @@ class SdkManagerRunner:
     ) -> ManagerRunOutcome:
         _ = planner_context
         tools = runner.sdk_tools(state=state, request=request, planner_context=planner_context)
-        manager = runner.manager_factory.build(tools, metadata={"case_id": state.case_id, "run_id": state.run_id})
+        manager = runner.manager_factory.build(tools, metadata=_manager_metadata(runner, state))
         run_config = runner.run_config(state)
         try:
             result = Runner.run_streamed(
@@ -138,7 +139,7 @@ class SdkManagerRunner:
     ) -> ManagerRunOutcome:
         planner_context = runner.context_assembler.build_planner_context(request, state)
         tools = runner.sdk_tools(state=state, request=request, planner_context=planner_context)
-        manager = runner.manager_factory.build(tools, metadata={"case_id": state.case_id, "run_id": state.run_id})
+        manager = runner.manager_factory.build(tools, metadata=_manager_metadata(runner, state))
         run_state = _await(RunState.from_string(manager, sdk_state, context_override={}))
         interruptions = list(run_state.get_interruptions())
         if not interruptions:
@@ -175,7 +176,7 @@ class SdkManagerRunner:
     ) -> ManagerRunOutcome:
         planner_context = runner.context_assembler.build_planner_context(request, state)
         tools = runner.sdk_tools(state=state, request=request, planner_context=planner_context)
-        manager = runner.manager_factory.build(tools, metadata={"case_id": state.case_id, "run_id": state.run_id})
+        manager = runner.manager_factory.build(tools, metadata=_manager_metadata(runner, state))
         loaded_state = RunState.from_string(manager, sdk_state, context_override={})
         run_state = await loaded_state if hasattr(loaded_state, "__await__") else loaded_state
         interruptions = list(run_state.get_interruptions())
@@ -205,6 +206,16 @@ class SdkManagerRunner:
             return _manager_outcome_from_result(result)
         finally:
             await close_run_config_client(run_config)
+
+
+def _manager_metadata(runner: TurnRunner, state: HarnessRunState) -> dict[str, Any]:
+    context = getattr(runner, "context", None)
+    partition = context.prompt_partition_metadata(state, "planner") if context is not None else {}
+    return {
+        "case_id": state.case_id,
+        "run_id": state.run_id,
+        "prompt_partition": partition,
+    }
 
 
 class AgentRuntime:
@@ -897,6 +908,7 @@ class TurnRunner:
         return result
 
     def run_config(self, state: HarnessRunState) -> RunConfig:
+        partition = self.context.prompt_partition_metadata(state, "planner")
         return build_run_config(
             self.settings,
             workflow_name="invoice_agent.case_manager",
@@ -905,12 +917,15 @@ class TurnRunner:
                 "run_id": state.run_id,
                 "runtime": "openai_agents_sdk",
                 "timeout_seconds": self.settings.timeout_for_role("planner"),
+                **partition,
             },
             timeout_seconds=self.settings.timeout_for_role("planner"),
         )
 
     def record_manager_model_call(self, state: HarnessRunState, manager_input: dict[str, Any], result: Any) -> None:
         usage = _usage_from_result(result)
+        partition = with_usage_metrics(self.context.prompt_partition_metadata(state, "planner"), usage)
+        self.context.update_context_manifest_usage(state, "planner", partition)
         output_preview = _manager_output_preview(result)
         reasoning = extract_reasoning_from_result(result)
         record = ModelCallRecord(
@@ -929,9 +944,16 @@ class TurnRunner:
             reasoning_chunks=reasoning.chunks if reasoning else 0,
             thinking_type=self.settings.llm_thinking_type or "",
             reasoning_source=reasoning.source if reasoning else "",
+            prompt_partition=partition,
         )
         self.llm.calls.append(record)
         self.trace_recorder.record_model_call_debug(state)
+
+    def _sync_context_manifest_usage(self, state: HarnessRunState, target: str, role: str) -> None:
+        for record in reversed(self.llm.calls):
+            if record.role == role and record.prompt_partition:
+                self.context.update_context_manifest_usage(state, target, record.prompt_partition)
+                return
 
     def emit_stream_event(self, kind: str, payload: dict[str, Any] | None = None, *, summary: str = "") -> None:
         if not callable(self._stream_emit):
@@ -1075,6 +1097,7 @@ class TurnRunner:
 
     def _record_manager_failure(self, state: HarnessRunState, manager_input: dict[str, Any], exc: Exception) -> None:
         error = f"{type(exc).__name__}: {exc}"
+        partition = self.context.prompt_partition_metadata(state, "planner")
         self.llm.calls.append(
             ModelCallRecord(
                 role="planner",
@@ -1085,6 +1108,7 @@ class TurnRunner:
                 error=error,
                 system_prompt=MANAGER_PROMPT,
                 payload=manager_input,
+                prompt_partition=partition,
             )
         )
         self.trace_recorder.record_model_call_debug(state)
@@ -1165,6 +1189,20 @@ class TurnRunner:
         role_capability = self.roles.trace_metadata(role)
         role_input = self.context_assembler.hydrate_role_input(state, role, payload, request.message)
         role_input["supervisor_task"] = supervisor_task(decision, state)
+        role_prompt_version = self.roles.prompt_version(role)
+        role_packet = build_context_packet(
+            role=role,
+            prompt_version=role_prompt_version,
+            prompt_file=self.roles.prompt_file(role),
+            system_prompt=self.roles.prompt(role),
+            context_payload=role_input,
+            settings=self.settings,
+            output_model=self.roles.capability(role).output_model,
+            role_contract=role_capability,
+            tool_catalog=self.tools,
+            skills=self.skills,
+        )
+        role_partition_metadata = role_packet.debug_metadata()
         self.context.write_context_manifest(
             state,
             target=f"role:{role}",
@@ -1179,6 +1217,7 @@ class TurnRunner:
             raw_leak_checks=["unrelated_artifacts", "supervisor_transcript"],
             compact_triggered=state.session_compacted,
             metadata={"role_capability": role_capability},
+            partition_metadata=role_packet.manifest_metadata(),
         )
         with self.observability.span(
             f"agent.{role}",
@@ -1189,9 +1228,14 @@ class TurnRunner:
             try:
                 stream_handler = self._specialist_stream_handler(state, role)
                 if stream_handler is None:
-                    result = self.roles.call(role, role_input)
+                    result = self.roles.call(role, role_input, prompt_partition=role_partition_metadata)
                 else:
-                    result = self.roles.call(role, role_input, on_stream=stream_handler)
+                    result = self.roles.call(
+                        role,
+                        role_input,
+                        on_stream=stream_handler,
+                        prompt_partition=role_partition_metadata,
+                    )
                 _mark_prior_specialist_errors_recovered(
                     state,
                     self.llm.calls,
@@ -1199,6 +1243,7 @@ class TurnRunner:
                     recovered_by="specialist_retry_success",
                 )
                 self.trace_recorder.record_model_call_debug(state)
+                self._sync_context_manifest_usage(state, f"role:{role}", role)
                 if role == "evidence_reviewer" and self._record_reviewer_mode_mismatch(state, role, role_input, result, role_capability):
                     span.update(
                         output=safe_role_output(result, error="evidence_reviewer mode mismatch"),
@@ -1904,17 +1949,7 @@ def _stream_item_tool_name(item: Any) -> str:
 
 
 def _usage_from_result(result: Any) -> dict[str, Any]:
-    totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    for response in getattr(result, "raw_responses", []) or []:
-        usage = getattr(response, "usage", None)
-        if hasattr(usage, "model_dump"):
-            usage = usage.model_dump()
-        if not isinstance(usage, dict):
-            continue
-        totals["prompt_tokens"] += int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
-        totals["completion_tokens"] += int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
-        totals["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
-    return {key: value for key, value in totals.items() if value}
+    return extract_usage_from_result(result)
 
 
 def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:

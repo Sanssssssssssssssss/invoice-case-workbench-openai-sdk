@@ -62,7 +62,7 @@ async def close_run_config_client(config: Any) -> None:
         return
     client = getattr(config, "_invoice_openai_client", None)
     if client is not None:
-        await client.close()
+        await _safe_close_openai_client(client)
 
 
 def enable_shared_openai_clients() -> None:
@@ -76,7 +76,7 @@ async def close_shared_openai_clients() -> None:
     _SHARED_CLIENTS.clear()
     _SHARED_CLIENTS_ENABLED = False
     for client in clients:
-        await client.close()
+        await _safe_close_openai_client(client)
 
 
 def _client_for(settings: Settings, *, base_url: str, timeout_seconds: float) -> tuple[AsyncOpenAI, bool]:
@@ -107,3 +107,11 @@ def _use_responses_api(provider: str, base_url: str) -> bool:
     if str(provider or "").lower() != "openai":
         return False
     return str(base_url or "").rstrip("/") == "https://api.openai.com/v1"
+
+
+async def _safe_close_openai_client(client: AsyncOpenAI) -> None:
+    try:
+        await client.close()
+    except RuntimeError as exc:
+        if "Event loop is closed" not in str(exc):
+            raise

@@ -25,6 +25,12 @@ from app.observability.langfuse_tracer import (
     usage_details,
 )
 from app.runtime.agents_sdk import build_run_config
+from app.runtime.context_partition import (
+    build_context_packet,
+    prompt_cache_model_settings_kwargs,
+    usage_from_result,
+    with_usage_metrics,
+)
 from app.runtime.reasoning_capture import extract_reasoning_from_result
 
 
@@ -40,7 +46,14 @@ class RoleRegistry:
     def __init__(self, llm: LlmClient | None = None) -> None:
         self.llm = llm or LlmClient()
 
-    def call(self, role: str, payload: dict[str, Any], *, on_stream: Any | None = None) -> dict[str, Any]:
+    def call(
+        self,
+        role: str,
+        payload: dict[str, Any],
+        *,
+        on_stream: Any | None = None,
+        prompt_partition: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         capability = self.capability(role)
         system_prompt = self.prompt(role)
         prompt_version = capability.prompt_version
@@ -49,6 +62,19 @@ class RoleRegistry:
         model = self.llm.settings.llm_model
         timeout_seconds = self.llm.settings.timeout_for_role(role)
         thinking_type = role_thinking_type(role, payload, self.llm.settings.llm_thinking_type)
+        packet_metadata = dict(prompt_partition or {})
+        if not packet_metadata:
+            packet = build_context_packet(
+                role=role,
+                prompt_version=prompt_version,
+                prompt_file=capability.prompt_file,
+                system_prompt=system_prompt,
+                context_payload=payload,
+                settings=self.llm.settings,
+                output_model=capability.output_model,
+                role_contract=capability.trace_metadata(),
+            )
+            packet_metadata = packet.debug_metadata()
         started = time.perf_counter()
         runtime = "agent_as_tool"
         trace_metadata = {
@@ -63,6 +89,7 @@ class RoleRegistry:
             "agent_as_tool": True,
             "timeout_seconds": timeout_seconds,
             **generation_hash_metadata(system_prompt, payload),
+            **packet_metadata,
         }
         managed_prompt = self.llm.tracer.managed_prompt(
             role=role,
@@ -80,6 +107,7 @@ class RoleRegistry:
                 "runtime": runtime,
                 "agent_as_tool": True,
                 "timeout_seconds": timeout_seconds,
+                **packet_metadata,
             },
             timeout_seconds=timeout_seconds,
         )
@@ -102,11 +130,12 @@ class RoleRegistry:
                     payload=payload,
                     latency_ms=_elapsed_ms(started),
                     runtime=runtime,
+                    prompt_partition=packet_metadata,
                 )
                 self.llm.calls.append(record)
                 generation.update(
                     output=generation_output("", error="llm_unavailable", mode=self.llm.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms, "runtime": runtime, "agent_as_tool": True},
+                    metadata={"latency_ms": record.latency_ms, "runtime": runtime, "agent_as_tool": True, **record.prompt_partition},
                     level="ERROR",
                     status_message="llm_unavailable",
                 )
@@ -121,6 +150,7 @@ class RoleRegistry:
                     generation=generation,
                     thinking_type=thinking_type,
                     on_stream=on_stream,
+                    prompt_partition=packet_metadata,
                 )
                 raw_tool_input = json.dumps({"input": input_text}, ensure_ascii=False)
                 tool_context = (
@@ -150,11 +180,18 @@ class RoleRegistry:
                     payload=payload,
                     latency_ms=_elapsed_ms(started),
                     runtime=runtime,
+                    prompt_partition=packet_metadata,
                 )
                 self.llm.calls.append(record)
                 generation.update(
                     output=generation_output("", error=record.error, mode=self.llm.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms, "schema": capability.output_model.__name__, "runtime": runtime, "agent_as_tool": True},
+                    metadata={
+                        "latency_ms": record.latency_ms,
+                        "schema": capability.output_model.__name__,
+                        "runtime": runtime,
+                        "agent_as_tool": True,
+                        **record.prompt_partition,
+                    },
                     level="ERROR",
                     status_message=record.error,
                 )
@@ -173,16 +210,18 @@ class RoleRegistry:
         generation: Any,
         thinking_type: str | None = None,
         on_stream: Any | None = None,
+        prompt_partition: dict[str, Any] | None = None,
     ) -> FunctionTool:
         capability = self.capability(role)
-        agent = self.agent(role, thinking_type=thinking_type)
+        agent = self.agent(role, thinking_type=thinking_type, prompt_partition=prompt_partition)
 
         async def output_extractor(result: Any) -> str:
             parsed = result.final_output
             if not isinstance(parsed, capability.output_model):
                 parsed = capability.output_model.model_validate(parsed)
             raw_response = parsed.model_dump_json()
-            usage = _usage_from_result(result)
+            usage = usage_from_result(result)
+            partition = with_usage_metrics(prompt_partition, usage)
             reasoning = extract_reasoning_from_result(result)
             record = ModelCallRecord(
                 role=role,
@@ -202,6 +241,7 @@ class RoleRegistry:
                 reasoning_chunks=reasoning.chunks if reasoning else 0,
                 thinking_type=str(thinking_type or "disabled"),
                 reasoning_source=reasoning.source if reasoning else "",
+                prompt_partition=partition,
             )
             self.llm.calls.append(record)
             generation.update(
@@ -213,7 +253,7 @@ class RoleRegistry:
                     output_cost_per_1m=self.llm.settings.llm_output_cost_per_1m,
                     cached_input_cost_per_1m=self.llm.settings.llm_cached_input_cost_per_1m,
                 ),
-                metadata={"latency_ms": record.latency_ms, "runtime": "agent_as_tool", "agent_as_tool": True},
+                metadata={"latency_ms": record.latency_ms, "runtime": "agent_as_tool", "agent_as_tool": True, **partition},
             )
             return raw_response
 
@@ -228,7 +268,7 @@ class RoleRegistry:
             include_input_schema=False,
         )
 
-    def agent(self, role: str, *, thinking_type: str | None = None) -> Agent:
+    def agent(self, role: str, *, thinking_type: str | None = None, prompt_partition: dict[str, Any] | None = None) -> Agent:
         capability = self.capability(role)
         model = self.llm.settings.llm_model
         selected_thinking_type = str(thinking_type or "disabled")
@@ -239,6 +279,7 @@ class RoleRegistry:
             model_settings=ModelSettings(
                 temperature=temperature_for_thinking(model, self.llm.settings.llm_temperature, selected_thinking_type),
                 extra_body=model_extra_body_for_thinking(model, selected_thinking_type),
+                **prompt_cache_model_settings_kwargs(self.llm.settings, prompt_partition),
             ),
             output_type=AgentOutputSchema(capability.output_model, strict_json_schema=False),
         )
@@ -269,20 +310,6 @@ class RoleRegistry:
     @property
     def role_names(self) -> tuple[str, ...]:
         return tuple(ROLE_CAPABILITIES.keys())
-
-
-def _usage_from_result(result: Any) -> dict[str, Any]:
-    totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    for response in getattr(result, "raw_responses", []) or []:
-        usage = getattr(response, "usage", None)
-        if hasattr(usage, "model_dump"):
-            usage = usage.model_dump()
-        if not isinstance(usage, dict):
-            continue
-        totals["prompt_tokens"] += int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
-        totals["completion_tokens"] += int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
-        totals["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
-    return {key: value for key, value in totals.items() if value}
 
 
 def _elapsed_ms(started: float) -> float:

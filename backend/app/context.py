@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import csv
+from datetime import datetime, timezone
 from io import StringIO
 from typing import Any
 
@@ -16,6 +17,11 @@ from app.guards import enforce_case_state_consistency, enforce_no_execution_word
 from app.llm import LlmClient
 from app.memory_service import MemoryService
 from app.runtime import policy_gate as route_policy
+from app.runtime.context_partition import (
+    PARTITION_TOP_LEVEL_KEYS,
+    PARTITION_USAGE_KEYS,
+    runtime_partition_metadata,
+)
 from app.prompt_loader import load_prompt, load_system_prompt
 from app.state.session_repository import SessionRepository
 from app.state.case_store import CaseStore
@@ -33,8 +39,6 @@ PROMPT_INJECTION_DETAIL_RE = re.compile(
     r"[^。\n；;]{0,40}(?:提示注入|prompt injection|越权执行性指令|忽略规则|ignore previous rules|虚假声明|诱导)[^。\n；;]{0,160}",
     re.I,
 )
-
-
 class SummaryResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -130,6 +134,7 @@ class ContextManager:
     ) -> dict[str, Any]:
         observations = _planner_observations(state.observations)
         session_data = session or self.sessions.load_session(state.case_id)
+        prior_turns = _prior_recent_turns(session_data.get("turns") or [], getattr(state, "turn_id", ""), limit=3)
         runtime_feedback = self.last_runtime_feedback(state)
         if not runtime_feedback and int(getattr(state, "max_steps", 0) or 0) - int(getattr(state, "step_count", 0) or 0) <= 1:
             runtime_feedback = step_budget_runtime_feedback()
@@ -141,11 +146,14 @@ class ContextManager:
             "reply_brief": _planner_safe_text(getattr(case_state, "reply_brief", "") or "", max_chars=700),
             "evidence_cards": _brief_records(getattr(case_state, "evidence_cards", []) or [], 8),
             "session_summary": _planner_safe_text(session_data.get("session_summary") or "", max_chars=900),
-            "recent_turns": _planner_recent_turns(self.sessions.get_context_window(state.case_id, limit=3)),
-            "memory_hints": self.memory.search(
+            "recent_turns": _planner_recent_turns(prior_turns),
+            "memory_hints": self._memory_hints_for_context(
                 case_id=state.case_id,
                 query=f"{state.user_message_for_planner} {getattr(case_state, 'summary', '')}",
-                limit=5,
+                case_state=case_state,
+                section="memory_hints",
+                limit=3,
+                max_total_chars=500,
             ),
             "current_goal": state.current_goal,
             "current_plan": _latest_plan(state),
@@ -170,10 +178,13 @@ class ContextManager:
         hydrated = dict(payload)
         hydrated["case_state"] = _sanitize_case_state(case_state)
         hydrated["attachment_manifest"] = attachment_manifest_for_context(self.store, state.case_id)
-        hydrated["memory_hints"] = self.memory.search(
+        hydrated["memory_hints"] = self._memory_hints_for_context(
             case_id=state.case_id,
             query=f"{user_message} {getattr(case_state, 'summary', '')}",
-            limit=3,
+            case_state=case_state,
+            section="memory_hints",
+            limit=5,
+            max_total_chars=1200,
         )
         if role == "materials_advisor":
             hydrated.setdefault("user_question", hydrated.pop("question", user_message))
@@ -283,13 +294,15 @@ class ContextManager:
         raw_leak_checks: list[str] | None = None,
         compact_triggered: bool = False,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+        partition_metadata: dict[str, Any] | None = None,
+    ) -> str:
         step = max(int(getattr(state, "step_count", 0)), 0)
         safe_target = _safe_slug(target.replace(":", "_"))
         relative_path = f"traces/{state.run_id}/context_manifest_{step:03d}_{safe_target}.json"
         target_path = self.store.resolve_case_path(state.case_id, relative_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         text = json.dumps(context_payload, ensure_ascii=False, default=str)
+        partition = dict(partition_metadata or {})
         payload = {
             "target": target,
             "model": model,
@@ -307,12 +320,116 @@ class ContextManager:
             "raw_leak_checks": raw_leak_checks or [],
             "compact_triggered": compact_triggered,
             "metadata": metadata or {},
+            "prompt_partition": partition,
         }
+        payload.update({key: partition.get(key) for key in PARTITION_TOP_LEVEL_KEYS if key in partition})
         target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        manifests = getattr(state, "observability", {}).setdefault("context_manifests", {})
+        if isinstance(manifests, dict):
+            manifests[target] = relative_path
+        partitions = getattr(state, "observability", {}).setdefault("prompt_partitions", {})
+        if isinstance(partitions, dict) and partition:
+            partitions[target] = runtime_partition_metadata(partition)
+        return relative_path
+
+    def update_context_manifest_usage(self, state: Any, target: str, usage_metadata: dict[str, Any]) -> None:
+        manifests = getattr(state, "observability", {}).get("context_manifests")
+        ref = manifests.get(target) if isinstance(manifests, dict) else ""
+        if not ref:
+            return
+        try:
+            path = self.store.resolve_case_path(state.case_id, str(ref))
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        partition = payload.get("prompt_partition") if isinstance(payload.get("prompt_partition"), dict) else {}
+        partition.update({key: usage_metadata.get(key) for key in PARTITION_USAGE_KEYS if key in usage_metadata})
+        payload["prompt_partition"] = partition
+        for key in PARTITION_USAGE_KEYS:
+            if key in usage_metadata:
+                payload[key] = usage_metadata[key]
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        partitions = getattr(state, "observability", {}).setdefault("prompt_partitions", {})
+        if isinstance(partitions, dict):
+            current = partitions.get(target) if isinstance(partitions.get(target), dict) else {}
+            current.update(runtime_partition_metadata(partition))
+            partitions[target] = current
+
+    def prompt_partition_metadata(self, state: Any, target: str) -> dict[str, Any]:
+        partitions = getattr(state, "observability", {}).get("prompt_partitions")
+        value = partitions.get(target) if isinstance(partitions, dict) else {}
+        return runtime_partition_metadata(value) if isinstance(value, dict) else {}
 
     def last_role_result(self, state: Any, name: str | None = None) -> dict[str, Any]:
         result = self._latest_payload(state, kind="role", name=name)
         return result if isinstance(result, dict) else {}
+
+    def _memory_hints_for_context(
+        self,
+        *,
+        case_id: str,
+        query: str,
+        case_state: Any,
+        section: str,
+        limit: int,
+        max_total_chars: int,
+    ) -> list[dict[str, Any]]:
+        candidates = self.memory.search(case_id=case_id, query=query, limit=max(limit * 4, 12))
+        case_brief = _case_brief(case_state)
+        by_source: dict[str, dict[str, Any]] = {}
+        for raw in candidates:
+            item = dict(raw)
+            text = _planner_safe_text(item.get("text", ""), max_chars=700)
+            if not text:
+                continue
+            if _memory_conflicts_case_state(text, case_state):
+                continue
+            if _memory_repeats_case_brief(text, case_brief):
+                continue
+            source_ref = str(item.get("source_ref") or "").strip()
+            score = float(item.get("relevance_score") or item.get("score") or 0.0)
+            if not source_ref:
+                score *= 0.5
+            freshness = "case_current"
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            expires_at = str(metadata.get("expires_at") or "")
+            if _memory_expired(expires_at):
+                score *= 0.5
+                freshness = "expired"
+            record = {
+                "section": section,
+                "truth_status": "advisory",
+                "memory_type": item.get("memory_type", ""),
+                "text": text,
+                "source_ref": source_ref,
+                "relevance_score": round(score, 4),
+                "confidence": round(min(1.0, max(0.0, score)), 4),
+                "freshness": freshness,
+                "expires_at": expires_at,
+                "included_reason": _memory_included_reason(text, case_state),
+                "max_chars": 160,
+                "boundary": "memory_hint_only_not_case_truth",
+            }
+            key = source_ref or f"memory:{item.get('id')}"
+            current = by_source.get(key)
+            if not current or float(current.get("relevance_score") or 0.0) < score:
+                by_source[key] = record
+        ordered = sorted(by_source.values(), key=lambda row: float(row.get("relevance_score") or 0.0), reverse=True)
+        result: list[dict[str, Any]] = []
+        remaining = max_total_chars
+        for item in ordered:
+            if len(result) >= limit or remaining <= 0:
+                break
+            max_chars = min(160, remaining)
+            text = str(item.get("text") or "")[:max_chars]
+            if not text:
+                continue
+            item = dict(item)
+            item["text"] = text
+            item["max_chars"] = max_chars
+            remaining -= len(text)
+            result.append(item)
+        return result
 
     def last_evidence_reviewer_result(self, state: Any, mode: str | tuple[str, ...] | None = None) -> dict[str, Any]:
         modes = {mode} if isinstance(mode, str) else set(mode or [])
@@ -931,6 +1048,66 @@ def _case_brief(case_state: Any) -> str:
     )
 
 
+def _memory_conflicts_case_state(text: str, case_state: Any) -> bool:
+    lower = text.lower()
+    requirements = getattr(case_state, "requirements", []) or []
+    positive_terms = ("satisfied", "accepted", "complete", "已满足", "齐全", "通过")
+    negative_terms = ("missing", "weak", "conflict", "rejected", "缺失", "不足", "冲突", "不一致")
+    for requirement in requirements:
+        req_id = str(getattr(requirement, "id", "") or "")
+        if not req_id or req_id.lower() not in lower:
+            continue
+        status = str(getattr(requirement, "status", "") or "")
+        if status in {"missing", "weak", "conflict", "rejected"} and any(term in lower for term in positive_terms):
+            return True
+        if status in {"satisfied", "accepted"} and any(term in lower for term in negative_terms):
+            return True
+    return False
+
+
+def _memory_repeats_case_brief(text: str, case_brief: str) -> bool:
+    lower = text.lower().strip()
+    brief = case_brief.lower()
+    if not lower:
+        return True
+    if lower in brief:
+        return True
+    tokens = [token for token in re.findall(r"[\w\u4e00-\u9fff]{3,}", lower) if len(token) >= 3]
+    if len(tokens) < 4:
+        return False
+    overlap = sum(1 for token in tokens if token in brief)
+    return overlap / max(1, len(tokens)) >= 0.85
+
+
+def _memory_expired(expires_at: str) -> bool:
+    value = str(expires_at or "").strip()
+    if not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed < datetime.now(timezone.utc)
+
+
+def _memory_included_reason(text: str, case_state: Any) -> str:
+    lower = text.lower()
+    for field in ("missing_materials", "weak_materials", "conflict_materials"):
+        for item in getattr(case_state, field, []) or []:
+            item_text = str(item or "")
+            if item_text and item_text.lower() in lower:
+                return f"matches {field}:{item_text}"
+    profile = getattr(case_state, "case_profile", {}) or {}
+    if isinstance(profile, dict):
+        for key in ("supplier", "invoice_number", "amount_total"):
+            value = str(profile.get(key) or "")
+            if value and value.lower() in lower:
+                return f"matches case_profile:{key}"
+    return "matches user query tokens"
+
+
 def _case_memory(case_state: Any) -> dict[str, Any]:
     return {
         "requirements": [
@@ -1082,6 +1259,27 @@ def _planner_recent_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return safe_turns
+
+
+def _prior_recent_turns(turns: list[dict[str, Any]], current_turn_id: str, *, limit: int) -> list[dict[str, Any]]:
+    current = str(current_turn_id or "").strip()
+    prior = [turn for turn in turns if not current or str(turn.get("turn_id") or "") != current]
+    compacted: list[dict[str, Any]] = []
+    for turn in prior[-limit:]:
+        compacted.append(
+            {
+                "turn_id": turn.get("turn_id", ""),
+                "user_summary": turn.get("user_summary") or turn.get("user_message_summary", ""),
+                "assistant_summary": turn.get("assistant_summary", ""),
+                "attachments": [
+                    {"name": item.get("name", ""), "path": item.get("path", "")}
+                    for item in turn.get("attachments", [])
+                    if isinstance(item, dict)
+                ],
+                "run_ids": list(turn.get("run_ids") or []),
+            }
+        )
+    return compacted
 
 
 def _planner_safe_observation(observation: dict[str, Any]) -> dict[str, Any]:

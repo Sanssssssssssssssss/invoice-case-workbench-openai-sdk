@@ -392,6 +392,13 @@ class EvidenceReviewResult(BaseModel):
             return {}
         normalized: dict[str, Any] = {}
         for key, item in value.items():
+            if _looks_like_field_group(item):
+                for child_key, child_item in item.items():
+                    if isinstance(child_item, dict):
+                        normalized[str(child_key)] = child_item
+                    else:
+                        normalized[str(child_key)] = {"value": child_item, "status": "present", "source_quote": ""}
+                continue
             if isinstance(item, dict):
                 normalized[str(key)] = item
             else:
@@ -518,3 +525,15 @@ def _evidence_cards_from_patch_items(items: list[EvidencePatchItem]) -> list[dic
         }
         cards.append({key: value for key, value in card.items() if value not in ("", [], {}, None)})
     return cards
+
+
+def _looks_like_field_group(value: Any) -> bool:
+    if not isinstance(value, dict) or not value:
+        return False
+    field_keys = {"value", "status", "source_quote", "source_locator", "locator", "confidence"}
+    if field_keys.intersection(value):
+        return False
+    nested = [item for item in value.values() if isinstance(item, dict)]
+    if not nested:
+        return False
+    return all(field_keys.intersection(item) for item in nested)

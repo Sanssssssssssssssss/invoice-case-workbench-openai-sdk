@@ -54,6 +54,8 @@ Field object:
 {"value": "", "status": "present|missing|conflict|unclear", "source_quote": "", "source_locator": "", "confidence": "low|medium|high"}
 ```
 
+`extracted_fields` must be a flat object: each key is one field id and each value is one field object. Do not group fields under `case_identity`, `invoice_fields`, `ap_fields`, `header`, or any other nested section. Invalid: `{"case_identity": {"invoice_number": {...}}}`. Valid: `{"invoice_number": {...}, "supplier": {...}, "amount_total": {...}}`.
+
 Common fields:
 
 - source_doc_id

@@ -16,6 +16,8 @@ from app.llm import LlmClient
 from app.session_manager import SessionManager
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest
+from app.runtime.context_partition import build_context_packet
+from app.tools.catalog import ToolCatalog
 
 
 class ContextAssembler:
@@ -37,6 +39,7 @@ class ContextAssembler:
         self.sessions = sessions
         self.planner_prompt = planner_prompt
         self.planner_prompt_file = planner_prompt_file
+        self.tool_catalog = ToolCatalog()
 
     def load_context(self, request: AgentTurnRequest, run_id: str | None = None) -> HarnessRunState:
         case_id = self.store.validate_case_id(request.case_id)
@@ -68,6 +71,15 @@ class ContextAssembler:
             session=session,
             attachments=[item.model_dump() for item in request.attachments],
         )
+        packet = build_context_packet(
+            role="planner",
+            prompt_version="case_manager_agents_sdk_v1",
+            prompt_file=self.planner_prompt_file,
+            system_prompt=self.planner_prompt,
+            context_payload={"user_message": state.user_message_for_planner, "context_pack": planner_context},
+            settings=self.llm.settings,
+            tool_catalog=self.tool_catalog,
+        )
         self.context.write_context_manifest(
             state,
             target="planner",
@@ -87,6 +99,7 @@ class ContextAssembler:
             budget=context_budget(state),
             raw_leak_checks=["raw_attachment_content", "long_user_message", "full_report_markdown"],
             compact_triggered=state.session_compacted,
+            partition_metadata=packet.manifest_metadata(),
         )
         return planner_context
 
@@ -112,12 +125,41 @@ class ContextAssembler:
         state.pre_run_context_estimate_chars = estimated
         context_char_limit = int(self.llm.settings.context_char_limit)
         state.pre_run_context_limit_chars = context_char_limit
+        turns = list(session.get("turns") or [])
+        prior_turns = _prior_turns(turns, state.turn_id)
+        history_estimated = estimate_pre_run_context_chars(
+            request=AgentTurnRequest(case_id=request.case_id, message="", attachments=[]),
+            session={**session, "turns": prior_turns},
+            case_state=case_state,
+            planner_prompt=self.planner_prompt,
+        )
+        should_force = _should_compact_session(
+            estimated=history_estimated,
+            limit=context_char_limit,
+            turns=prior_turns,
+        )
+        trigger_reason = _compaction_reason(
+            estimated=history_estimated,
+            limit=context_char_limit,
+            turns=prior_turns,
+            fallback="PreRunContextBudget",
+        )
+        state.observability["context_compaction_trigger"] = {
+            "reason": trigger_reason,
+            "force": should_force,
+            "estimated_chars": estimated,
+            "history_estimated_chars": history_estimated,
+            "limit_chars": context_char_limit,
+            "turn_count": len(prior_turns),
+            "total_turn_count": len(turns),
+            "threshold_ratio": 0.6,
+        }
         try:
             result = self.sessions.compact_before_run(
                 state.case_id,
-                force=False,
-                reason="PreRunContextBudget",
-                estimated_context_chars=estimated,
+                force=should_force,
+                reason=trigger_reason,
+                estimated_context_chars=history_estimated,
                 context_char_limit=context_char_limit,
             )
         except Exception as exc:
@@ -216,3 +258,42 @@ def _path_size_estimate(path: Path) -> int:
     except OSError:
         return 0
     return 0
+
+
+def _should_compact_session(*, estimated: int, limit: int, turns: list[dict[str, Any]]) -> bool:
+    if limit > 0 and estimated >= int(limit * 0.6):
+        return True
+    if len(turns) > 8:
+        return True
+    return _recent_turns_noisy(turns[-6:])
+
+
+def _prior_turns(turns: list[dict[str, Any]], current_turn_id: str) -> list[dict[str, Any]]:
+    current = str(current_turn_id or "").strip()
+    if not current:
+        return turns
+    return [turn for turn in turns if str(turn.get("turn_id") or "") != current]
+
+
+def _compaction_reason(*, estimated: int, limit: int, turns: list[dict[str, Any]], fallback: str) -> str:
+    reasons = []
+    if limit > 0 and estimated >= int(limit * 0.6):
+        reasons.append("SessionSummaryBudget60Percent")
+    if len(turns) > 8:
+        reasons.append("SessionTurnCountOver8")
+    if _recent_turns_noisy(turns[-6:]):
+        reasons.append("SessionRecentTurnsNoisy")
+    return "+".join(reasons) if reasons else fallback
+
+
+def _recent_turns_noisy(turns: list[dict[str, Any]]) -> bool:
+    if len(turns) < 3:
+        return False
+    empty_assistant = sum(1 for item in turns if not str(item.get("assistant_summary") or item.get("assistant_reply") or "").strip())
+    attachment_turns = sum(1 for item in turns if item.get("attachments"))
+    long_user = sum(
+        1
+        for item in turns
+        if len(str(item.get("user_message") or item.get("user_message_summary") or "")) > 900
+    )
+    return empty_assistant >= 3 or attachment_turns >= 4 or long_user >= 3
