@@ -16,15 +16,11 @@ The runtime split is intentionally strict:
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
 .\.venv\Scripts\python.exe -m pytest backend\tests -q
-.\.venv\Scripts\python.exe -m app.desktop
-```
-
-Electron desktop:
-
-```powershell
 pnpm install
 pnpm dev
 ```
+
+The legacy Tkinter client remains available as `.\.venv\Scripts\python.exe -m app.desktop`, but Electron is the supported desktop entry point.
 
 API debugging:
 

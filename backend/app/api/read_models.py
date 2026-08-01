@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from app.observability.model_metrics import trace_duration_ms, trace_token_count
 from app.state.case_store import CaseStore
 from app.state.schemas import CaseState, Requirement
 from app.state.session_repository import SessionRepository
@@ -293,8 +294,8 @@ def normalize_trace_event(raw: dict[str, Any]) -> TraceEvent:
         summary=_event_summary(raw_kind, raw, payload),
         parent_event_id=str(raw.get("parent_event_id") or ""),
         caused_by_event_id=str(raw.get("caused_by_event_id") or ""),
-        duration_ms=_optional_int(payload.get("duration_ms") or raw.get("duration_ms")),
-        token_count=_optional_int(payload.get("total_tokens") or payload.get("tokens") or raw.get("token_count")),
+        duration_ms=trace_duration_ms(payload, raw),
+        token_count=trace_token_count(payload, raw),
         input_preview=_payload_preview(payload.get("input") or payload.get("request")),
         output_preview=_payload_preview(
             payload.get("output")

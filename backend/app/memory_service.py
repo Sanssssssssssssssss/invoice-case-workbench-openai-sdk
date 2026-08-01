@@ -84,19 +84,18 @@ class MemoryService:
                 (case_id,),
             ).fetchall()
         allowed = set(memory_types or [])
-        scored: list[tuple[int, sqlite3.Row]] = []
+        scored: list[tuple[float, int, sqlite3.Row, list[str], str]] = []
         for row in rows:
             if allowed and str(row["memory_type"]) not in allowed:
                 continue
             haystack = f"{row['memory_type']} {row['text']} {row['source_ref']} {row['metadata_json']}".lower()
-            score = sum(1 for token in tokens if token in haystack) if tokens else 1
+            score, raw_score, score_terms, score_reason = _score_memory_row(haystack, tokens)
             if score > 0:
-                scored.append((score, row))
-        scored.sort(key=lambda item: (item[0], int(item[1]["id"])), reverse=True)
+                scored.append((score, raw_score, row, score_terms, score_reason))
+        scored.sort(key=lambda item: (item[0], int(item[2]["id"])), reverse=True)
         result = []
-        token_count = max(1, len(tokens))
-        for score, row in scored[: max(0, int(limit))]:
-            relevance = min(1.0, float(score) / token_count)
+        for score, raw_score, row, score_terms, score_reason in scored[: max(0, int(limit))]:
+            relevance = round(score, 4)
             result.append(
                 {
                     "id": int(row["id"]),
@@ -106,9 +105,12 @@ class MemoryService:
                     "source_ref": str(row["source_ref"] or ""),
                     "metadata": _loads_dict(row["metadata_json"]),
                     "created_at": str(row["created_at"] or ""),
-                    "score": score,
-                    "relevance_score": round(relevance, 4),
-                    "confidence": round(relevance, 4),
+                    "score": relevance,
+                    "relevance_score": relevance,
+                    "confidence": relevance,
+                    "raw_score": raw_score,
+                    "score_terms": score_terms,
+                    "score_reason": score_reason,
                     "boundary": "memory_hint_only_not_case_truth",
                 }
             )
@@ -173,6 +175,17 @@ def _memory_query_tokens(word: str) -> list[str]:
                 continue
             tokens.extend(span[idx : idx + size] for idx in range(0, len(span) - size + 1))
     return tokens
+
+
+def _score_memory_row(haystack: str, tokens: list[str]) -> tuple[float, int, list[str], str]:
+    if not tokens:
+        return 0.0, 0, [], "empty_query"
+    score_terms = [token for token in tokens if token in haystack]
+    raw_score = len(score_terms)
+    if raw_score <= 0:
+        return 0.0, 0, [], "no_token_overlap"
+    score = raw_score / max(1, len(tokens))
+    return round(min(1.0, score), 4), raw_score, score_terms[:12], "token_overlap"
 
 
 def _loads_dict(value: Any) -> dict[str, Any]:

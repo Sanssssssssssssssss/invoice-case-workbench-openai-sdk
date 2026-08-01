@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.state.persistence import PERSISTENCE_LOCK, atomic_write_text
+
 
 MANIFEST_RELATIVE_PATH = "attachments/attachment_manifest.json"
 MANIFEST_VERSION = "attachment_manifest_v1"
@@ -41,10 +43,30 @@ def save_attachment_manifest(store: Any, case_id: str, manifest: dict[str, Any])
     manifest["version"] = MANIFEST_VERSION
     manifest["case_id"] = case_id
     manifest["updated_at"] = utc_now()
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    atomic_write_text(path, json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
 
 
 def upsert_manifest_read_items(
+    store: Any,
+    case_id: str,
+    items: list[dict[str, Any]],
+    *,
+    session_id: str = "",
+    turn_id: str = "",
+    run_id: str = "",
+) -> dict[str, Any]:
+    with PERSISTENCE_LOCK:
+        return _upsert_manifest_read_items(
+            store,
+            case_id,
+            items,
+            session_id=session_id,
+            turn_id=turn_id,
+            run_id=run_id,
+        )
+
+
+def _upsert_manifest_read_items(
     store: Any,
     case_id: str,
     items: list[dict[str, Any]],
@@ -101,6 +123,17 @@ def update_manifest_summaries(
     artifact_ref: str,
     summaries: list[dict[str, Any]],
 ) -> None:
+    with PERSISTENCE_LOCK:
+        _update_manifest_summaries(store, case_id, artifact_ref=artifact_ref, summaries=summaries)
+
+
+def _update_manifest_summaries(
+    store: Any,
+    case_id: str,
+    *,
+    artifact_ref: str,
+    summaries: list[dict[str, Any]],
+) -> None:
     if not summaries:
         return
     manifest = load_attachment_manifest(store, case_id)
@@ -126,6 +159,11 @@ def update_manifest_summaries(
 
 
 def link_manifest_evidence(store: Any, case_id: str, case_state: Any) -> None:
+    with PERSISTENCE_LOCK:
+        _link_manifest_evidence(store, case_id, case_state)
+
+
+def _link_manifest_evidence(store: Any, case_id: str, case_state: Any) -> None:
     manifest = load_attachment_manifest(store, case_id)
     changed = False
     for evidence in getattr(case_state, "evidence_items", []) or []:

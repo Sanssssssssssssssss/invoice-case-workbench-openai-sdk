@@ -1,0 +1,15 @@
+{
+  "case_status": "collecting_materials",
+  "min_evidence_count": 6,
+  "reply_any_of": ["银行", "变更", "审批", "bank", "approval"],
+  "requirements": {
+    "invoice": "satisfied",
+    "purchase_order": "satisfied",
+    "goods_receipt_or_service_acceptance": "satisfied",
+    "vendor_identity": "conflict",
+    "duplicate_payment_screen": "satisfied"
+  },
+  "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
+  "trace_must_not_call": ["report_writer", "write_case_file", "render_pdf"],
+  "artifacts_must_not_exist": ["reports/*.md", "reports/*.pdf"]
+}

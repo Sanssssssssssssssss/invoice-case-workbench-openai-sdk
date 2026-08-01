@@ -65,8 +65,9 @@ class _RunSubscriber:
 
 
 class RunStreamHub:
-    def __init__(self, *, max_events_per_run: int = 1000) -> None:
+    def __init__(self, *, max_events_per_run: int = 1000, max_terminal_runs: int = 100) -> None:
         self.max_events_per_run = max_events_per_run
+        self.max_terminal_runs = max_terminal_runs
         self._lock = threading.RLock()
         self._runs: dict[str, RunStreamRecord] = {}
         self._subscribers: dict[str, list[_RunSubscriber]] = {}
@@ -129,6 +130,8 @@ class RunStreamHub:
                 record.status = "running"
             subscribers = [subscriber for subscriber in self._subscribers.get(run_id, []) if subscriber.active]
             self._subscribers[run_id] = subscribers
+            if kind in TERMINAL_KINDS:
+                self._evict_terminal_runs_locked()
         for subscriber in subscribers:
             subscriber.push(event)
         return event
@@ -139,6 +142,23 @@ class RunStreamHub:
             if record is None:
                 raise KeyError(run_id)
             return [event for event in list(record.events or []) if event.seq > after_seq]
+
+    def claim_approval(self, run_id: str, case_id: str) -> bool:
+        with self._lock:
+            record = self._runs.get(run_id)
+            if record is None:
+                raise KeyError(run_id)
+            if record.case_id != case_id:
+                raise ValueError("approval case does not match run case")
+            if record.status != "waiting_approval":
+                return False
+            record.status = "running"
+            record.updated_at = _utc_now()
+            return True
+
+    def run_ids(self) -> list[str]:
+        with self._lock:
+            return list(self._runs)
 
     async def subscribe(self, run_id: str, after_seq: int = 0) -> AsyncIterator[RunStreamEvent]:
         loop = asyncio.get_running_loop()
@@ -189,6 +209,16 @@ class RunStreamHub:
                 for subscriber in subscribers:
                     subscriber.active = False
             self._subscribers.clear()
+
+    def _evict_terminal_runs_locked(self) -> None:
+        terminal = sorted(
+            (record for record in self._runs.values() if record.status in TERMINAL_STATUSES),
+            key=lambda record: record.updated_at,
+        )
+        for record in terminal[: max(0, len(terminal) - self.max_terminal_runs)]:
+            self._runs.pop(record.run_id, None)
+            for subscriber in self._subscribers.pop(record.run_id, []):
+                subscriber.active = False
 
 
 stream_hub = RunStreamHub()

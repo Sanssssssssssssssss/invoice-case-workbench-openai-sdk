@@ -1,0 +1,18 @@
+{
+  "id": "golden_case_06_duplicate_pdf",
+  "name": "Duplicate-payment conflict from a real SAP PDF",
+  "description": "Direct SAP PDF parsing must not hide the positive duplicate-payment result.",
+  "tags": ["golden", "attachments", "real_pdf", "duplicate_payment", "material_review"],
+  "user_script": [
+    {
+      "message": "请审核这组 SAP 发票付款材料，判断是否存在重复付款风险。不要生成报告。",
+      "attach": [
+        "originals/sap_5435569865439.pdf",
+        "upload_to_app/02_purchase_order.md",
+        "upload_to_app/03_goods_receipt.md",
+        "upload_to_app/04_vendor_record.md",
+        "upload_to_app/05_duplicate_payment_check.md"
+      ]
+    }
+  ]
+}

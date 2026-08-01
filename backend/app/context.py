@@ -18,6 +18,7 @@ from app.llm import LlmClient
 from app.memory_service import MemoryService
 from app.runtime import policy_gate as route_policy
 from app.runtime.context_partition import (
+    PARTITION_MANIFEST_KEYS,
     PARTITION_TOP_LEVEL_KEYS,
     PARTITION_USAGE_KEYS,
     runtime_partition_metadata,
@@ -154,6 +155,7 @@ class ContextManager:
                 section="memory_hints",
                 limit=3,
                 max_total_chars=500,
+                min_score=0.15,
             ),
             "current_goal": state.current_goal,
             "current_plan": _latest_plan(state),
@@ -185,6 +187,7 @@ class ContextManager:
             section="memory_hints",
             limit=5,
             max_total_chars=1200,
+            min_score=0.10,
         )
         if role == "materials_advisor":
             hydrated.setdefault("user_question", hydrated.pop("question", user_message))
@@ -323,6 +326,7 @@ class ContextManager:
             "prompt_partition": partition,
         }
         payload.update({key: partition.get(key) for key in PARTITION_TOP_LEVEL_KEYS if key in partition})
+        payload.update({key: partition.get(key) for key in PARTITION_MANIFEST_KEYS if key in partition})
         target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         manifests = getattr(state, "observability", {}).setdefault("context_manifests", {})
         if isinstance(manifests, dict):
@@ -373,6 +377,7 @@ class ContextManager:
         section: str,
         limit: int,
         max_total_chars: int,
+        min_score: float,
     ) -> list[dict[str, Any]]:
         candidates = self.memory.search(case_id=case_id, query=query, limit=max(limit * 4, 12))
         case_brief = _case_brief(case_state)
@@ -390,12 +395,12 @@ class ContextManager:
             score = float(item.get("relevance_score") or item.get("score") or 0.0)
             if not source_ref:
                 score *= 0.5
-            freshness = "case_current"
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
             expires_at = str(metadata.get("expires_at") or "")
-            if _memory_expired(expires_at):
-                score *= 0.5
-                freshness = "expired"
+            freshness, freshness_multiplier = _memory_freshness(expires_at)
+            score *= freshness_multiplier
+            if score < min_score:
+                continue
             record = {
                 "section": section,
                 "truth_status": "advisory",
@@ -409,6 +414,9 @@ class ContextManager:
                 "included_reason": _memory_included_reason(text, case_state),
                 "max_chars": 160,
                 "boundary": "memory_hint_only_not_case_truth",
+                "score_terms": list(item.get("score_terms") or [])[:12],
+                "score_reason": str(item.get("score_reason") or ""),
+                "raw_score": item.get("raw_score", 0),
             }
             key = source_ref or f"memory:{item.get('id')}"
             current = by_source.get(key)
@@ -1079,17 +1087,19 @@ def _memory_repeats_case_brief(text: str, case_brief: str) -> bool:
     return overlap / max(1, len(tokens)) >= 0.85
 
 
-def _memory_expired(expires_at: str) -> bool:
+def _memory_freshness(expires_at: Any) -> tuple[str, float]:
     value = str(expires_at or "").strip()
     if not value:
-        return False
+        return "case_current", 1.0
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        return False
+        return "invalid_expires_at", 0.75
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed < datetime.now(timezone.utc)
+    if parsed < datetime.now(timezone.utc):
+        return "expired", 0.5
+    return "case_current", 1.0
 
 
 def _memory_included_reason(text: str, case_state: Any) -> str:

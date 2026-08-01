@@ -6,6 +6,7 @@ from typing import Any
 
 from app.harness import HarnessRunState
 from app.state.case_store import CaseStore
+from app.state.persistence import PERSISTENCE_LOCK, atomic_write_text
 from app.state.schemas import AgentTurnRequest
 
 
@@ -31,14 +32,15 @@ class RuntimeCheckpointStore:
         }
         path = self.store.resolve_case_path(state.case_id, f"traces/{state.run_id}/runtime_state.json")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
     def load(self, case_id: str, run_id: str) -> tuple[HarnessRunState, AgentTurnRequest, str, list[dict[str, Any]]]:
-        case_id = self.store.validate_case_id(case_id)
-        path = self.store.resolve_case_path(case_id, f"traces/{run_id}/runtime_state.json")
-        if not path.exists():
-            raise FileNotFoundError(run_id)
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        with PERSISTENCE_LOCK:
+            case_id = self.store.validate_case_id(case_id)
+            path = self.store.resolve_case_path(case_id, f"traces/{run_id}/runtime_state.json")
+            if not path.exists():
+                raise FileNotFoundError(run_id)
+            payload = json.loads(path.read_text(encoding="utf-8"))
         state = _run_state_from_json(payload.get("run_state") or {})
         request = AgentTurnRequest.model_validate(payload.get("request") or {"case_id": case_id, "message": ""})
         sdk_state = str(payload.get("sdk_state") or "")

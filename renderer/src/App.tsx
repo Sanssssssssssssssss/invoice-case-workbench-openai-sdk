@@ -4,7 +4,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api, createEventSource } from '@/lib/api'
 import { approvalInterruptsFromEvents, approvalInterruptsFromTrace } from '@/lib/approvals'
 import { createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic } from '@/lib/chat'
-import { parseAgentRunStreamMessage, parseLiveStatusMessage, parseTraceEventMessage } from '@/lib/eventStream'
+import { isNewAgentRunStreamEvent, parseAgentRunStreamMessage, parseLiveStatusMessage, parseTraceEventMessage } from '@/lib/eventStream'
 import { mergeEvents } from '@/lib/trace'
 import type { AgentRunStreamEvent, AgentTurnResponse, ApprovalInterrupt, ArtifactItem, AttachmentUpload, ConversationItem, LiveStatus, TraceEvent } from '@/types'
 import { useUiStore } from '@/store/uiStore'
@@ -267,17 +267,14 @@ export default function App() {
     return new Promise<'final' | 'approval'>((resolve, reject) => {
       let source: EventSource | null = null
       let settled = false
-      let terminalReceived = false
       const finish = (result: 'final' | 'approval') => {
         if (settled) return
-        terminalReceived = true
         settled = true
         source?.close()
         resolve(result)
       }
       const fail = (error: unknown) => {
         if (settled) return
-        terminalReceived = true
         settled = true
         source?.close()
         reject(error)
@@ -286,23 +283,21 @@ export default function App() {
         try {
           const event = parseAgentRunStreamMessage(raw.data)
           if (!event) return
+          if (!isNewAgentRunStreamEvent(event, streamSeqByRunRef.current[event.run_id] ?? 0)) return
           updateFromRunStreamEvent(event)
           if (event.kind === 'assistant_delta') {
             return
           } else if (event.kind === 'approval_required') {
-            terminalReceived = true
             const approvals = approvalsFromRunStream(event, caseId, runId)
             setPendingApprovals(approvals)
             await refreshCaseData(caseId, runId, { deferSecondary: true })
             finish('approval')
           } else if (event.kind === 'final') {
-            terminalReceived = true
             const response = agentTurnResponseFromPayload(event.payload)
             if (!response) throw new Error('Streaming final event did not include a valid response.')
             await applyResponse(response)
             finish('final')
           } else if (event.kind === 'error') {
-            terminalReceived = true
             fail(new Error(stringValue(event.payload.message) || event.summary || 'Streaming run failed.'))
           }
         } catch (error) {
@@ -314,10 +309,6 @@ export default function App() {
           source = eventSource
           for (const kind of STREAM_EVENT_KINDS) {
             source.addEventListener(kind, (event) => void handle(event as MessageEvent))
-          }
-          source.onerror = () => {
-            if (settled || terminalReceived) return
-            fail(new Error('Streaming connection failed.'))
           }
         })
         .catch(fail)
@@ -377,13 +368,8 @@ export default function App() {
     setRunning(true)
     setPendingApprovals([])
     try {
-      try {
-        const run = await api.resumeRunApproval(caseId, runId, approved, approved ? 'approved_from_desktop' : 'rejected_from_desktop')
-        await waitForRunStream(caseId, run.run_id, run.stream_url)
-      } catch (_streamError) {
-        const response = await api.resumeApproval(caseId, runId, approved, approved ? 'approved_from_desktop' : 'rejected_from_desktop')
-        await applyResponse(response)
-      }
+      const run = await api.resumeRunApproval(caseId, runId, approved, approved ? 'approved_from_desktop' : 'rejected_from_desktop')
+      await waitForRunStream(caseId, run.run_id, run.stream_url)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       setOptimisticMessages((current) => [...current, createOptimisticSystemMessage(`审批恢复失败：${detail}`)])

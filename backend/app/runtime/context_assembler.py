@@ -29,6 +29,7 @@ class ContextAssembler:
         harness: HarnessRuntime,
         context: ContextManager,
         sessions: SessionManager,
+        tool_catalog: ToolCatalog,
         planner_prompt: str,
         planner_prompt_file: str = "backend/app/agents/planner/prompt.md",
     ) -> None:
@@ -37,9 +38,9 @@ class ContextAssembler:
         self.harness = harness
         self.context = context
         self.sessions = sessions
+        self.tool_catalog = tool_catalog
         self.planner_prompt = planner_prompt
         self.planner_prompt_file = planner_prompt_file
-        self.tool_catalog = ToolCatalog()
 
     def load_context(self, request: AgentTurnRequest, run_id: str | None = None) -> HarnessRunState:
         case_id = self.store.validate_case_id(request.case_id)

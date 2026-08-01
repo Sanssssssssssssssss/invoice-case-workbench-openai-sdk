@@ -6,7 +6,7 @@
     "dev": "pnpm --dir desktop dev",
     "build": "pnpm --dir desktop build",
     "typecheck": "pnpm --dir desktop typecheck && pnpm --dir renderer typecheck",
-    "test": "pnpm --dir renderer test"
+    "test": "pnpm --dir desktop test && pnpm --dir renderer test"
   },
   "packageManager": "pnpm@10.33.0",
   "pnpm": {

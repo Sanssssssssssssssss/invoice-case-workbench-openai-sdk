@@ -7,7 +7,7 @@ This tool is a local LLM-native case workbench. It does not approve invoices, pa
 Open the local desktop app:
 
 ```powershell
-.\.venv\Scripts\python.exe -m app.desktop
+pnpm dev
 ```
 
 Use the left case list to open multiple case chats. Drag evidence files into the attachments area, or click `Choose files`, then send a message asking the agent to review them.
@@ -41,7 +41,7 @@ Use the left case list to open multiple case chats. Drag evidence files into the
      "attachments": [
        {
          "name": "01_invoice_INV-2026-001.md",
-         "path": "E:\\GPTProject2\\NewERPAgnent\\samples\\cases\\invoice_payment_case_001\\evidence\\01_invoice_INV-2026-001.md",
+         "path": "E:\\GPTProject2\\erp-openai\\workspace\\cases\\case_001\\attachments\\a1b2c3d4e5_01_invoice_INV-2026-001.md",
          "content_type": "text/markdown"
        }
      ]
@@ -61,15 +61,15 @@ Use the left case list to open multiple case chats. Drag evidence files into the
    ```text
    workspace/cases/{case_id}/case_state.json
    workspace/cases/{case_id}/conversation.jsonl
-   workspace/cases/{case_id}/traces/run_*.json
-   workspace/cases/{case_id}/reports/manager_report.md
-   workspace/cases/{case_id}/reports/manager_report.pdf
+   workspace/cases/{case_id}/traces/{run_id}.json
+   workspace/cases/{case_id}/reports/final_report_{timestamp}.md
+   workspace/cases/{case_id}/reports/final_report_{timestamp}.pdf
    ```
 
 ## Important Behavior
 
 - Planner is the only scheduler.
-- The runtime loop is a real LangGraph `StateGraph` with five nodes: `load_context`, `planner`, `execute_action`, `persist_checkpoint`, `respond_or_continue`.
+- The OpenAI Agents SDK runs the manager loop; the local harness enforces policy, persistence, checkpoints, and tool boundaries.
 - Roles produce structured JSON; they do not write files.
 - Tools perform hard capabilities only.
 - Errors from roles/tools are written into observations and shown to Planner.

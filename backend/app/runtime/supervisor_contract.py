@@ -66,3 +66,14 @@ SPECIALIST_TOOL_MODELS: dict[str, type[BaseModel]] = {
     "report_writer": ReportWriterInput,
     "write_case_patch": WriteCasePatchInput,
 }
+
+
+def sorted_specialist_tool_specs() -> tuple[tuple[str, str, type[BaseModel]], ...]:
+    return tuple(
+        (
+            name,
+            SPECIALIST_TOOL_DESCRIPTIONS.get(name, ""),
+            SPECIALIST_TOOL_MODELS[name],
+        )
+        for name in sorted(SPECIALIST_TOOL_MODELS)
+    )

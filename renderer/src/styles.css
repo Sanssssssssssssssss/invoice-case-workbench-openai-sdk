@@ -1303,6 +1303,10 @@ button {
   background: var(--surface);
 }
 
+.detail-header {
+  min-width: 0;
+}
+
 .detail-tabs {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1334,6 +1338,32 @@ button {
   left: 14px;
   height: 2px;
   background: var(--teal);
+}
+
+.model-metrics-strip {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  overflow: hidden;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.model-metrics-strip span {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 220px;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-metrics-strip strong {
+  color: var(--text-soft);
+  font-weight: 720;
 }
 
 .json-detail pre {

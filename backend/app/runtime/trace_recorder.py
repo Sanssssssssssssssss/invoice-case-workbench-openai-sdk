@@ -6,6 +6,7 @@ from typing import Any
 from app.harness import HarnessRuntime, HarnessRunState
 from app.llm import LlmClient
 from app.observability.langfuse_tracer import LangfuseTracer
+from app.observability.model_metrics import summarize_model_metrics
 from app.session_manager import SessionManager
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnResponse, SupervisorDecision
@@ -28,9 +29,11 @@ class TraceRecorder:
         self.tracer = tracer or LangfuseTracer.disabled()
 
     def record_model_call_debug(self, state: HarnessRunState) -> None:
+        compact_calls = [item.to_dict() for item in self.llm.calls]
+        state.observability["model_metrics"] = summarize_model_metrics(compact_calls)
         self.harness.record_model_calls(
             state,
-            [item.to_dict() for item in self.llm.calls],
+            compact_calls,
             [item.to_debug_dict() for item in self.llm.calls],
         )
 

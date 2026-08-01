@@ -40,6 +40,8 @@ async def start_agent_run(request: AgentTurnRequest) -> AgentRunAccepted:
     store = CaseStore()
     try:
         case_id = store.validate_case_id(request.case_id)
+        for attachment in request.attachments:
+            store.validate_attachment_path(case_id, attachment.path)
     except (FileBoundaryError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     run_id = HarnessRuntime(store).new_run_id()
@@ -73,6 +75,12 @@ async def resume_agent_run_approval(run_id: str, request: StreamingApprovalReque
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
     case_id = request.case_id or record.case_id
+    try:
+        claimed = stream_hub.claim_approval(run_id, case_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not claimed:
+        raise HTTPException(status_code=409, detail="run is not waiting for approval")
     asyncio.create_task(_execute_approval(case_id, run_id, request.approved, request.reason))
     return AgentRunAccepted(
         case_id=case_id,

@@ -7,7 +7,8 @@ The benchmark follows the tau-bench pattern:
 - Multi-turn user scripts define what the user says, what files they attach, and how approval prompts are answered.
 - The runner exercises the real application API boundary through `AgentRuntime` and `TurnRunner`.
 - Domain policy is encoded in scenario fixtures and deterministic verifiers.
-- Success is judged by final case state, trace behavior, artifacts, safety constraints, budgets, and optional qualitative judging.
+- Contract pass is judged by final case state, trace behavior, artifacts, safety constraints, and budgets.
+- LLM quality score is reported separately through a judge model; a contract pass is not a perfect quality score.
 - `pass^k` is supported through repeated runs with `--k`.
 
 ## Modes
@@ -16,9 +17,34 @@ The benchmark follows the tau-bench pattern:
 
 `live` keeps the same scenario harness but lets the real OpenAI Agents SDK manager and specialists run. This can spend model tokens and is not used by default.
 
-The LLM judge is also off by default. Add `--llm-judge` to run it, and add `--require-llm-judge` only when judge pass/fail should affect the final benchmark pass.
+The LLM judge is enabled by default for the live core/full/material profiles and disabled for smoke/scripted profiles. Add `--no-llm-judge` to save judge tokens, add `--llm-judge` to force judging, and add `--require-llm-judge` only when judge pass/fail should affect the final benchmark pass.
+
+Judge configuration defaults to the app LLM settings and can be overridden without changing the tested agent:
+
+- `INVOICE_TAUBENCH_JUDGE_MODEL`
+- `INVOICE_TAUBENCH_JUDGE_BASE_URL`
+- `INVOICE_TAUBENCH_JUDGE_API_KEY`
+- `INVOICE_TAUBENCH_JUDGE_TIMEOUT_SECONDS`
+
+## Profiles
+
+Named profiles are the preferred way to run chain-level evals:
+
+- `chain_live_smoke`: real LLM smoke for chat, material advice, and empty case creation.
+- `chain_live_core`: real LLM core benchmark for smoke plus exactly three long material-review regressions.
+- `chain_live_full`: real LLM full benchmark; discovers every scenario and exercises review, report, PDF approval, prompt-injection safety, and rejection paths.
+- `material_live_regression`: real LLM benchmark for only the three long material-review scenarios.
+- `scripted_full`: deterministic full suite for CI and cheap local regression.
+
+When a profile is used, its mode is the default. You can still pass `--mode scripted` or `--mode live` to override it intentionally.
 
 ## Commands
+
+Use UTF-8 stdio in PowerShell before live benchmark runs:
+
+```powershell
+$env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'
+```
 
 Run one scripted smoke scenario:
 
@@ -29,19 +55,45 @@ python -m benchmarks.invoice_tau.run --mode scripted --scenario chat_capability_
 Run the full deterministic suite once:
 
 ```powershell
-python -m benchmarks.invoice_tau.run --mode scripted --k 1
+python -m benchmarks.invoice_tau.run --profile scripted_full --k 1
 ```
 
-Run a representative low-cost batch:
+Run the six evidence-backed golden hand-test cases with the real model:
 
 ```powershell
-python -m benchmarks.invoice_tau.run --mode scripted --scenario chat_capability_001 --scenario material_advice_001 --scenario duplicate_conflict_001 --scenario prompt_injection_001 --scenario reject_pdf_approval_001
+$env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m benchmarks.invoice_tau.run --mode live --scenario-root golden_cases/session_invoice_cases_v1 --no-llm-judge
 ```
 
-Run repeated scripted `pass^k`:
+The golden root reuses the same runner and deterministic verifiers. Each case owns `scenario.json`, `expected.json`, `upload_to_app/`, and `originals/`; generated reports remain outside the dataset.
+
+Run the live LLM smoke benchmark:
 
 ```powershell
-python -m benchmarks.invoice_tau.run --mode scripted --k 5
+$env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m benchmarks.invoice_tau.run --profile chain_live_smoke
+```
+
+Run the live LLM core chain benchmark:
+
+```powershell
+$env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m benchmarks.invoice_tau.run --profile chain_live_core
+```
+
+Run the full live LLM benchmark:
+
+```powershell
+$env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m benchmarks.invoice_tau.run --profile chain_live_full
+```
+
+Score a saved report with the LLM judge without rerunning the agent:
+
+```powershell
+$env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m benchmarks.invoice_tau.score_report --report-dir C:\Users\ROG\AppData\Local\Temp\invoice_tau_chain_live_full_20260610_185141 --write
+```
+
+Run only the three long material-review live regressions:
+
+```powershell
+$env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m benchmarks.invoice_tau.run --profile material_live_regression
 ```
 
 Run live mode with the optional judge:
@@ -70,17 +122,20 @@ The benchmark sets `INVOICE_AGENT_WORKSPACE_ROOT`, `INVOICE_AGENT_STORAGE_ROOT`,
 
 ## Metrics
 
-The summary reports:
+The summary reports two separate tracks:
 
-- `pass@1`: fraction of scenario runs that pass.
+- `contract_pass@1`: fraction of scenario runs that satisfy hard deterministic checks.
 - `pass_all_k`: fraction of scenarios where every repeated run passed.
-- `average_score`: mean deterministic verifier score.
+- `deterministic_score`: mean deterministic verifier score.
+- `llm_quality_score`: mean LLM judge score over judged runs.
+- `judge_dimension_scores`: mean judge score for state correctness, evidence grounding, tool process, safety/approval, report quality, user communication, and efficiency.
 - `total_tokens`: tokens observed in trace events, normally zero in scripted mode.
 - `total_wall_time_ms`: wall-clock runtime across scenarios.
 
 Scenario checks cover:
 
 - Required and forbidden reply text.
+- Case status and evidence counts.
 - Requirement statuses and risk flags.
 - Evidence types.
 - Required and forbidden tool/role calls.
@@ -88,6 +143,7 @@ Scenario checks cover:
 - Required and forbidden artifacts.
 - RAG guidance profiles and source terms.
 - Safety constraints such as prompt-injection leakage and approval bypass.
+- Encoding cleanliness: benchmark outputs must not contain `???`, replacement characters, `undefined`, `not valid JSON`, streaming failure text, or generic manager failure text.
 - Budgets for model calls, tool calls, role calls, tokens, and wall time.
 
 ## Adding A Scenario

@@ -1,0 +1,15 @@
+{
+  "case_status": "ready_for_report",
+  "min_evidence_count": 5,
+  "requirements": {
+    "invoice": "satisfied",
+    "purchase_order": "satisfied",
+    "goods_receipt_or_service_acceptance": "satisfied",
+    "vendor_identity": "satisfied",
+    "duplicate_payment_screen": "satisfied"
+  },
+  "must_not_have_risk_flags": ["duplicate_payment_hit", "cross_evidence_amount_mismatch"],
+  "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
+  "trace_must_not_call": ["report_writer", "write_case_file", "render_pdf"],
+  "artifacts_must_not_exist": ["reports/*.md", "reports/*.pdf"]
+}

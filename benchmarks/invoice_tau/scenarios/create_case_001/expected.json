@@ -1,0 +1,14 @@
+{
+  "case_status": "new",
+  "max_evidence_count": 0,
+  "reply_any_of": ["案卷", "case", "状态"],
+  "trace_must_not_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch", "report_writer", "write_case_file", "render_pdf"],
+  "artifacts_must_exist": ["traces/*.json"],
+  "artifacts_must_not_exist": ["reports/*.md", "reports/*.pdf"],
+  "budgets": {
+    "max_model_calls": 2,
+    "max_tool_calls": 0,
+    "max_role_calls": 1,
+    "max_wall_time_ms": 180000
+  }
+}

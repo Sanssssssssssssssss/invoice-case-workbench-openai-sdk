@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
-from app.state.schemas import AgentTurnRequest, CasePatch, default_requirements
-from app.state.case_store import CaseStore, FileBoundaryError
+from app.state.schemas import AgentTurnRequest, CasePatch, ConflictRecord, default_requirements
+from app.state.case_store import CaseStore, FileBoundaryError, _parse_amount
 
 
 def test_case_creation_and_patch(tmp_path) -> None:
@@ -75,6 +76,56 @@ def test_evidence_without_requirements_does_not_make_case_ready(tmp_path) -> Non
 
     assert updated.requirements == []
     assert updated.evidence_items
+    assert updated.status == "collecting_materials"
+
+
+def test_ap_chain_evidence_backfills_missing_core_requirements(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    updated = store.apply_patch(
+        "case_ap_missing_grn",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "add_evidence": [
+                    {
+                        "id": "ev_invoice",
+                        "type": "invoice",
+                        "credibility": "high",
+                        "summary": "Invoice INV-6101 amount 8800.00 CNY.",
+                        "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-6101"}],
+                    },
+                    {
+                        "id": "ev_po",
+                        "type": "purchase_order",
+                        "credibility": "high",
+                        "summary": "PO-6101 matches invoice.",
+                        "supports": [{"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO-6101"}],
+                    },
+                    {
+                        "id": "ev_vendor",
+                        "type": "vendor_record",
+                        "credibility": "high",
+                        "summary": "Vendor is active.",
+                        "supports": [{"requirement": "vendor_identity", "support_level": "full", "quoted_text": "active vendor"}],
+                    },
+                    {
+                        "id": "ev_duplicate",
+                        "type": "duplicate_payment_check",
+                        "credibility": "high",
+                        "summary": "No duplicate payment found.",
+                        "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "no duplicate"}],
+                    },
+                ]
+            },
+            "audit_note": "AP chain without GRN",
+        },
+    )
+
+    requirements = {item.id: item.status for item in updated.requirements}
+    required = {item.id: item.required for item in updated.requirements}
+    assert requirements["goods_receipt_or_service_acceptance"] == "missing"
+    assert required["buyer"] is False
+    assert "goods_receipt_or_service_acceptance" in updated.missing_materials
     assert updated.status == "collecting_materials"
 
 
@@ -206,6 +257,14 @@ def test_cross_evidence_amount_mismatch_blocks_ready_for_report(tmp_path) -> Non
     assert "purchase_order" in updated.conflict_materials
     assert "goods_receipt_or_service_acceptance" in updated.conflict_materials
     assert any("cross_evidence_amount_mismatch" in item for item in updated.risk_flags)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("€82 003,30", "82003.30"), ("82,003.30 EUR", "82003.30"), ("319.00 INR", "319.00")],
+)
+def test_parse_amount_supports_invoice_number_formats(raw: str, expected: str) -> None:
+    assert _parse_amount(raw) == Decimal(expected)
 
 
 def test_accepted_core_documents_backfill_supports_to_ready(tmp_path) -> None:
@@ -354,6 +413,38 @@ def test_negative_duplicate_payment_check_is_not_derived_as_conflict(tmp_path) -
     assert evidence.conflicts == []
     assert requirement.status == "satisfied"
     assert updated.status == "ready_for_report"
+
+
+def test_no_field_conflict_chinese_note_is_not_derived_as_conflict(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    updated = store.apply_patch(
+        "case_no_field_conflict_note",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": [{"id": "invoice", "kind": "document"}],
+                "add_evidence": [
+                    {
+                        "type": "invoice",
+                        "credibility": "high",
+                        "summary": "发票信息完整，金额、供应商与PO、GRN、供应商主数据匹配，无字段冲突",
+                        "review_result": {
+                            "should_accept": True,
+                            "reason": "发票信息完整，金额、供应商与PO、GRN、供应商主数据匹配，无字段冲突",
+                            "evidence_type": "invoice",
+                        },
+                        "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "INV-7001"}],
+                    }
+                ],
+            },
+            "audit_note": "negative conflict wording remains clean",
+        },
+    )
+
+    invoice = next(item for item in updated.requirements if item.id == "invoice")
+    assert updated.evidence_items[0].conflicts == []
+    assert invoice.status == "satisfied"
+    assert updated.conflict_materials == []
 
 
 def test_prompt_injection_evidence_is_quarantined_before_state_write(tmp_path) -> None:
@@ -818,12 +909,31 @@ def test_invoice_support_backfill_adds_optional_fields_from_inventory(tmp_path) 
                         "credibility": "medium",
                         "review_result": {"should_accept": True, "evidence_type": "invoice"},
                         "supports": [
-                            {"requirement": "invoice_number", "support_level": "full", "quoted_text": "Invoice No"}
+                            {"requirement": "invoice_number", "support_level": "full", "quoted_text": "Invoice No"},
+                            {"requirement": "invoice_date", "support_level": "partial", "quoted_text": "20-10-2015"},
                         ],
                         "metadata": {
                             "classification": "business_evidence",
                             "original_ref": "attachments/originals/invoice.pdf",
+                            "extracted_fields": {
+                                "invoice_date": {
+                                    "value": "20-10-2015",
+                                    "status": "present",
+                                    "source_quote": "Date: 20-10-2015",
+                                    "source_locator": "page 1 block b12",
+                                    "confidence": "medium",
+                                }
+                            },
                             "field_inventory": [
+                                {
+                                    "field": "invoice_date",
+                                    "value": "20-10-2015",
+                                    "status": "present",
+                                    "source_quote": "Date: 20-10-2015",
+                                    "locator": "page 1 block b12",
+                                    "crop_path": "evidence/crops/att/b12.png",
+                                    "confidence": "medium",
+                                },
                                 {
                                     "field": "line_items_product_title",
                                     "value": "SanDisk memory card",
@@ -855,6 +965,7 @@ def test_invoice_support_backfill_adds_optional_fields_from_inventory(tmp_path) 
     evidence_ids = {item.id: item.evidence_ids for item in updated.requirements}
     assert statuses["line_items_product_title"] == "satisfied"
     assert statuses["signature_or_authorized_signatory"] == "satisfied"
+    assert statuses["invoice_date"] == "satisfied"
     assert evidence_ids["line_items_product_title"] == ["ev_001"]
     assert evidence_ids["signature_or_authorized_signatory"] == ["ev_001"]
 
@@ -1133,11 +1244,11 @@ def test_full_support_overrides_prior_partial_mentions(tmp_path) -> None:
 
     statuses = {item.id: item.status for item in updated.requirements}
     assert statuses["purchase_order"] == "satisfied"
-    assert statuses["vendor_record"] == "satisfied"
+    assert statuses["vendor_identity"] == "satisfied"
     assert "purchase_order" not in updated.missing_materials
-    assert "vendor_record" not in updated.missing_materials
+    assert "vendor_identity" not in updated.missing_materials
     assert "purchase_order" in updated.satisfied_materials
-    assert "vendor_record" in updated.satisfied_materials
+    assert "vendor_identity" in updated.satisfied_materials
 
 
 def test_case_patch_schema_rejects_llm_status_and_missing_materials() -> None:
@@ -1721,7 +1832,7 @@ def test_duplicate_negative_chinese_notes_are_not_derived_into_conflict(tmp_path
                         "type": "duplicate_payment_check",
                         "credibility": "high",
                         "summary": "重复付款检查报告：未发现重复发票、历史付款或清账凭证",
-                        "content": "Invoice ID checked: INV-5001; Duplicate search: No duplicate found; Payment history: No prior payment; Clearing document: None exists",
+                        "content": "Invoice ID checked: INV-5001; Duplicate found: No; Historical payment record: No matching record; Clearing document: No matching record; Conclusion: No duplicate-payment hit",
                         "review_result": {
                             "should_accept": True,
                             "reason": "系统导出的重复付款检查结果，搜索维度完整，无重复风险指示",
@@ -1734,7 +1845,7 @@ def test_duplicate_negative_chinese_notes_are_not_derived_into_conflict(tmp_path
                                 "quoted_text": "No duplicate invoice found; No prior payment found",
                             }
                         ],
-                        "reviewer_notes": "ERP重复付款检查覆盖多维度，均未发现重复，无未解决的重复付款冲突",
+                        "reviewer_notes": "ERP导出重复付款检查结果为阴性，检查范围限于导出时的搜索条件",
                     }
                 ]
             },
@@ -1905,8 +2016,60 @@ def test_patch_normalizes_conflict_objects(tmp_path) -> None:
         },
     )
 
-    assert isinstance(updated.evidence_items[0].conflicts[0], str)
-    assert "PR material is not invoice evidence" in updated.evidence_items[0].conflicts[0]
+    assert isinstance(updated.evidence_items[0].conflicts[0], ConflictRecord)
+    assert updated.evidence_items[0].conflicts[0].requirement == "invoice"
+    assert updated.evidence_items[0].conflicts[0].description == "PR material is not invoice evidence"
+
+
+def test_structured_conflict_scope_does_not_leak_from_description(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    updated = store.apply_patch(
+        "case_conflict_scope",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": [{"id": "invoice"}, {"id": "purchase_order"}],
+                "add_evidence": [
+                    {
+                        "type": "invoice",
+                        "review_result": {"should_accept": True},
+                        "supports": [{"requirement": "invoice", "support_level": "partial"}],
+                        "conflicts": [
+                            {
+                                "conflict_type": "amount_mismatch",
+                                "requirement": "invoice",
+                                "description": "Invoice amount differs from PO and goods receipt.",
+                                "source_values": {"invoice": "38086.30", "purchase_order": "35039.40"},
+                            }
+                        ],
+                    },
+                    {
+                        "type": "purchase_order",
+                        "review_result": {"should_accept": True},
+                        "supports": [
+                            {"requirement": "purchase_order", "support_level": "full"},
+                            {"requirement": "invoice", "support_level": "partial"},
+                        ],
+                        "conflicts": [
+                            {
+                                "conflict_type": "amount_mismatch",
+                                "requirement": "invoice",
+                                "description": "PO amount differs from invoice amount.",
+                                "source_values": {"invoice": "38086.30", "purchase_order": "35039.40"},
+                            },
+                            {
+                                "requirement": "purchase_order",
+                                "description": "Invoice amount differs from PO amount.",
+                            }
+                        ],
+                    },
+                ],
+            },
+        },
+    )
+
+    statuses = {item.id: item.status for item in updated.requirements}
+    assert statuses == {"invoice": "satisfied", "purchase_order": "conflict"}
 
 
 def test_patch_accepts_evidence_type_alias(tmp_path) -> None:

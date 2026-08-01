@@ -1,0 +1,18 @@
+{
+  "id": "golden_case_01_clean_jpg",
+  "name": "Clean three-way match from a real JPG invoice",
+  "description": "Direct JPG parsing plus clean PO, GRN, vendor, and duplicate-payment evidence.",
+  "tags": ["golden", "attachments", "real_image", "material_review"],
+  "user_script": [
+    {
+      "message": "请审核这些发票付款材料，判断证据是否完整。只做材料审核，不要生成报告或 PDF。",
+      "attach": [
+        "originals/FACTU2015020048.jpg",
+        "upload_to_app/02_purchase_order.md",
+        "upload_to_app/03_goods_receipt.md",
+        "upload_to_app/04_vendor_record.md",
+        "upload_to_app/05_duplicate_payment_check.md"
+      ]
+    }
+  ]
+}

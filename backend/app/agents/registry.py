@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from agents import Agent, AgentOutputSchema, FunctionTool, ModelSettings
+from agents import Agent, FunctionTool, ModelSettings
 from agents.run_context import RunContextWrapper
 from agents.tool_context import ToolContext
 
@@ -24,7 +24,7 @@ from app.observability.langfuse_tracer import (
     generation_output,
     usage_details,
 )
-from app.runtime.agents_sdk import build_run_config
+from app.runtime.agents_sdk import FencedJsonOutputSchema, build_run_config
 from app.runtime.context_partition import (
     build_context_packet,
     prompt_cache_model_settings_kwargs,
@@ -135,7 +135,7 @@ class RoleRegistry:
                 self.llm.calls.append(record)
                 generation.update(
                     output=generation_output("", error="llm_unavailable", mode=self.llm.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms, "runtime": runtime, "agent_as_tool": True, **record.prompt_partition},
+                    metadata={"runtime": runtime, "agent_as_tool": True, **record.metrics(), **record.prompt_partition},
                     level="ERROR",
                     status_message="llm_unavailable",
                 )
@@ -186,10 +186,10 @@ class RoleRegistry:
                 generation.update(
                     output=generation_output("", error=record.error, mode=self.llm.tracer.capture_payloads),
                     metadata={
-                        "latency_ms": record.latency_ms,
                         "schema": capability.output_model.__name__,
                         "runtime": runtime,
                         "agent_as_tool": True,
+                        **record.metrics(),
                         **record.prompt_partition,
                     },
                     level="ERROR",
@@ -253,7 +253,7 @@ class RoleRegistry:
                     output_cost_per_1m=self.llm.settings.llm_output_cost_per_1m,
                     cached_input_cost_per_1m=self.llm.settings.llm_cached_input_cost_per_1m,
                 ),
-                metadata={"latency_ms": record.latency_ms, "runtime": "agent_as_tool", "agent_as_tool": True, **partition},
+                metadata={"runtime": "agent_as_tool", "agent_as_tool": True, **record.metrics(), **partition},
             )
             return raw_response
 
@@ -281,7 +281,7 @@ class RoleRegistry:
                 extra_body=model_extra_body_for_thinking(model, selected_thinking_type),
                 **prompt_cache_model_settings_kwargs(self.llm.settings, prompt_partition),
             ),
-            output_type=AgentOutputSchema(capability.output_model, strict_json_schema=False),
+            output_type=FencedJsonOutputSchema(capability.output_model, strict_json_schema=False),
         )
 
     def prompt(self, role: str) -> str:

@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Bot, Brain, Check, Circle, Code2, Database, Download, ExternalLink, FileText, FolderOpen, GitBranch, Wrench, XCircle } from 'lucide-react'
 import type { ArtifactItem, CaseState, EvidenceItem, RunSummary, TraceEvent } from '@/types'
 import { eventTitle, eventTone, formatDuration, shortTime, timelinePositionClass } from '@/lib/trace'
+import { modelMetricItems, modelMetricsFromEvent } from '@/lib/modelMetrics'
 import { statusLabel } from '@/lib/requirements'
 import { runArtifactAction } from '@/lib/artifacts'
 import { StatusChip } from './StatusChip'
@@ -194,12 +195,15 @@ function JsonDetail({ event }: { event: TraceEvent | null }) {
   const content = detailContent(event, active)
   return (
     <div className="json-detail">
-      <div className="detail-tabs">
+      <div className="detail-header">
+        <div className="detail-tabs">
         {['思考', '输入', '输出', '关联', 'Raw JSON'].map((tab) => (
           <button key={tab} className={active === tab ? 'active' : ''} onClick={() => setActive(tab)}>
             {tab}
           </button>
         ))}
+      </div>
+        <ModelMetricsStrip event={event} />
       </div>
       <pre>{content}</pre>
       <div className="detail-footer">
@@ -207,6 +211,23 @@ function JsonDetail({ event }: { event: TraceEvent | null }) {
         <span>Ln 1, Col 1</span>
         <button aria-label="下载 JSON"><Download size={15} /></button>
       </div>
+    </div>
+  )
+}
+
+function ModelMetricsStrip({ event }: { event: TraceEvent | null }) {
+  const metrics = modelMetricsFromEvent(event)
+  if (!metrics) return null
+  const items = modelMetricItems(metrics)
+  if (items.length === 0) return null
+  return (
+    <div className="model-metrics-strip" aria-label="model metrics">
+      {items.map((item) => (
+        <span key={item.label} title={item.title}>
+          <strong>{item.label}</strong>
+          {item.value}
+        </span>
+      ))}
     </div>
   )
 }

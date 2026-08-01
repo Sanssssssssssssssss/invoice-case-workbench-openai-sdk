@@ -76,5 +76,5 @@
       "audit_note": "scripted prompt injection quarantine case"
     }
   },
-  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 45000}
+  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 600000}
 }

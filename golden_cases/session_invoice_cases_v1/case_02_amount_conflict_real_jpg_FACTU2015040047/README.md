@@ -4,10 +4,10 @@ Real invoice JPG. PO/GRN intentionally use a lower amount so the report should s
 
 ## How to test in the current app
 
-Upload the files inside `upload_to_app/` for one session. The files in `originals/` are real invoice originals and sidecars for visual inspection; do not upload `originals/` together with text files until direct JPG/PDF OCR support is added.
+Upload the five files inside `upload_to_app/` for one session. The text invoice extract keeps this case focused on the deterministic amount mismatch; `originals/` remains available for visual inspection.
 
 Suggested prompt:
 
 ```text
-?????????????????????? PDF???????????????????????
+请核对这批付款材料的金额和单据关系，告诉我是否可以进入报告阶段。不要生成报告。
 ```

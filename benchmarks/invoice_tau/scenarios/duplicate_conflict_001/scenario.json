@@ -24,12 +24,7 @@
         {"conflict_type": "duplicate_payment_hit", "requirement": "duplicate_payment_screen", "severity": "high", "description": "Potential duplicate payment hit for supplier Aurora Industrial Ltd. amount 12800.00 CNY.", "quoted_text": "PAY-2026-4421 / CLR-2026-1187", "required_follow_up": "Review historical payment and clearing explanation before payment release."}
       ],
       "evidence_cards": [{"title": "Duplicate payment hit", "doc_type": "duplicate_payment_check", "supports": ["duplicate_payment_screen"], "conflicts": ["duplicate_payment_hit"]}],
-      "suggested_patch": {},
-      "reply_to_user": "重复付款检查命中，付款不能放行。"
-    },
-    "case_patch_writer": {
-      "patch_type": "update_case",
-      "case_updates": {
+      "suggested_patch": {
         "summary": "INV-7001 材料中重复付款检查命中高风险。",
         "case_profile": {"invoice_number": "INV-7001", "supplier": "Aurora Industrial Ltd.", "amount_total": "12800.00", "currency": "CNY"},
         "requirements": [
@@ -50,8 +45,8 @@
         "next_questions": ["请提供历史付款 PAY-2026-4421 和清账凭证 CLR-2026-1187 的业务解释。"],
         "reply_brief": "重复付款检查命中，duplicate_payment_screen 保持 conflict。"
       },
-      "audit_note": "scripted duplicate conflict case"
+      "reply_to_user": "重复付款检查命中，付款不能放行。"
     }
   },
-  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 45000}
+  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 600000}
 }

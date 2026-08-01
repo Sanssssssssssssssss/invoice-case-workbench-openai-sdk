@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backendProcess.js'
+import { isAllowedExternalUrl } from './externalLinks.js'
 
 let mainWindow: BrowserWindow | null = null
 let backend: BackendHandle | null = null
@@ -34,7 +35,9 @@ function createWindow(handle: BackendHandle): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    if (isAllowedExternalUrl(url)) {
+      void shell.openExternal(url)
+    }
     return { action: 'deny' }
   })
 

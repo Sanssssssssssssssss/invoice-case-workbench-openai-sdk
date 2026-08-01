@@ -1,0 +1,23 @@
+{
+  "id": "create_case_001",
+  "name": "Create empty invoice review case",
+  "description": "Chain-level scenario for creating a new case without attachments and without accidentally starting evidence review or report generation.",
+  "tags": ["create_case", "manager", "chat"],
+  "user_script": [
+    {
+      "message": "请创建一个新的发票付款审查 case。现在还没有附件，请只告诉我当前案卷状态和下一步需要什么。",
+      "manager_decisions": [
+        {
+          "action": "final_answer",
+          "final_answer": "已创建新的发票付款审查 case。当前还没有收到附件或证据，案卷状态为 new；下一步请上传发票、采购订单、收货或服务验收、供应商主数据和重复付款检查记录。"
+        }
+      ]
+    }
+  ],
+  "budgets": {
+    "max_model_calls": 2,
+    "max_tool_calls": 0,
+    "max_role_calls": 1,
+    "max_wall_time_ms": 180000
+  }
+}

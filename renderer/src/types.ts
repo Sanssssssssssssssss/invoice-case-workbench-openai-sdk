@@ -35,7 +35,7 @@ export interface EvidenceItem {
   created_at: string
   review_result: Record<string, unknown>
   supports: Array<{ requirement: string; support_level: string; quoted_text: string }>
-  conflicts: string[]
+  conflicts: ConflictRecord[]
   quoted_text: string[]
   reviewer_notes: string
   metadata: Record<string, unknown>
@@ -145,6 +145,22 @@ export interface AgentTurnResponse {
   reply: string
   case_state: CaseState
   trace: Record<string, unknown>
+}
+
+export interface ConflictRecord {
+  type: string
+  conflict_type: string
+  requirement: string | null
+  severity: 'low' | 'medium' | 'high'
+  field: string
+  description: string
+  details: string
+  quoted_text: string
+  affected_fields: string[]
+  evidence_ids: string[]
+  source_values: Record<string, unknown>
+  suggested_resolution: string
+  resolution_status: string
 }
 
 export interface AgentRunAccepted {

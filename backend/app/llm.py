@@ -17,6 +17,7 @@ from app.observability.langfuse_tracer import (
     generation_output,
     usage_details,
 )
+from app.observability.model_metrics import build_model_metrics
 from app.runtime.reasoning_capture import extract_reasoning_from_result
 from app.runtime.context_partition import (
     build_context_packet,
@@ -39,6 +40,7 @@ class ModelCallRecord:
     raw_response: str = ""
     usage: dict[str, Any] | None = None
     latency_ms: float | None = None
+    ttft_ms: float | None = None
     provider_request_id: str = ""
     finish_reason: str = ""
     schema_validation_error: str = ""
@@ -54,8 +56,16 @@ class ModelCallRecord:
     reasoning_source: str = ""
     prompt_partition: dict[str, Any] = field(default_factory=dict)
 
+    def metrics(self) -> dict[str, Any]:
+        return build_model_metrics(
+            usage=self.usage,
+            prompt_partition=self.prompt_partition,
+            latency_ms=self.latency_ms,
+            ttft_ms=self.ttft_ms,
+        )
+
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "role": self.role,
             "model": self.model,
             "prompt_version": self.prompt_version,
@@ -86,9 +96,11 @@ class ModelCallRecord:
                 if key in self.prompt_partition
             },
         }
+        payload.update(self.metrics())
+        return payload
 
     def to_debug_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "role": self.role,
             "model": self.model,
             "prompt_version": self.prompt_version,
@@ -99,7 +111,6 @@ class ModelCallRecord:
             "input_preview": self.input_preview,
             "output_preview": self.output_preview,
             "usage": self.usage or {},
-            "latency_ms": self.latency_ms,
             "provider_request_id": self.provider_request_id,
             "finish_reason": self.finish_reason,
             "schema_validation_error": self.schema_validation_error,
@@ -115,6 +126,8 @@ class ModelCallRecord:
             "reasoning_source": self.reasoning_source,
             "prompt_partition": self.prompt_partition,
         }
+        payload.update(self.metrics())
+        return payload
 
 
 class LlmClient:
@@ -140,7 +153,8 @@ class LlmClient:
         prompt_version: str,
         model: str | None = None,
     ) -> BaseModel:
-        from agents import Agent, AgentOutputSchema, ModelSettings
+        from agents import Agent, ModelSettings
+        from app.runtime.agents_sdk import FencedJsonOutputSchema
 
         input_preview = json.dumps(payload, ensure_ascii=False, default=str)[:1400]
         selected_model = model or self.settings.llm_model
@@ -206,7 +220,7 @@ class LlmClient:
                 self.calls.append(record)
                 generation.update(
                     output=generation_output("", error="llm_unavailable", mode=self.tracer.capture_payloads),
-                    metadata={"latency_ms": record.latency_ms, "runtime": record.runtime, **packet.debug_metadata()},
+                    metadata={"runtime": record.runtime, **record.metrics(), **packet.debug_metadata()},
                     level="ERROR",
                     status_message="llm_unavailable",
                 )
@@ -221,7 +235,7 @@ class LlmClient:
                         extra_body=_model_extra_body(selected_model, thinking_type),
                         **prompt_cache_model_settings_kwargs(self.settings, packet),
                     ),
-                    output_type=AgentOutputSchema(model_type, strict_json_schema=False),
+                    output_type=FencedJsonOutputSchema(model_type, strict_json_schema=False),
                 )
                 from app.runtime.agents_sdk import run_agent_sync
 
@@ -282,7 +296,7 @@ class LlmClient:
                         output_cost_per_1m=self.settings.llm_output_cost_per_1m,
                         cached_input_cost_per_1m=self.settings.llm_cached_input_cost_per_1m,
                     ),
-                    metadata={"latency_ms": record.latency_ms, "runtime": record.runtime, **partition},
+                    metadata={"runtime": record.runtime, **record.metrics(), **partition},
                 )
                 return parsed
             except Exception as exc:
@@ -303,9 +317,9 @@ class LlmClient:
                 generation.update(
                     output=generation_output("", error=record.error, mode=self.tracer.capture_payloads),
                     metadata={
-                        "latency_ms": record.latency_ms,
                         "schema": model_type.__name__,
                         "runtime": record.runtime,
+                        **record.metrics(),
                         **record.prompt_partition,
                     },
                     level="ERROR",

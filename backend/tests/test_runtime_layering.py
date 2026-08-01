@@ -5,6 +5,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from app.config import get_settings
 from app.config import Settings
@@ -12,6 +13,7 @@ from app.context import ContextManager, classify_runtime_error
 from app.harness import HarnessRuntime
 from app.llm import LlmClient
 from app.runtime.context_assembler import ContextAssembler
+from app.runtime.supervisor_contract import sorted_specialist_tool_specs
 from app.runtime.policy_gate import (
     PolicyGate,
     attachment_result_needs_extract,
@@ -20,9 +22,9 @@ from app.runtime.policy_gate import (
     requires_materials_advice,
 )
 from app.runtime.retry import is_transient_llm_error, is_transient_tool_error
-from app.runtime.agents_sdk import build_run_config
+from app.runtime.agents_sdk import FencedJsonOutputSchema, build_run_config
 from app.runtime.tool_runtime import ToolRuntime
-from app.runtime.turn_runner import supervisor_task
+from app.runtime.turn_runner import TurnRunner, supervisor_task
 from app.session_manager import SessionManager
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, ExtractedField, PolicyCheck, SupervisorDecision
@@ -36,14 +38,45 @@ class FakeLLM:
         self.calls: list[Any] = []
 
 
+def test_structured_output_accepts_an_outer_json_code_fence() -> None:
+    class Output(BaseModel):
+        value: str
+
+    schema = FencedJsonOutputSchema(Output, strict_json_schema=False)
+
+    assert schema.validate_json('```json\n{"value":"ok"}\n```').value == "ok"
+
+
 def _state(tmp_path, *, message: str = "测试") -> tuple[CaseStore, ContextManager, HarnessRuntime, Any]:
     store = CaseStore(tmp_path / "cases")
     harness = HarnessRuntime(store, max_steps=10)
     sessions = SessionManager(store, FakeLLM())  # type: ignore[arg-type]
     context = ContextManager(store, FakeLLM(), sessions.sessions, sessions.memory)  # type: ignore[arg-type]
-    assembler = ContextAssembler(store=store, llm=FakeLLM(), harness=harness, context=context, sessions=sessions, planner_prompt="prompt")  # type: ignore[arg-type]
+    assembler = ContextAssembler(
+        store=store,
+        llm=FakeLLM(),  # type: ignore[arg-type]
+        harness=harness,
+        context=context,
+        sessions=sessions,
+        tool_catalog=ToolCatalog(FileWorkspace(store)),
+        planner_prompt="prompt",
+    )
     state = assembler.load_context(AgentTurnRequest(case_id="case_policy", message=message), run_id="run_policy")
     return store, context, harness, state
+
+
+def test_runtime_uses_one_sorted_tool_catalog_for_context_and_sdk_tools(tmp_path) -> None:
+    runner = TurnRunner(store=CaseStore(tmp_path / "cases"), llm=LlmClient(Settings(llm_api_key="test")))
+
+    assert runner.context_assembler.tool_catalog is runner.tools
+
+    state = runner.harness.begin_run("case_tool_order", "test", run_id="run_tool_order")
+    request = AgentTurnRequest(case_id=state.case_id, message="test", attachments=[])
+    sdk_names = [str(getattr(tool, "name", "")) for tool in runner.sdk_tools(state=state, request=request, planner_context={})]
+    expected = [name for name, _description, _model in sorted_specialist_tool_specs()]
+    expected.extend(item["name"] for item in runner.tools.visible_tools())
+
+    assert sdk_names == expected
 
 
 def test_supervisor_decision_schema_rejects_old_call_role_shape() -> None:

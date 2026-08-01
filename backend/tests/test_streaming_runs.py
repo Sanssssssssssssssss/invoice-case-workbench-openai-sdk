@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.harness import HarnessRuntime
 from app.runtime import agents_sdk
 from app.runtime.reasoning_capture import extract_reasoning_from_result
-from app.runtime.streaming import stream_hub
+from app.runtime.streaming import RunStreamHub, stream_hub
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, AgentTurnResponse, CaseState
 from app.runtime.turn_runner import _stream_reasoning_delta, _stream_text_delta
@@ -144,6 +144,78 @@ def test_streaming_approval_resume_continues_same_run(tmp_path, monkeypatch) -> 
     assert events[-1]["data"]["payload"]["response"]["reply"] == "resumed final"
 
 
+def test_streaming_approval_rejects_wrong_case_and_duplicate(tmp_path, monkeypatch) -> None:
+    _configure(tmp_path, monkeypatch)
+    import app.api.agent_runs as agent_runs
+    from app.main import app
+
+    stream_hub.clear()
+    runtime = _FakeRuntime(CaseStore(tmp_path / "cases"), waiting_first=True)
+    monkeypatch.setattr(agent_runs, "AgentRuntime", lambda: runtime)
+    client = TestClient(app)
+    accepted = client.post(
+        "/api/agent/runs",
+        json={"case_id": "case_approval", "message": "report", "attachments": []},
+    ).json()
+    _wait_until(lambda: stream_hub.get(accepted["run_id"]).status == "waiting_approval")
+    url = f"/api/agent/runs/{accepted['run_id']}/approval"
+
+    wrong_case = client.post(url, json={"case_id": "case_other", "approved": True, "reason": "wrong"})
+    first = client.post(url, json={"case_id": "case_approval", "approved": True, "reason": "ok"})
+    duplicate = client.post(url, json={"case_id": "case_approval", "approved": True, "reason": "ok"})
+    _wait_until(lambda: runtime.approval_resume_count == 1)
+
+    assert wrong_case.status_code == 409
+    assert first.status_code == 200
+    assert duplicate.status_code == 409
+    assert runtime.approval_resume_count == 1
+
+
+def test_streaming_run_rejects_attachment_outside_case_workspace(tmp_path, monkeypatch) -> None:
+    _configure(tmp_path, monkeypatch)
+    import app.api.agent_runs as agent_runs
+    from app.main import app
+
+    stream_hub.clear()
+    store = CaseStore(tmp_path / "cases")
+    inside = store.resolve_case_path("case_boundary", "attachments/invoice.md")
+    inside.write_text("invoice", encoding="utf-8")
+    outside = tmp_path / "secret.md"
+    outside.write_text("secret", encoding="utf-8")
+    monkeypatch.setattr(agent_runs, "AgentRuntime", lambda: _FakeRuntime(store))
+    client = TestClient(app)
+
+    allowed = client.post(
+        "/api/agent/runs",
+        json={
+            "case_id": "case_boundary",
+            "message": "review",
+            "attachments": [{"name": "invoice.md", "path": str(inside), "content_type": "text/markdown"}],
+        },
+    )
+    denied = client.post(
+        "/api/agent/runs",
+        json={
+            "case_id": "case_boundary",
+            "message": "review",
+            "attachments": [{"name": "secret.md", "path": str(outside), "content_type": "text/markdown"}],
+        },
+    )
+
+    assert allowed.status_code == 200
+    assert denied.status_code == 400
+
+
+def test_stream_hub_bounds_terminal_run_records() -> None:
+    hub = RunStreamHub(max_terminal_runs=2)
+    for index in range(4):
+        run_id = f"run_{index}"
+        hub.create(run_id=run_id, case_id="case_stream")
+        hub.emit(run_id, "final", {"response": {"case_id": "case_stream"}})
+
+    assert set(hub.run_ids()) == {"run_2", "run_3"}
+
+
 def test_shared_openai_client_pool_reuses_by_timeout(monkeypatch) -> None:
     get_settings.cache_clear()
     settings = get_settings()
@@ -164,6 +236,7 @@ class _FakeRuntime:
     def __init__(self, store: CaseStore, waiting_first: bool = False) -> None:
         self.store = store
         self.waiting_first = waiting_first
+        self.approval_resume_count = 0
         self.runner = SimpleNamespace(store=store, harness=HarnessRuntime(store))
 
     async def run_turn_streamed(self, request: AgentTurnRequest, *, run_id: str, event_sink: Any | None = None) -> AgentTurnResponse:
@@ -214,6 +287,7 @@ class _FakeRuntime:
         *,
         event_sink: Any | None = None,
     ) -> AgentTurnResponse:
+        self.approval_resume_count += 1
         assert approved is True
         assert event_sink is not None
         event_sink("approval_decision", {"approved": approved, "reason": reason}, summary="decision")

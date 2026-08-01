@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from app.llm import LlmClient
 from app.runtime.context_partition import (
     build_context_packet,
     canonical_json,
+    partition_context_payload,
     prompt_cache_model_settings_kwargs,
     usage_from_result,
     with_usage_metrics,
@@ -94,6 +96,47 @@ def test_partition_hashes_change_only_for_their_layer() -> None:
     assert base.prompt_cache_key == dynamic_changed.prompt_cache_key == volatile_changed.prompt_cache_key
     assert base.dynamic_context_hash != dynamic_changed.dynamic_context_hash
     assert base.volatile_tail_hash != volatile_changed.volatile_tail_hash
+
+
+def test_prompt_cache_key_binds_stable_prefix_hash() -> None:
+    base = _packet("planner")
+    changed = build_context_packet(
+        role="planner",
+        prompt_version="case_manager_agents_sdk_v1",
+        prompt_file="backend/app/agents/planner/prompt.md",
+        system_prompt=MANAGER_PROMPT + "\nAdditional stable instruction.",
+        context_payload={"user_message": "x", "context_pack": {"case_brief": "case", "current_goal": "goal"}},
+        settings=Settings(llm_api_key="test", llm_base_url="https://api.openai.com/v1"),
+        tool_catalog=ToolCatalog(),
+    )
+
+    assert base.stable_prefix_hash != changed.stable_prefix_hash
+    assert base.prompt_cache_key != changed.prompt_cache_key
+    assert base.stable_prefix_hash[:24] in base.prompt_cache_key
+
+
+def test_unknown_context_keys_warn_in_prod_and_fail_in_strict() -> None:
+    packet = build_context_packet(
+        role="planner",
+        prompt_version="case_manager_agents_sdk_v1",
+        prompt_file="backend/app/agents/planner/prompt.md",
+        system_prompt=MANAGER_PROMPT,
+        context_payload={"context_pack": {"case_brief": "case", "current_user_message_raw": "raw"}},
+        settings=Settings(llm_api_key="test"),
+        tool_catalog=ToolCatalog(),
+    )
+
+    manifest = packet.manifest_metadata()
+    assert manifest["unknown_context_keys"] == ["current_user_message_raw"]
+    assert manifest["partition_policy_warnings"]
+    assert packet.dynamic_context["other_context"]["current_user_message_raw"] == "raw"
+
+    try:
+        partition_context_payload({"current_user_message_raw": "raw"}, strict=True)
+    except ValueError as exc:
+        assert "current_user_message_raw" in str(exc)
+    else:
+        raise AssertionError("Expected strict partitioning to reject unknown keys")
 
 
 def test_prompt_cache_settings_only_for_openai_responses() -> None:
@@ -205,6 +248,8 @@ def test_context_manifest_records_and_updates_partition_usage(tmp_path) -> None:
     runtime_partition = context.prompt_partition_metadata(state, "planner")
     assert runtime_partition["stable_prefix_hash"] == partition["stable_prefix_hash"]
     assert "partition_previews" not in runtime_partition
+    assert "unknown_context_keys" not in runtime_partition
+    assert "partition_policy_warnings" not in runtime_partition
     assert data["prompt_tokens"] == 2000
     assert data["cached_tokens"] == 1000
     assert data["cache_hit_ratio"] == 0.5
@@ -253,15 +298,19 @@ def test_memory_hints_are_capped_and_advisory(tmp_path) -> None:
             source_ref=f"traces/artifacts/run_mem/art_{index}.json",
         )
 
+    planner_state = HarnessRuntime(store).begin_run(case_state.case_id, "vendor hint", run_id="run_mem")
+    planner_state.user_message_for_planner = "vendor hint"
     planner_hints = context.build_planner_context(
-        state=HarnessRuntime(store).begin_run(case_state.case_id, "vendor hint", run_id="run_mem"),
+        state=planner_state,
         case_state=case_state,
         session=context.sessions.load_session(case_state.case_id),
         attachments=[],
     )["memory_hints"]
+    role_state = HarnessRuntime(store).begin_run(case_state.case_id, "vendor hint", run_id="run_mem_2")
+    role_state.user_message_for_planner = "vendor hint"
     role_hints = context.build_role_context(
         role="case_patch_writer",
-        state=HarnessRuntime(store).begin_run(case_state.case_id, "vendor hint", run_id="run_mem_2"),
+        state=role_state,
         payload={},
         user_message="vendor hint",
         case_state=case_state,
@@ -273,6 +322,73 @@ def test_memory_hints_are_capped_and_advisory(tmp_path) -> None:
     assert sum(len(item["text"]) for item in role_hints) <= 1200
     assert all(item["truth_status"] == "advisory" for item in planner_hints + role_hints)
     assert all(item["source_ref"] and item["relevance_score"] >= 0 for item in planner_hints + role_hints)
+    assert all(item["score_terms"] and item["score_reason"] for item in planner_hints + role_hints)
+
+
+def test_memory_hints_filter_low_score_and_stale_conflicts(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    context = ContextManager(store, LlmClient(Settings(llm_api_key="test")))
+    case_state = store.load("case_memory_conflict")
+    case_state.requirements = [Requirement(id="vendor_identity", status="missing")]
+    store.save(case_state)
+    context.memory.add_memory(
+        case_id=case_state.case_id,
+        memory_type="retrieval_memory",
+        text="vendor_identity satisfied and complete based on an old vendor onboarding note",
+        source_ref="traces/artifacts/run_old/vendor.json",
+    )
+    context.memory.add_memory(
+        case_id=case_state.case_id,
+        memory_type="retrieval_memory",
+        text="cafeteria menu and office seating preferences",
+        source_ref="traces/artifacts/run_old/noise.json",
+    )
+
+    planner_state = HarnessRuntime(store).begin_run(case_state.case_id, "vendor identity hint", run_id="run_mem_conflict")
+    planner_state.user_message_for_planner = "vendor identity hint"
+    hints = context.build_planner_context(
+        state=planner_state,
+        case_state=case_state,
+        session=context.sessions.load_session(case_state.case_id),
+        attachments=[],
+    )["memory_hints"]
+
+    assert hints == []
+
+
+def test_memory_hints_record_expired_and_invalid_freshness(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    context = ContextManager(store, LlmClient(Settings(llm_api_key="test")))
+    case_state = store.load("case_memory_freshness")
+    expired = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    context.memory.add_memory(
+        case_id=case_state.case_id,
+        memory_type="retrieval_memory",
+        text="duplicate payment vendor invoice policy context",
+        source_ref="traces/artifacts/run_mem/expired.json",
+        metadata={"expires_at": expired},
+    )
+    context.memory.add_memory(
+        case_id=case_state.case_id,
+        memory_type="retrieval_memory",
+        text="duplicate payment vendor invoice invalid expiry context",
+        source_ref="traces/artifacts/run_mem/invalid.json",
+        metadata={"expires_at": "not-a-date"},
+    )
+
+    role_state = HarnessRuntime(store).begin_run(case_state.case_id, "duplicate payment vendor invoice", run_id="run_mem_fresh")
+    role_state.user_message_for_planner = "duplicate payment vendor invoice"
+    hints = context.build_role_context(
+        role="materials_advisor",
+        state=role_state,
+        payload={},
+        user_message="duplicate payment vendor invoice",
+        case_state=case_state,
+    )["memory_hints"]
+    freshness = {item["source_ref"]: item["freshness"] for item in hints}
+
+    assert freshness["traces/artifacts/run_mem/expired.json"] == "expired"
+    assert freshness["traces/artifacts/run_mem/invalid.json"] == "invalid_expires_at"
 
 
 def test_advisory_rag_or_memory_evidence_cannot_satisfy_requirements(tmp_path) -> None:

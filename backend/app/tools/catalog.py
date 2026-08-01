@@ -87,15 +87,18 @@ class ToolCatalog:
     def has(self, name: str) -> bool:
         return name in self._specs
 
-    def visible_tools(self) -> list[dict[str, Any]]:
-        return [spec.visible_schema() for spec in self._specs.values() if not spec.internal_only]
-
-    def tool_names(self, *, include_internal: bool = False) -> tuple[str, ...]:
+    def sorted_specs(self, *, include_internal: bool = False) -> tuple[ToolSpec, ...]:
         return tuple(
-            name
-            for name, spec in self._specs.items()
+            spec
+            for _name, spec in sorted(self._specs.items(), key=lambda item: item[0])
             if include_internal or not spec.internal_only
         )
+
+    def visible_tools(self) -> list[dict[str, Any]]:
+        return [spec.visible_schema() for spec in self.sorted_specs()]
+
+    def tool_names(self, *, include_internal: bool = False) -> tuple[str, ...]:
+        return tuple(spec.name for spec in self.sorted_specs(include_internal=include_internal))
 
     def capability_metadata(self, name: str) -> dict[str, Any]:
         return self.get(name).trace_metadata()

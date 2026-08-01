@@ -25,8 +25,19 @@ export function parseAgentRunStreamMessage(data: string | null | undefined): Age
     return null
   }
   const parsed = JSON.parse(text) as Partial<AgentRunStreamEvent>
-  if (!parsed || typeof parsed.event_id !== 'string' || typeof parsed.run_id !== 'string' || typeof parsed.kind !== 'string') {
+  if (
+    !parsed ||
+    typeof parsed.event_id !== 'string' ||
+    typeof parsed.run_id !== 'string' ||
+    typeof parsed.seq !== 'number' ||
+    !Number.isFinite(parsed.seq) ||
+    typeof parsed.kind !== 'string'
+  ) {
     throw new Error('Invalid agent run stream payload')
   }
   return parsed as AgentRunStreamEvent
+}
+
+export function isNewAgentRunStreamEvent(event: AgentRunStreamEvent, lastSeq: number): boolean {
+  return event.seq > lastSeq
 }

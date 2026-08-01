@@ -165,6 +165,8 @@ def resume_run_approval(case_id: str, run_id: str, request: ApprovalResumeReques
         return AgentRuntime().resume_approval(case_id, run_id, approved=request.approved, reason=request.reason).model_dump(mode="json")
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (FileBoundaryError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

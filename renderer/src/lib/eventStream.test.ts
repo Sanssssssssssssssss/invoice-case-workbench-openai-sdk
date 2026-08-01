@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseAgentRunStreamMessage, parseLiveStatusMessage, parseTraceEventMessage } from './eventStream'
+import { isNewAgentRunStreamEvent, parseAgentRunStreamMessage, parseLiveStatusMessage, parseTraceEventMessage } from './eventStream'
 
 describe('parseTraceEventMessage', () => {
   it('parses valid trace event payloads', () => {
@@ -24,7 +24,7 @@ describe('parseLiveStatusMessage', () => {
 
 describe('parseAgentRunStreamMessage', () => {
   it('parses valid agent run stream payloads', () => {
-    const event = parseAgentRunStreamMessage(JSON.stringify({ event_id: 'run_1:stream:1', run_id: 'run_1', kind: 'assistant_delta', payload: { delta: 'hi' } }))
+    const event = parseAgentRunStreamMessage(JSON.stringify({ event_id: 'run_1:stream:1', run_id: 'run_1', seq: 1, kind: 'assistant_delta', payload: { delta: 'hi' } }))
     expect(event?.kind).toBe('assistant_delta')
   })
 
@@ -37,5 +37,11 @@ describe('parseAgentRunStreamMessage', () => {
 
   it('rejects malformed agent run stream payloads', () => {
     expect(() => parseAgentRunStreamMessage(JSON.stringify({ event_id: 'evt_1' }))).toThrow('Invalid agent run stream payload')
+  })
+
+  it('rejects replayed event sequences', () => {
+    const event = parseAgentRunStreamMessage(JSON.stringify({ event_id: 'run_1:stream:4', run_id: 'run_1', seq: 4, kind: 'assistant_delta', payload: {} }))
+    expect(event && isNewAgentRunStreamEvent(event, 3)).toBe(true)
+    expect(event && isNewAgentRunStreamEvent(event, 4)).toBe(false)
   })
 })

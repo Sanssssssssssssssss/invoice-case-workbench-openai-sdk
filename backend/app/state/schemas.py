@@ -154,6 +154,36 @@ class ConflictRecord(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
     source_values: dict[str, Any] = Field(default_factory=dict)
     suggested_resolution: str = ""
+    resolution_status: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_conflict(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("{"):
+                try:
+                    value = json.loads(text)
+                except json.JSONDecodeError:
+                    pass
+            if isinstance(value, str):
+                return {"description": text}
+        if isinstance(value, dict):
+            data = dict(value)
+            if "reason" in data and "description" not in data:
+                data["description"] = data.pop("reason")
+            source_values = data.get("source_values")
+            if isinstance(source_values, list):
+                data["source_values"] = {
+                    str(item.get("source") or item.get("doc_id") or index): item.get("value", item)
+                    for index, item in enumerate(source_values)
+                    if isinstance(item, dict)
+                }
+            return data
+        return value
+
+    def __str__(self) -> str:
+        return self.description or self.details or self.conflict_type or self.type
 
 
 class EvidencePatchItem(BaseModel):
@@ -170,12 +200,12 @@ class EvidencePatchItem(BaseModel):
     created_at: str = ""
     review_result: dict[str, Any] = Field(default_factory=dict)
     supports: list[SupportRecord] = Field(default_factory=list)
-    conflicts: list[str] = Field(default_factory=list)
+    conflicts: list[ConflictRecord] = Field(default_factory=list)
     quoted_text: list[str] = Field(default_factory=list)
     reviewer_notes: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("conflicts", "quoted_text", mode="before")
+    @field_validator("quoted_text", mode="before")
     @classmethod
     def normalize_string_lists(cls, value: Any) -> Any:
         if value is None:
@@ -202,7 +232,7 @@ class EvidenceItem(BaseModel):
     created_at: str = ""
     review_result: dict[str, Any] = Field(default_factory=dict)
     supports: list[SupportRecord] = Field(default_factory=list)
-    conflicts: list[str] = Field(default_factory=list)
+    conflicts: list[ConflictRecord] = Field(default_factory=list)
     quoted_text: list[str] = Field(default_factory=list)
     reviewer_notes: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -372,6 +402,17 @@ class EvidenceReviewResult(BaseModel):
     suggested_patch: CaseUpdates = Field(default_factory=CaseUpdates)
     reply_to_user: str = ""
 
+    @field_validator("evidence_type", mode="before")
+    @classmethod
+    def normalize_multi_document_type(cls, value: Any) -> Any:
+        if str(value or "").strip().lower() in {
+            "mixed_document_batch",
+            "multi_document_review",
+            "multi_document_packet",
+        }:
+            return "unknown"
+        return value
+
     @model_validator(mode="after")
     def require_review_cards_for_new_evidence(self) -> "EvidenceReviewResult":
         if self.mode == "review":
@@ -507,7 +548,7 @@ def _evidence_cards_from_patch_items(items: list[EvidencePatchItem]) -> list[dic
             for row in data.get("supports") or []
             if isinstance(row, dict) and str(row.get("requirement") or "").strip()
         ]
-        conflicts = [str(row)[:180] for row in data.get("conflicts") or [] if str(row).strip()]
+        conflicts = [_conflict_summary(row) for row in data.get("conflicts") or [] if _conflict_summary(row)]
         title_parts = [doc_type.replace("_", " ").strip() or "evidence"]
         if reference:
             title_parts.append(reference)
@@ -537,3 +578,9 @@ def _looks_like_field_group(value: Any) -> bool:
     if not nested:
         return False
     return all(field_keys.intersection(item) for item in nested)
+
+
+def _conflict_summary(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("description") or value.get("details") or value.get("conflict_type") or "")[:180]
+    return str(value).strip()[:180]

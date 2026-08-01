@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,12 @@ from .models import ExpectedSpec, REPO_ROOT, ScenarioSpec
 
 SCENARIOS_ROOT = REPO_ROOT / "benchmarks" / "invoice_tau" / "scenarios"
 REPORTS_ROOT = REPO_ROOT / "benchmarks" / "invoice_tau" / "reports"
+BAD_TEXT_PATTERNS = (
+    re.compile(r"\ufffd"),
+    re.compile(r"\?{3,}"),
+    re.compile(r"undefined", re.I),
+    re.compile(r"not valid JSON", re.I),
+)
 
 
 def load_scenario(path: Path) -> tuple[ScenarioSpec, ExpectedSpec, Path]:
@@ -21,8 +28,12 @@ def load_scenario(path: Path) -> tuple[ScenarioSpec, ExpectedSpec, Path]:
         scenario_path = path
         expected_path = path.with_name("expected.json")
         scenario_dir = path.parent
-    scenario = ScenarioSpec.model_validate(_read_json(scenario_path))
-    expected = ExpectedSpec.model_validate(_read_json(expected_path) if expected_path.exists() else {})
+    scenario_payload = _read_json(scenario_path)
+    expected_payload = _read_json(expected_path) if expected_path.exists() else {}
+    validate_clean_text(scenario_payload, path=scenario_path)
+    validate_clean_text(expected_payload, path=expected_path)
+    scenario = ScenarioSpec.model_validate(scenario_payload)
+    expected = ExpectedSpec.model_validate(expected_payload)
     return scenario, expected, scenario_dir
 
 
@@ -64,3 +75,21 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise TypeError(f"Expected JSON object in {path}")
     return data
+
+
+def validate_clean_text(value: Any, *, path: Path, field_path: str = "$") -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            validate_clean_text(item, path=path, field_path=f"{field_path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            validate_clean_text(item, path=path, field_path=f"{field_path}[{index}]")
+        return
+    if not isinstance(value, str):
+        return
+    for pattern in BAD_TEXT_PATTERNS:
+        match = pattern.search(value)
+        if match:
+            preview = value[max(0, match.start() - 20) : match.end() + 20]
+            raise ValueError(f"Unclean benchmark text in {path} at {field_path}: {preview!r}")

@@ -1,0 +1,17 @@
+{
+  "case_status": "ready_for_report",
+  "min_evidence_count": 5,
+  "reply_any_of": ["ready_for_report", "报告", "材料完整", "已满足"],
+  "requirements": {
+    "invoice": "satisfied",
+    "purchase_order": "satisfied",
+    "goods_receipt_or_service_acceptance": "satisfied",
+    "vendor_identity": "satisfied",
+    "duplicate_payment_screen": "satisfied"
+  },
+  "must_have_evidence_types": ["invoice", "purchase_order", "goods_receipt", "vendor_record", "duplicate_payment_check"],
+  "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
+  "trace_must_not_call": ["report_writer", "write_case_file", "render_pdf"],
+  "artifacts_must_not_exist": ["reports/*.md", "reports/*.pdf"],
+  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 600000}
+}

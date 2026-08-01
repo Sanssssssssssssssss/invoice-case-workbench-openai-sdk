@@ -1,0 +1,25 @@
+{
+  "id": "golden_case_05_clean_pdf_report",
+  "name": "Clean real-PDF review through approved report generation",
+  "description": "A multi-turn chain tests PDF parsing, grounded follow-up, and approved Markdown/PDF generation.",
+  "tags": ["golden", "attachments", "real_pdf", "multi_turn", "report", "approval"],
+  "user_script": [
+    {
+      "message": "这些是这笔付款的全部材料，先帮我判断够不够。",
+      "attach": [
+        "originals/invoice2data_FlipkartInvoice.pdf",
+        "upload_to_app/02_purchase_order.md",
+        "upload_to_app/03_goods_receipt.md",
+        "upload_to_app/04_vendor_record.md",
+        "upload_to_app/05_duplicate_payment_check.md"
+      ]
+    },
+    {
+      "message": "把识别到的发票号、供应商、金额和主要风险简要列出来。"
+    },
+    {
+      "message": "如果条件满足，请生成审查报告和 PDF。",
+      "approvals": {"write_case_file": true, "render_pdf": true}
+    }
+  ]
+}

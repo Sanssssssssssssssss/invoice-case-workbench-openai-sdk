@@ -1,6 +1,8 @@
 [
   {
     "case": "case_01_clean_match_real_jpg_FACTU2015020048",
+    "scenario_id": "golden_case_01_clean_jpg",
+    "prompt_count": 1,
     "source": "mouadhamri/invoice_dataset",
     "original": "originals/FACTU2015020048.jpg",
     "upload_folder": "upload_to_app",
@@ -8,6 +10,8 @@
   },
   {
     "case": "case_02_amount_conflict_real_jpg_FACTU2015040047",
+    "scenario_id": "golden_case_02_amount_conflict",
+    "prompt_count": 1,
     "source": "mouadhamri/invoice_dataset",
     "original": "originals/FACTU2015040047.jpg",
     "upload_folder": "upload_to_app",
@@ -15,6 +19,8 @@
   },
   {
     "case": "case_03_duplicate_hit_real_jpg_FACTU2015050046",
+    "scenario_id": "golden_case_03_duplicate_pressure",
+    "prompt_count": 2,
     "source": "mouadhamri/invoice_dataset",
     "original": "originals/FACTU2015050046.jpg",
     "upload_folder": "upload_to_app",
@@ -22,6 +28,8 @@
   },
   {
     "case": "case_04_bank_change_risk_real_jpg_FACTU2015060039",
+    "scenario_id": "golden_case_04_bank_change",
+    "prompt_count": 1,
     "source": "mouadhamri/invoice_dataset",
     "original": "originals/FACTU2015060039.jpg",
     "upload_folder": "upload_to_app",
@@ -29,6 +37,8 @@
   },
   {
     "case": "case_05_clean_match_real_pdf_flipkart",
+    "scenario_id": "golden_case_05_clean_pdf_report",
+    "prompt_count": 3,
     "source": "invoice-x/invoice2data",
     "original": "originals/invoice2data_FlipkartInvoice.pdf",
     "upload_folder": "upload_to_app",
@@ -36,6 +46,8 @@
   },
   {
     "case": "case_06_duplicate_hit_real_pdf_sap",
+    "scenario_id": "golden_case_06_duplicate_pdf",
+    "prompt_count": 1,
     "source": "SAP-samples/btp-cap-dox-invoice-validation",
     "original": "originals/sap_5435569865439.pdf",
     "upload_folder": "upload_to_app",

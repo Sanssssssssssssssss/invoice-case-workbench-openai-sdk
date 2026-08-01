@@ -9,6 +9,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.domain.invoice_requirements import (
+    AP_LITE_REQUIREMENTS,
     AP_THREE_WAY_REQUIREMENTS,
     INVOICE_FIELD_REQUIREMENTS,
     default_requirement_required,
@@ -16,7 +17,8 @@ from app.domain.invoice_requirements import (
 )
 from app.domain.risk_rules import derived_conflicts, resolved_conflict_note
 from app.state.attachment_manifest import link_manifest_evidence
-from app.state.schemas import CasePatch, CaseState, EvidenceItem, Requirement, new_case_state
+from app.state.persistence import PERSISTENCE_LOCK, append_text, atomic_write_text
+from app.state.schemas import CasePatch, CaseState, ConflictRecord, EvidenceItem, Requirement, new_case_state
 
 
 SAFE_CASE_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
@@ -104,7 +106,19 @@ class CaseStore:
             raise FileBoundaryError("Path escapes case workspace")
         return candidate
 
+    def validate_attachment_path(self, case_id: str, path: str) -> Path:
+        root = self.ensure_case_dirs(case_id).resolve()
+        raw = Path(path).expanduser()
+        candidate = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
+        if candidate != root and root not in candidate.parents:
+            raise FileBoundaryError("Attachment path escapes case workspace")
+        return candidate
+
     def load(self, case_id: str) -> CaseState:
+        with PERSISTENCE_LOCK:
+            return self._load(case_id)
+
+    def _load(self, case_id: str) -> CaseState:
         root = self.ensure_case_dirs(case_id)
         path = root / "case_state.json"
         if not path.exists():
@@ -127,18 +141,20 @@ class CaseStore:
 
     def save(self, state: CaseState) -> None:
         root = self.ensure_case_dirs(state.case_id)
-        (root / "case_state.json").write_text(
-            state.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_text(root / "case_state.json", state.model_dump_json(indent=2))
 
     def next_trace_case_seq(self, case_id: str) -> int:
-        path = self.resolve_case_path(case_id, "traces/events.jsonl")
-        if not path.exists():
-            return 1
-        return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip()) + 1
+        with PERSISTENCE_LOCK:
+            path = self.resolve_case_path(case_id, "traces/events.jsonl")
+            if not path.exists():
+                return 1
+            return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip()) + 1
 
     def apply_patch(self, case_id: str, patch_data: dict[str, Any] | CasePatch) -> CaseState:
+        with PERSISTENCE_LOCK:
+            return self._apply_patch(case_id, patch_data)
+
+    def _apply_patch(self, case_id: str, patch_data: dict[str, Any] | CasePatch) -> CaseState:
         patch = patch_data if isinstance(patch_data, CasePatch) else CasePatch.model_validate(patch_data)
         state = self.load(case_id)
         updates = patch.case_updates.model_dump(exclude_none=True)
@@ -231,6 +247,19 @@ class CaseStore:
             state.requirements = []
             existing = set()
         if existing:
+            if _should_expand_ap_lite_requirements(state, existing, raw_items, support_ids):
+                for requirement_id in AP_LITE_REQUIREMENTS:
+                    if requirement_id in existing:
+                        continue
+                    state.requirements.append(
+                        Requirement(
+                            id=requirement_id,
+                            label=requirement_label(requirement_id),
+                            kind=_infer_requirement_kind(requirement_id),
+                            required=default_requirement_required(requirement_id),
+                        )
+                    )
+                    existing.add(requirement_id)
             unknown = sorted(requirement_id for requirement_id in support_ids if requirement_id not in existing)
             if unknown:
                 added = self._add_optional_dynamic_requirements(state, unknown)
@@ -245,13 +274,14 @@ class CaseStore:
                 raise ValueError(f"Evidence support references unknown requirements: {unknown}")
             return
         requirement_ids = _initial_requirement_ids_from_evidence(raw_items, support_ids)
+        ap_chain = _has_ap_chain_evidence(raw_items, support_ids)
         for requirement_id in requirement_ids:
             state.requirements.append(
                 Requirement(
                     id=requirement_id,
                     label=requirement_label(requirement_id),
                     kind=_infer_requirement_kind(requirement_id),
-                    required=default_requirement_required(requirement_id),
+                    required=False if ap_chain and requirement_id in INVOICE_FIELD_REQUIREMENTS else default_requirement_required(requirement_id),
                 )
             )
 
@@ -285,8 +315,7 @@ class CaseStore:
             "audit_note": patch.audit_note,
             "case_updates": patch.case_updates.model_dump(exclude_none=True),
         }
-        with (root / "traces" / "case_audit.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        append_text(root / "traces" / "case_audit.jsonl", json.dumps(record, ensure_ascii=False) + "\n")
 
     def _refresh_requirements(self, state: CaseState) -> None:
         _apply_cross_evidence_matching_conflicts(state)
@@ -336,6 +365,18 @@ def _unique_strings(values: list[Any]) -> list[str]:
         if text and text not in seen:
             seen.add(text)
             result.append(text)
+    return result
+
+
+def _unique_conflicts(values: Any) -> list[ConflictRecord]:
+    seen: set[str] = set()
+    result: list[ConflictRecord] = []
+    for value in values if isinstance(values, list) else [values]:
+        conflict = ConflictRecord.model_validate(value)
+        key = conflict.model_dump_json(exclude_none=True)
+        if key not in seen:
+            seen.add(key)
+            result.append(conflict)
     return result
 
 
@@ -557,7 +598,7 @@ def _amount_from_text(text: str, *, preferred_fields: tuple[str, ...]) -> Decima
     for field in preferred_fields:
         labels.extend(label_groups.get(field, (field.replace("_", " "),)))
     for label in labels:
-        pattern = re.compile(rf"{re.escape(label)}\s*[:=]?\s*([0-9][0-9,]*(?:\.[0-9]+)?)", re.IGNORECASE)
+        pattern = re.compile(rf"{re.escape(label)}\s*[:=]?\s*([0-9](?:[0-9\s,.]*[0-9])?)", re.IGNORECASE)
         match = pattern.search(text)
         if match:
             amount = _parse_amount(match.group(1))
@@ -570,11 +611,16 @@ def _parse_amount(value: Any) -> Decimal | None:
     text = str(value or "").strip()
     if not text:
         return None
-    match = re.search(r"([0-9][0-9,]*(?:\.[0-9]+)?)", text)
+    match = re.search(r"([0-9](?:[0-9\s,.]*[0-9])?)", text)
     if not match:
         return None
+    number = re.sub(r"\s+", "", match.group(1))
+    if "," in number and "." in number:
+        number = number.replace(".", "").replace(",", ".") if number.rfind(",") > number.rfind(".") else number.replace(",", "")
+    elif "," in number:
+        number = number.replace(",", ".") if len(number.rsplit(",", 1)[1]) <= 2 else number.replace(",", "")
     try:
-        return Decimal(match.group(1).replace(",", ""))
+        return Decimal(number)
     except InvalidOperation:
         return None
 
@@ -582,18 +628,16 @@ def _parse_amount(value: Any) -> Decimal | None:
 def _add_cross_amount_conflict(item: EvidenceItem | None, *, requirement: str, description: str) -> bool:
     if item is None:
         return False
-    conflict = {
-        "type": "conflict",
-        "conflict_type": CROSS_EVIDENCE_AMOUNT_MISMATCH,
-        "requirement": requirement,
-        "severity": "high",
-        "description": description,
-    }
-    encoded = json.dumps(conflict, ensure_ascii=False, sort_keys=True)
+    conflict = ConflictRecord(
+        conflict_type=CROSS_EVIDENCE_AMOUNT_MISMATCH,
+        requirement=requirement,
+        severity="high",
+        description=description,
+    )
     conflicts = list(item.conflicts or [])
-    if encoded in conflicts:
+    if any(_conflict_data(current) == conflict.model_dump(exclude_none=True) for current in conflicts):
         return False
-    item.conflicts = _unique_strings(conflicts + [encoded])
+    item.conflicts = _unique_conflicts(conflicts + [conflict])
     return True
 
 
@@ -603,18 +647,19 @@ def _normalize_evidence_data(raw: Any) -> dict[str, Any]:
         data["type"] = data.get("evidence_type")
     if not data.get("summary") and data.get("reference"):
         data["summary"] = str(data.get("reference"))
-    data["conflicts"] = _string_list(data.get("conflicts"))
+    data["conflicts"] = _unique_conflicts(data.get("conflicts") or [])
     data["quoted_text"] = _string_list(data.get("quoted_text"))
     data["supports"] = _normalize_support_records(data.get("supports"))
     if _is_cross_case_evidence(data):
         data["supports"] = []
-        data["conflicts"] = _unique_strings(
+        data["conflicts"] = _unique_conflicts(
             data["conflicts"] + ["Cross-case or mixed-case evidence is recorded but not linked to active requirements."]
         )
     if _is_prompt_injection_evidence(data):
         _quarantine_prompt_injection_evidence(data)
     else:
-        data["conflicts"] = _unique_strings(data["conflicts"] + derived_conflicts(data))
+        derived = [] if str(data.get("type") or "") == "invoice" else derived_conflicts(data)
+        data["conflicts"] = _unique_conflicts(data["conflicts"] + derived)
     _backfill_conflict_requirement_support(data)
     if not _is_cross_case_evidence(data) and not _is_prompt_injection_evidence(data):
         _backfill_accepted_core_document_support(data)
@@ -684,7 +729,7 @@ def _quarantine_prompt_injection_evidence(data: dict[str, Any]) -> None:
     data["supports"] = []
     data["quoted_text"] = ["[redacted prompt injection]"]
     data["reviewer_notes"] = "该来源已隔离；业务字段、金额、供应商、日期等内容不进入证据支持链。"
-    data["conflicts"] = _unique_strings(["prompt_injection_quarantine"])
+    data["conflicts"] = _unique_conflicts(["prompt_injection_quarantine"])
     data["metadata"] = metadata
 
 
@@ -941,13 +986,17 @@ def _safe_requirement_id(value: Any) -> str:
 
 
 def _backfill_accepted_core_document_support(data: dict[str, Any]) -> None:
-    if data.get("conflicts"):
-        return
     review = data.get("review_result") if isinstance(data.get("review_result"), dict) else {}
     if not bool(review.get("should_accept")):
         return
     requirement_id = _core_requirement_for_evidence(data)
     if not requirement_id:
+        return
+    if any(
+        _conflict_mentions_requirement(conflict, requirement_id)
+        for conflict in data.get("conflicts") or []
+        if not resolved_conflict_note(conflict)
+    ):
         return
     supports = _normalize_support_records(data.get("supports"))
     quote = _support_quote(data)
@@ -1022,20 +1071,23 @@ def _backfill_supports_from_extracted_fields(state: CaseState, data: dict[str, A
     if not fields:
         return
     supports: list[Any] = list(data.get("supports") or [])
-    existing_requirements = {
-        _normalize_requirement_id(
-            support.get("requirement") if isinstance(support, dict) else getattr(support, "requirement", "")
-        )
+    existing_supports = {
+        _normalize_requirement_id(support.get("requirement")): support
         for support in supports
+        if isinstance(support, dict)
     }
     metadata = _metadata_dict(data)
     for requirement in state.requirements:
-        if requirement.id in existing_requirements:
-            continue
         source = _field_support_source(requirement.id, fields, metadata)
         if not source:
             continue
         quote, level = source
+        existing = existing_supports.get(requirement.id)
+        if existing:
+            if level == "full" and existing.get("support_level") in {"none", "partial"}:
+                existing["support_level"] = "full"
+                existing["quoted_text"] = existing.get("quoted_text") or quote
+            continue
         supports.append({"requirement": requirement.id, "support_level": level, "quoted_text": quote})
     if supports:
         data["supports"] = supports
@@ -1152,8 +1204,10 @@ def _metadata_extracted_fields(data: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(row, dict):
                 continue
             field_id = str(row.get("field") or "").strip()
-            if field_id and field_id not in result:
-                result[field_id] = row
+            if not field_id:
+                continue
+            current = result.get(field_id)
+            result[field_id] = {**row, **current} if isinstance(current, dict) else row
     return result
 
 
@@ -1267,19 +1321,68 @@ def _initial_requirement_ids_from_evidence(raw_items: list[Any], support_ids: li
         evidence_type = str(data.get("type") or data.get("evidence_type") or "").strip()
         if evidence_type == "invoice":
             has_invoice_evidence = True
-            break
+    if _has_ap_chain_evidence(raw_items, support_ids):
+        canonical_supports = [_canonical_ap_requirement_id(item) for item in support_ids]
+        return _unique_strings(list(INVOICE_FIELD_REQUIREMENTS) + list(AP_LITE_REQUIREMENTS) + canonical_supports)
     if has_invoice_evidence or any(item in INVOICE_FIELD_REQUIREMENTS for item in support_ids):
         return _unique_strings(list(INVOICE_FIELD_REQUIREMENTS) + list(support_ids))
     return support_ids
 
 
+def _has_ap_chain_evidence(raw_items: list[Any], support_ids: list[str]) -> bool:
+    ap_ids = _ap_requirement_ids(raw_items, support_ids)
+    return "invoice" in ap_ids and len(ap_ids) >= 3
+
+
+def _should_expand_ap_lite_requirements(
+    state: CaseState,
+    existing: set[str],
+    raw_items: list[Any],
+    support_ids: list[str],
+) -> bool:
+    if not existing:
+        return False
+    ap_ids = _ap_requirement_ids(raw_items, support_ids, state=state)
+    if "invoice" not in ap_ids or len(ap_ids) < 3:
+        return False
+    return bool(
+        (existing & set(INVOICE_FIELD_REQUIREMENTS))
+        or (existing & set(AP_LITE_REQUIREMENTS))
+        or (existing & set(AP_THREE_WAY_REQUIREMENTS))
+    )
+
+
+def _ap_requirement_ids(
+    raw_items: list[Any],
+    support_ids: list[str],
+    *,
+    state: CaseState | None = None,
+) -> set[str]:
+    result = {_canonical_ap_requirement_id(item) for item in support_ids}
+    for raw in raw_items:
+        data = raw.model_dump(exclude_none=True) if hasattr(raw, "model_dump") else dict(raw or {})
+        result.add(_canonical_ap_requirement_id(_core_requirement_for_evidence(data)))
+    if state is not None:
+        for item in state.evidence_items:
+            result.add(_canonical_ap_requirement_id(_core_requirement_for_evidence(item.model_dump())))
+            for support in item.supports:
+                result.add(_canonical_ap_requirement_id(support.requirement))
+    return {item for item in result if item in set(AP_LITE_REQUIREMENTS)}
+
+
+def _canonical_ap_requirement_id(value: Any) -> str:
+    requirement_id = _normalize_requirement_id(value)
+    return SUPPORT_REQUIREMENT_ID_ALIASES.get(requirement_id, requirement_id)
+
+
 def _looks_like_wrong_ap_default(state: CaseState, existing: set[str], support_ids: list[str]) -> bool:
     if state.evidence_items:
         return False
-    if not existing or not existing.issubset(set(AP_THREE_WAY_REQUIREMENTS)):
+    ap_defaults = set(AP_THREE_WAY_REQUIREMENTS) | set(AP_LITE_REQUIREMENTS)
+    if not existing or not existing.issubset(ap_defaults):
         return False
     has_invoice_field_support = any(item in INVOICE_FIELD_REQUIREMENTS for item in support_ids)
-    has_ap_support = any(item in AP_THREE_WAY_REQUIREMENTS for item in support_ids)
+    has_ap_support = any(_canonical_ap_requirement_id(item) in AP_LITE_REQUIREMENTS for item in support_ids)
     return has_invoice_field_support and not has_ap_support
 
 
@@ -1410,6 +1513,8 @@ def _evidence_conflict_text(data: dict[str, Any]) -> str:
 def _jsonish_text(value: Any) -> str:
     if isinstance(value, str):
         return value
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(exclude_none=True)
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
@@ -1566,6 +1671,32 @@ def _item_has_requirement_conflict(item: EvidenceItem, requirement_id: str) -> b
 
 
 def _conflict_mentions_requirement(conflict: Any, requirement_id: str) -> bool:
+    data = _conflict_data(conflict)
+    expected = SUPPORT_REQUIREMENT_ID_ALIASES.get(requirement_id, requirement_id)
+    if isinstance(data, dict):
+        conflict_type = str(data.get("conflict_type") or data.get("type") or "").lower()
+        source_values = data.get("source_values")
+        conflict_text = _jsonish_text(data).lower()
+        cross_document_amount = conflict_type == CROSS_EVIDENCE_AMOUNT_MISMATCH or (
+            conflict_type == "amount_mismatch"
+            and (
+                isinstance(source_values, dict) and len(source_values) > 1
+                or any(marker in conflict_text for marker in ("purchase_order", "po/grn", "po amount", "采购订单", "收货单"))
+            )
+        )
+        if expected == "invoice" and cross_document_amount:
+            return False
+        explicit = _safe_requirement_id(data.get("requirement"))
+        if explicit:
+            return SUPPORT_REQUIREMENT_ID_ALIASES.get(explicit, explicit) == expected
+        affected = data.get("affected_requirements") or data.get("affected_fields") or []
+        affected_ids = {
+            SUPPORT_REQUIREMENT_ID_ALIASES.get(item, item)
+            for value in (affected if isinstance(affected, list) else [affected])
+            if (item := _safe_requirement_id(value))
+        }
+        if affected_ids:
+            return expected in affected_ids
     text = _jsonish_text(conflict).lower()
     if not text:
         return False

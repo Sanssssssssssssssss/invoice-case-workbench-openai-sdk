@@ -61,6 +61,12 @@ def enforce_no_execution_wording(text: str) -> str:
         for match in pattern.finditer(value):
             if _is_negated_execution_mention(value, match.start()):
                 continue
+            if match.group().endswith("提交") and re.match(
+                r"\s*(?:完整\s*)?(?:AP\s*)?(?:五件套\s*)?(?:材料|证据|附件|文档)",
+                value[match.end() : match.end() + 24],
+                re.I,
+            ):
+                continue
             raise NoExecutionWordingError(f"Final answer contains blocked execution wording: {pattern.pattern}")
     return value
 
@@ -77,12 +83,32 @@ def _strip_guardrail_echoes(value: str) -> str:
 
 def enforce_case_state_consistency(text: str, case_state: Any) -> str:
     value = str(text or "")
+    if _is_capability_introduction(value):
+        return text
+    duplicate_error = _duplicate_history_claim_error(value, case_state)
+    if duplicate_error:
+        raise CaseStateConsistencyError(duplicate_error)
     if not _claims_complete_case(value):
         return text
     errors = _complete_case_state_errors(case_state)
     if errors:
         raise CaseStateConsistencyError("; ".join(errors))
     return text
+
+
+def _duplicate_history_claim_error(text: str, case_state: Any) -> str:
+    statuses = {
+        str(getattr(item, "id", "")): str(getattr(item, "status", ""))
+        for item in getattr(case_state, "requirements", []) or []
+    }
+    risks = " ".join(str(item) for item in getattr(case_state, "risk_flags", []) or []).lower()
+    if statuses.get("duplicate_payment_screen") != "conflict" or not any(
+        flag in risks for flag in ("historical_payment_document_found", "clearing_document_found")
+    ):
+        return ""
+    if re.search(r"重复付款(?:筛查|检查).{0,12}缺失|未提供.{0,12}(?:历史付款|清账)(?:记录|凭证)?", text):
+        return "duplicate-payment conflict has recorded payment history, but answer claims it is missing"
+    return ""
 
 
 def _claims_complete_case(text: str) -> bool:
@@ -93,6 +119,32 @@ def _claims_complete_case(text: str) -> bool:
                 continue
             return True
     return False
+
+
+def _is_capability_introduction(text: str) -> bool:
+    value = str(text or "")
+    if not value.strip():
+        return False
+    capability_terms = (
+        "我能帮你",
+        "可以帮你",
+        "我可以",
+        "工作台",
+        "助手",
+        "如何开始",
+        "上传材料",
+        "生成报告",
+    )
+    completion_terms = (
+        "已满足",
+        "均已满足",
+        "全部满足",
+        "材料完整",
+        "证据链完整",
+        "ready_for_report",
+        "可以进入报告阶段",
+    )
+    return any(term in value for term in capability_terms) and not any(term in value for term in completion_terms)
 
 
 def _complete_case_state_errors(case_state: Any) -> list[str]:

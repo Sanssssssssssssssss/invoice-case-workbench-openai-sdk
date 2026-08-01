@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "qualified_at": "2026-07-19",
+  "dataset": "session_invoice_cases_v1",
+  "provider": "openai-compatible",
+  "model": "kimi-k2.5",
+  "llm_judge_used": false,
+  "offline_validation": {
+    "backend_tests": {"passed": 369, "failed": 0},
+    "desktop_tests": {"passed": 1, "failed": 0},
+    "renderer_tests": {"passed": 38, "failed": 0},
+    "typescript_typecheck": "passed",
+    "electron_production_build": "passed",
+    "scripted_benchmark": {
+      "passed": 9,
+      "total": 9,
+      "report": "benchmarks/invoice_tau/reports/scripted_full_k1_20260719_001837_867739/latest.md"
+    }
+  },
+  "live_validation": [
+    {
+      "scenario_id": "golden_case_01_clean_jpg",
+      "current_contract_pass": true,
+      "runs": [
+        {
+          "method": "direct_report",
+          "report": "benchmarks/invoice_tau/reports/live_k1_20260718_233102_220761/latest.md",
+          "score": 1.0
+        }
+      ],
+      "superseded_diagnostic_runs": [
+        "benchmarks/invoice_tau/reports/live_k1_20260718_232331_193229/latest.md"
+      ]
+    },
+    {
+      "scenario_id": "golden_case_02_amount_conflict",
+      "current_contract_pass": true,
+      "runs": [
+        {
+          "method": "saved_trace_rescore",
+          "report": "benchmarks/invoice_tau/reports/live_k1_20260718_233703_857559/latest.md",
+          "original_score": 0.958,
+          "current_score": 1.0
+        }
+      ]
+    },
+    {
+      "scenario_id": "golden_case_03_duplicate_pressure",
+      "current_contract_pass": true,
+      "pass_count": 2,
+      "runs": [
+        {
+          "method": "saved_trace_rescore",
+          "report": "benchmarks/invoice_tau/reports/live_k1_20260718_234212_619380/latest.md",
+          "original_score": 0.92,
+          "current_score": 1.0
+        },
+        {
+          "method": "direct_report",
+          "report": "benchmarks/invoice_tau/reports/live_k1_20260719_002340_026346/latest.md",
+          "score": 1.0
+        }
+      ]
+    },
+    {
+      "scenario_id": "golden_case_04_bank_change",
+      "current_contract_pass": true,
+      "runs": [
+        {
+          "method": "direct_report",
+          "report": "benchmarks/invoice_tau/reports/live_k1_20260718_235319_604995/latest.md",
+          "score": 1.0
+        }
+      ],
+      "superseded_diagnostic_runs": [
+        "benchmarks/invoice_tau/reports/live_k1_20260718_234617_363466/latest.md"
+      ]
+    },
+    {
+      "scenario_id": "golden_case_05_clean_pdf_report",
+      "current_contract_pass": true,
+      "pass_count": 2,
+      "max_tool_call_counts_observed": {"write_case_file": 1, "render_pdf": 1},
+      "runs": [
+        {
+          "method": "direct_report",
+          "report": "benchmarks/invoice_tau/reports/live_k1_20260718_235640_664642/latest.md",
+          "score": 1.0
+        },
+        {
+          "method": "direct_report",
+          "report": "benchmarks/invoice_tau/reports/live_k1_20260719_002340_027354/latest.md",
+          "score": 1.0
+        }
+      ]
+    },
+    {
+      "scenario_id": "golden_case_06_duplicate_pdf",
+      "current_contract_pass": true,
+      "runs": [
+        {
+          "method": "saved_trace_rescore",
+          "report": "benchmarks/invoice_tau/reports/live_k1_20260719_000612_662860/latest.md",
+          "original_score": 0.875,
+          "current_score": 1.0
+        }
+      ]
+    }
+  ]
+}

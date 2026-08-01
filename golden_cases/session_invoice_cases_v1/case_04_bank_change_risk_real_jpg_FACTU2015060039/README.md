@@ -4,10 +4,10 @@ Real invoice JPG. Vendor master bank tail differs from supplier email change req
 
 ## How to test in the current app
 
-Upload the files inside `upload_to_app/` for one session. The files in `originals/` are real invoice originals and sidecars for visual inspection; do not upload `originals/` together with text files until direct JPG/PDF OCR support is added.
+Upload all six files inside `upload_to_app/`. The text invoice extract keeps this case focused on the conflict between the vendor master and the unapproved bank-change email.
 
 Suggested prompt:
 
 ```text
-?????????????????????? PDF???????????????????????
+请审核这些付款材料，重点核对供应商银行账户变更是否有充分依据。不要生成报告。
 ```

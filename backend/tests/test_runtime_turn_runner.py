@@ -462,7 +462,7 @@ def test_evidence_reviewer_timeout_recovers_pdf_text_batch(tmp_path, monkeypatch
     assert "PDF Vendor Ltd" in json.dumps(role_result, ensure_ascii=False)
 
 
-def test_case_patch_writer_timeout_persists_reviewer_suggested_patch(tmp_path, monkeypatch) -> None:
+def test_case_patch_writer_reduces_review_without_llm_call(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_API_KEY", "")
     monkeypatch.setenv("OPENAI_API_KEY", "")
@@ -497,21 +497,8 @@ def test_case_patch_writer_timeout_persists_reviewer_suggested_patch(tmp_path, m
     runner.harness.record_observation(state, runner.context.record_result(state, kind="role", name="evidence_reviewer", result=reviewer_result))
     runner._update_phase_after_role(state, "evidence_reviewer", reviewer_result)  # noqa: SLF001
 
-    class APITimeoutError(Exception):
-        pass
-
-    def fail_call(role: str, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
-        runner.llm.calls.append(
-            ModelCallRecord(
-                role=role,
-                model="test",
-                prompt_version="test",
-                input_preview="{}",
-                output_preview="",
-                error="APITimeoutError: Request timed out.",
-            )
-        )
-        raise APITimeoutError("Request timed out.")
+    def fail_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("deterministic patch reduction must not call the LLM")
 
     monkeypatch.setattr(runner.roles, "call", fail_call)
     request = AgentTurnRequest(case_id=state.case_id, message="persist review")
@@ -523,13 +510,20 @@ def test_case_patch_writer_timeout_persists_reviewer_suggested_patch(tmp_path, m
         name="case_patch_writer",
         payload={},
     )
+    write_result = runner.invoke_manager_tool(
+        state=state,
+        request=request,
+        planner_context={},
+        name="write_case_patch",
+        payload={},
+    )
 
     case_state = runner.store.load(state.case_id)
     assert result["status"] == "success"
+    assert write_result["status"] == "success"
     assert any(action.get("action") == "write_case_patch" for action in state.planner_actions)
-    assert state.role_calls[-1]["capability"]["runtime_recovery"] == "case_patch_writer_from_reviewer_suggested_patch_after_transient_failure"
-    assert runner.llm.calls[-1].error == ""
-    assert runner.llm.calls[-1].recovered_by == "case_patch_writer_from_reviewer_suggested_patch_after_transient_failure"
+    assert state.role_calls[-1]["capability"]["runtime"] == "deterministic_reducer"
+    assert not any(call.role == "case_patch_writer" for call in runner.llm.calls)
     assert len(case_state.evidence_items) == 1
     assert "duplicate_payment_screen" in case_state.conflict_materials
     assert "PAY-2026-4431" in json.dumps(case_state.model_dump(), ensure_ascii=False)
@@ -557,6 +551,47 @@ def test_manager_final_with_boundary_note_is_not_rewritten(tmp_path, monkeypatch
         runtime.runner.store.resolve_case_path("case_final_guard_recovery", f"traces/{response.trace['run_id']}/events.jsonl")
     ).read_text(encoding="utf-8")
     assert "final_answer_guard_rewrite" not in events
+
+
+def test_manager_missing_duplicate_history_claim_uses_case_state_recovery(tmp_path, monkeypatch) -> None:
+    manager = ScriptedManagerRunner(
+        [{"action": "final_answer", "final_answer": "重复付款筛查证据缺失：未提供历史付款记录比对。"}]
+    )
+    runtime = _runtime(tmp_path, monkeypatch, manager)
+    runtime.runner.store.save(
+        CaseState(
+            case_id="case_duplicate_history_guard",
+            status="collecting_materials",
+            requirements=[Requirement(id="duplicate_payment_screen", status="conflict")],
+            evidence_items=[
+                EvidenceItem(
+                    id="ev_history",
+                    type="duplicate_payment_check",
+                    summary="Prior payment document: PAY-543-HIST; Clearing document: CLR-543-HIST.",
+                    review_result={"should_accept": True},
+                    supports=[{"requirement": "duplicate_payment_screen", "support_level": "partial"}],
+                    conflicts=[
+                        {
+                            "conflict_type": "duplicate_payment_hit",
+                            "requirement": "duplicate_payment_screen",
+                            "description": "Prior payment and clearing documents match the invoice.",
+                        }
+                    ],
+                )
+            ],
+            risk_flags=["historical_payment_document_found", "clearing_document_found"],
+        )
+    )
+
+    response = runtime.run_turn(AgentTurnRequest(case_id="case_duplicate_history_guard", message="总结重复付款审查结果"))
+
+    assert "重复付款检查命中风险" in response.reply
+    assert "历史付款记录 PAY-543-HIST" in response.reply
+    assert "未提供历史付款记录" not in response.reply
+    events = runtime.runner.store.resolve_case_path(
+        "case_duplicate_history_guard", f"traces/{response.trace['run_id']}/events.jsonl"
+    ).read_text(encoding="utf-8")
+    assert "final_answer_guard_rewrite" in events
 
 
 def test_runtime_final_answer_does_not_infer_duplicate_hit_from_screen_name(tmp_path) -> None:
@@ -600,6 +635,24 @@ def test_runtime_final_answer_does_not_infer_duplicate_hit_from_screen_name(tmp_
     assert "Result: No duplicates" not in answer
 
 
+def test_runtime_final_answer_explains_bank_change_conflict(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    state = HarnessRuntime(store).begin_run("case_bank_change", "review", run_id="run_bank_change")
+    case_state = CaseState(
+        case_id=state.case_id,
+        status="collecting_materials",
+        requirements=[Requirement(id="vendor_identity", status="conflict")],
+        risk_flags=["bank_change_request_without_vendor_master_approval"],
+    )
+
+    answer = _runtime_final_answer(case_state, state)
+
+    assert "供应商名称等身份字段已匹配" in answer
+    assert "银行账户变更缺少供应商主数据审批依据" in answer
+    case_state.risk_flags = ["bank_account_mismatch_invoice_vs_vendor"]
+    assert "银行账户变更缺少供应商主数据审批依据" not in _runtime_final_answer(case_state, state)
+
+
 def test_evidence_reviewer_mode_mismatch_becomes_policy_feedback(tmp_path, monkeypatch) -> None:
     runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
     runner = runtime.runner
@@ -618,6 +671,29 @@ def test_evidence_reviewer_mode_mismatch_becomes_policy_feedback(tmp_path, monke
     assert state.observations[-1]["name"] == "role_mode_mismatch"
     assert state.observations[-1]["next_action_hint"] == "delegate_agent:evidence_reviewer_extract"
     assert state.role_calls[-1]["error"]
+
+
+def test_evidence_reviewer_extract_shape_repairs_wrong_mode(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    runner = runtime.runner
+    state = HarnessRuntime(runner.store).begin_run("case_mode_repair", "review", run_id="run_mode_repair")
+    result = {
+        "mode": "review",
+        "extracted_fields": {"invoice_number": {"value": "INV-1"}},
+        "extraction_result": {"source_docs": [{"doc_id": "att_1"}]},
+        "suggested_patch": {},
+    }
+
+    mismatch = runner._record_reviewer_mode_mismatch(
+        state,
+        "evidence_reviewer",
+        {"mode": "extract"},
+        result,
+        {"prompt_version": "test"},
+    )
+
+    assert mismatch is False
+    assert result["mode"] == "extract"
 
 
 def test_agent_runtime_interrupts_before_approved_tool_execution(tmp_path, monkeypatch) -> None:

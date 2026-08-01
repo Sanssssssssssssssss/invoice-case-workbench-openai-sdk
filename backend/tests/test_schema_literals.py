@@ -21,6 +21,49 @@ def test_evidence_review_rejects_unknown_enum_values() -> None:
         )
 
 
+@pytest.mark.parametrize("evidence_type", ["mixed_document_batch", "multi_document_review", "multi_document_packet"])
+def test_evidence_review_normalizes_common_multi_document_shapes(evidence_type: str) -> None:
+    result = EvidenceReviewResult.model_validate(
+        {
+            "evidence_type": evidence_type,
+            "conflicts": [
+                {
+                    "conflict_type": "bank_account_mismatch",
+                    "source_values": [
+                        {"source": "vendor_record", "value": "9012"},
+                        {"source": "email_request", "value": "7788"},
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert result.evidence_type == "unknown"
+    assert result.conflicts[0].source_values == {"vendor_record": "9012", "email_request": "7788"}
+
+
+def test_evidence_review_accepts_nested_conflict_resolution_status() -> None:
+    result = EvidenceReviewResult.model_validate(
+        {
+            "suggested_patch": {
+                "add_evidence": [
+                    {
+                        "type": "invoice",
+                        "conflicts": [
+                            {
+                                "conflict_type": "amount_extraction_error",
+                                "resolution_status": "pending_correction",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+
+    assert result.suggested_patch.add_evidence[0].conflicts[0].resolution_status == "pending_correction"
+
+
 def test_case_patch_rejects_unknown_patch_type() -> None:
     with pytest.raises(ValidationError):
         CasePatch.model_validate({"patch_type": "approve_payment", "case_updates": {}, "audit_note": ""})

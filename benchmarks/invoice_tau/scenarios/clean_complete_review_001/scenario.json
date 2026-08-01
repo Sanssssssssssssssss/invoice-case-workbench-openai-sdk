@@ -1,0 +1,59 @@
+{
+  "id": "clean_complete_review_001",
+  "name": "Complete invoice case review without report",
+  "description": "Live-friendly material review scenario: all AP Lite core materials are present and the case should become ready_for_report without writing report artifacts.",
+  "tags": ["attachments", "material_review", "case_patch_writer"],
+  "user_script": [
+    {
+      "message": "请审核这些发票付款材料并创建 case。只做材料审核，不要生成报告。",
+      "attach": ["invoice.md", "po.md", "grn.md", "vendor.md", "duplicate_check.md"],
+      "manager_decisions": []
+    }
+  ],
+  "scripted_roles": {
+    "evidence_reviewer": {
+      "mode": "review",
+      "evidence_type": "invoice",
+      "credibility": "high",
+      "support_level": "full",
+      "should_accept": true,
+      "reason": "Invoice, PO, GRN, vendor master, and duplicate-payment screen are all present and consistent.",
+      "risk_flags": [],
+      "supports": [
+        {"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-5001 amount 12800.00 CNY."}
+      ],
+      "conflicts": [],
+      "evidence_cards": [
+        {"title": "Complete AP evidence chain", "doc_type": "invoice", "supports": ["invoice", "purchase_order", "goods_receipt_or_service_acceptance", "vendor_identity", "duplicate_payment_screen"]}
+      ],
+      "suggested_patch": {},
+      "reply_to_user": "五项核心材料完整，当前可以进入报告阶段。"
+    },
+    "case_patch_writer": {
+      "patch_type": "update_case",
+      "case_updates": {
+        "summary": "INV-5001 发票付款材料完整，当前未见重复付款命中。",
+        "case_profile": {"invoice_number": "INV-5001", "supplier": "Aurora Industrial Ltd.", "amount_total": "12800.00", "currency": "CNY"},
+        "requirements": [
+          {"id": "invoice", "label": "Invoice", "kind": "document", "required": true},
+          {"id": "purchase_order", "label": "Purchase order", "kind": "document", "required": true},
+          {"id": "goods_receipt_or_service_acceptance", "label": "Goods receipt or service acceptance", "kind": "document", "required": true},
+          {"id": "vendor_identity", "label": "Vendor identity", "kind": "document", "required": true},
+          {"id": "duplicate_payment_screen", "label": "Duplicate payment screen", "kind": "risk_check", "required": true}
+        ],
+        "add_evidence": [
+          {"id": "ev_invoice", "type": "invoice", "credibility": "high", "source": "attachment", "summary": "Invoice INV-5001 amount 12800.00 CNY from Aurora Industrial Ltd.", "content": "Invoice INV-5001 amount 12800.00 CNY.", "review_result": {"should_accept": true}, "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-5001 amount 12800.00 CNY"}]},
+          {"id": "ev_po", "type": "purchase_order", "credibility": "high", "source": "attachment", "summary": "PO-5001 matches supplier and amount.", "content": "PO-5001 supplier Aurora Industrial Ltd amount 12800.00 CNY.", "review_result": {"should_accept": true}, "supports": [{"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO-5001 matches amount 12800.00 CNY"}]},
+          {"id": "ev_grn", "type": "goods_receipt", "credibility": "high", "source": "attachment", "summary": "GRN-5001 received 16 of 16 units.", "content": "GRN-5001 received all goods for PO-5001.", "review_result": {"should_accept": true}, "supports": [{"requirement": "goods_receipt_or_service_acceptance", "support_level": "full", "quoted_text": "received 16 of 16 units"}]},
+          {"id": "ev_vendor", "type": "vendor_record", "credibility": "high", "source": "attachment", "summary": "Vendor is active and bank tail matches invoice.", "content": "Vendor Aurora Industrial Ltd active, bank tail 2233.", "review_result": {"should_accept": true}, "supports": [{"requirement": "vendor_identity", "support_level": "full", "quoted_text": "vendor active bank tail 2233"}]},
+          {"id": "ev_duplicate", "type": "duplicate_payment_check", "credibility": "high", "source": "attachment", "summary": "Duplicate payment screen shows no prior payment for INV-5001.", "content": "No duplicate payment found for supplier, amount, and invoice reference.", "review_result": {"should_accept": true}, "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "No duplicate payment found"}]}
+        ],
+        "risk_flags": [],
+        "next_questions": [],
+        "reply_brief": "五项核心材料均已满足，可生成本地审查报告。"
+      },
+      "audit_note": "scripted clean complete review case"
+    }
+  },
+  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 600000}
+}

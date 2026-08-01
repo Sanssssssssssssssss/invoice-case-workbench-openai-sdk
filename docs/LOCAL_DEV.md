@@ -3,29 +3,24 @@
 ## One-time setup
 
 ```powershell
-cd E:\GPTProject2\NewERPAgnent
+cd E:\GPTProject2\erp-openai
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+pnpm install
 ```
 
 The app requires a real LLM key. It does not provide a no-key deterministic fallback.
 
-The app can automatically load your legacy env file for model credentials at:
-
-```text
-E:\GPTProject2\ERPagent\rfp-security-rag\backend\.env
-```
-
-If you want a project-local env, copy `backend/.env.example` to `backend/.env` and fill the model values.
-RAG defaults to this repository's own `knowledge/invoice_payment` directory. The old knowledge folder is opt-in only through `INVOICE_AGENT_INCLUDE_LEGACY_KNOWLEDGE=true` or `INVOICE_AGENT_KNOWLEDGE_ROOTS`.
-Harness traces are local by default under `workspace/cases/{case_id}/traces`; LangSmith tracing is opt-in with `INVOICE_AGENT_ENABLE_LANGSMITH=true`.
+The app loads credentials from `INVOICE_AGENT_ENV_FILE` when set, then from `backend/.env`. For a project-local environment, copy `backend/.env.example` to `backend/.env` and fill the model values.
+RAG defaults to this repository's `knowledge/invoice_payment` directory; override it with `INVOICE_AGENT_KNOWLEDGE_ROOTS` when needed.
+Harness traces are local by default under `workspace/cases/{case_id}/traces`; Langfuse tracing is opt-in with `INVOICE_AGENT_ENABLE_LANGFUSE=true`.
 
 ## VSCode
 
 Open the folder:
 
 ```powershell
-code E:\GPTProject2\NewERPAgnent
+code E:\GPTProject2\erp-openai
 ```
 
 Install recommended extensions when VSCode prompts you.
@@ -40,10 +35,10 @@ Useful commands:
 
 ## Local Desktop App
 
-Start the local window app:
+Start the Electron desktop app:
 
 ```powershell
-.\.venv\Scripts\python.exe -m app.desktop
+pnpm dev
 ```
 
 Or run:
@@ -57,7 +52,13 @@ In VSCode, use:
 - `Terminal > Run Task > Run: Desktop app`
 - `Run and Debug > Desktop: Local App`
 
-This is the recommended way to test the agent locally. It opens a native desktop window, supports multiple case chats, and lets you drag or choose attachment files for the next turn.
+This is the recommended way to test the agent locally. It opens the Electron window, starts the local API automatically, supports multiple case chats, and lets you drag or choose attachment files for the next turn.
+
+The older Tkinter desktop remains available for compatibility testing only:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.desktop
+```
 
 ## API
 
@@ -71,4 +72,4 @@ Start the API only if you need HTTP testing:
 
 Open `docs/api.http` with the REST Client extension if you want to run raw requests from the editor.
 
-For file review, pass an attachment path in the API request. The agent must call `read_attachment` before it can review the file content.
+For file review, upload the file through `POST /api/cases/{case_id}/attachments`, then pass the returned case-workspace path in the turn request. Arbitrary local filesystem paths are rejected. The agent must call `read_attachment` before it can review the file content. PDF and image attachments produce local previews and use OCR when needed.

@@ -4,7 +4,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from agents import RunConfig, Runner
+from agents import AgentOutputSchema, RunConfig, Runner
 from agents.models.openai_provider import OpenAIProvider
 from openai import AsyncOpenAI
 
@@ -13,6 +13,14 @@ from app.config import Settings
 
 _SHARED_CLIENTS_ENABLED = False
 _SHARED_CLIENTS: dict[tuple[str, str, float], AsyncOpenAI] = {}
+
+
+class FencedJsonOutputSchema(AgentOutputSchema):
+    def validate_json(self, json_str: str) -> Any:
+        lines = json_str.strip().splitlines()
+        if len(lines) >= 3 and lines[0].strip().lower() in {"```", "```json"} and lines[-1].strip() == "```":
+            json_str = "\n".join(lines[1:-1]).strip()
+        return super().validate_json(json_str)
 
 
 def build_run_config(

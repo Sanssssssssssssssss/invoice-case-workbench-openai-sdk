@@ -131,6 +131,11 @@ def test_memory_service_requires_source_ref_and_searches_hints(tmp_path) -> None
     assert hits
     assert hits[0]["source_ref"] == "case_memory/run_001/turn_001"
     assert hits[0]["boundary"] == "memory_hint_only_not_case_truth"
+    assert 0 < hits[0]["score"] <= 1
+    assert hits[0]["score"] == hits[0]["relevance_score"] == hits[0]["confidence"]
+    assert hits[0]["raw_score"] >= 1
+    assert hits[0]["score_terms"]
+    assert "token_overlap" in hits[0]["score_reason"]
 
 
 def test_session_compact_payload_coerces_dropped_turn_objects() -> None:

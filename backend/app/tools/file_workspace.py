@@ -194,6 +194,7 @@ def _read_attachment_item(
             "Supported types are txt, md, json, csv, log, xml, yaml, yml, pdf, jpg, jpeg, png, tif, tiff, webp, gif, and bmp."
         )
     name = attachment.name or source.name
+    source_digest = _file_sha256(source)[:12]
     original_ref = _copy_original(store, case_id, source, name)
     warnings: list[str] = []
     preview_paths: list[str] = []
@@ -210,11 +211,18 @@ def _read_attachment_item(
             case_id,
             source,
             name=name,
+            source_digest=source_digest,
         )
         visual_notes = _visual_notes_for_previews(store, case_id, preview_paths, content)
     else:
         content_kind = "image"
-        content, extraction_method, preview_paths, warnings = _read_image_attachment(store, case_id, source, name=name)
+        content, extraction_method, preview_paths, warnings = _read_image_attachment(
+            store,
+            case_id,
+            source,
+            name=name,
+            source_digest=source_digest,
+        )
         preview_images = [store.resolve_case_path(case_id, path) for path in preview_paths] if preview_paths else [source]
         visual_notes = _visual_notes_for_images(preview_images, content)
     truncated = content[:max_chars]
@@ -260,6 +268,7 @@ def _read_pdf_attachment(
     source: Path,
     *,
     name: str,
+    source_digest: str,
 ) -> tuple[str, str, list[str], int, list[str]]:
     try:
         import fitz  # type: ignore[import-not-found]
@@ -289,7 +298,7 @@ def _read_pdf_attachment(
             page_text = str(page.get_text("text") or "").strip()
             if page_text:
                 text_parts.append(f"[page {page_no} text]\n{page_text}")
-            preview_rel = _preview_relative_path(name, page_no)
+            preview_rel = _preview_relative_path(name, source_digest, page_no)
             preview_abs = store.resolve_case_path(case_id, preview_rel)
             preview_abs.parent.mkdir(parents=True, exist_ok=True)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
@@ -328,7 +337,14 @@ def _read_pdf_attachment(
     return content, method, preview_paths, len(preview_paths), warnings
 
 
-def _read_image_attachment(store: CaseStore, case_id: str, source: Path, *, name: str) -> tuple[str, str, list[str], list[str]]:
+def _read_image_attachment(
+    store: CaseStore,
+    case_id: str,
+    source: Path,
+    *,
+    name: str,
+    source_digest: str,
+) -> tuple[str, str, list[str], list[str]]:
     warnings: list[str] = []
     try:
         from PIL import Image
@@ -337,7 +353,7 @@ def _read_image_attachment(store: CaseStore, case_id: str, source: Path, *, name
             image.verify()
     except Exception as exc:
         raise RuntimeError(f"image_open_error: could not open image attachment {source.name}: {exc}") from exc
-    preview_paths = [_image_preview(store, case_id, source, name=name)]
+    preview_paths = [_image_preview(store, case_id, source, name=name, source_digest=source_digest)]
     try:
         content = _run_ocr(source).strip()
     except RuntimeError as exc:
@@ -473,16 +489,16 @@ def _source_file_name(source: Path, display_name: str) -> str:
     return f"{stem}_{digest}{suffix}"
 
 
-def _preview_relative_path(name: str, page_no: int) -> str:
+def _preview_relative_path(name: str, source_digest: str, page_no: int) -> str:
     stem = _safe_name(Path(name).stem or "document")
-    return f"evidence/previews/{stem}_p{page_no:03d}.png"
+    return f"evidence/previews/{stem}_{source_digest}_p{page_no:03d}.png"
 
 
-def _image_preview(store: CaseStore, case_id: str, source: Path, *, name: str) -> str:
+def _image_preview(store: CaseStore, case_id: str, source: Path, *, name: str, source_digest: str) -> str:
     from PIL import Image
 
     stem = _safe_name(Path(name).stem or source.stem or "image")
-    rel = f"evidence/previews/{stem}_image.png"
+    rel = f"evidence/previews/{stem}_{source_digest}_image.png"
     target = store.resolve_case_path(case_id, rel)
     target.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(source) as image:
@@ -493,6 +509,14 @@ def _image_preview(store: CaseStore, case_id: str, source: Path, *, name: str) -
 def _safe_name(value: str) -> str:
     clean = "".join(char if char.isalnum() or char in "._-" else "_" for char in str(value).strip())
     return (clean[:80].strip("._") or "attachment")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _attachment_error_item(attachment: Attachment, exc: Exception) -> dict[str, Any]:

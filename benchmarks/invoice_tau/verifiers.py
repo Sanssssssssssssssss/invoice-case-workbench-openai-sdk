@@ -14,13 +14,43 @@ RISK_FLAG_ALIASES = {
         "missing_grn_or_service_acceptance",
         "missing_goods_receipt",
         "missing_service_acceptance",
-    }
+        "grn_or_service_acceptance_missing_for_ap_review",
+    },
+    "duplicate_payment_hit": {
+        "duplicate_payment_hit",
+        "duplicate_payment_risk",
+        "duplicate_payment_risk_unresolved",
+        "duplicate_payment_unresolved",
+        "potential_duplicate_payment_unresolved",
+        "potential_duplicate_payment_uncleared",
+        "historical_payment_found",
+        "clearing_document_found",
+        "historical_payment_reconciliation_required",
+        "requires_reconciliation_with_prior_payment",
+        "same_supplier_same_amount",
+        "historical_clearing_reference",
+    },
+    "prompt_injection_quarantine": {
+        "prompt_injection_quarantine",
+        "source_pollution_quarantine",
+        "prompt_injection_detected",
+        "execution_instructions_embedded",
+    },
 }
+DEFAULT_BAD_OUTPUT_TERMS = (
+    "???",
+    "\ufffd",
+    "undefined",
+    "not valid JSON",
+    "Streaming connection failed",
+    "case manager 调用失败",
+)
 
 
 def verify_run(result: ScenarioRunResult, expected: ExpectedSpec, case_dir: Path) -> list[CheckResult]:
     checks: list[CheckResult] = []
     checks.extend(_reply_checks(result, expected))
+    checks.extend(_encoding_checks(result, expected))
     checks.extend(_state_checks(result, expected))
     checks.extend(_trace_checks(result, expected))
     checks.extend(_artifact_checks(case_dir, expected))
@@ -40,6 +70,16 @@ def score_checks(checks: list[CheckResult]) -> tuple[bool, float]:
 def _reply_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[CheckResult]:
     text = result.final_reply or ""
     checks: list[CheckResult] = []
+    if expected.reply_any_of:
+        matched = [needle for needle in expected.reply_any_of if needle in text]
+        checks.append(
+            CheckResult(
+                name="reply_any_of",
+                passed=bool(matched),
+                score=1.0 if matched else 0.0,
+                details={"expected_any_of": expected.reply_any_of, "matched": matched},
+            )
+        )
     for needle in expected.reply_contains:
         checks.append(
             CheckResult(
@@ -61,12 +101,64 @@ def _reply_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[Che
     return checks
 
 
+def _encoding_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[CheckResult]:
+    if not expected.encoding_must_be_clean:
+        return []
+    text = "\n".join(
+        [
+            result.final_reply or "",
+            str(result.metrics.get("error") or ""),
+            "\n".join(str(event.get("summary") or "") for event in result.metrics.get("events", []) if isinstance(event, dict)),
+        ]
+    )
+    checks: list[CheckResult] = []
+    for term in DEFAULT_BAD_OUTPUT_TERMS:
+        checks.append(
+            CheckResult(
+                name=f"encoding_clean:{term}",
+                passed=term not in text,
+                score=1.0 if term not in text else 0.0,
+                details={"term": term},
+            )
+        )
+    return checks
+
+
 def _state_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[CheckResult]:
     state = result.case_state or {}
     requirements = _requirements_by_id(state)
     risk_text = "\n".join(str(item) for item in state.get("risk_flags") or [])
     evidence_types = {str(item.get("type") or "") for item in state.get("evidence_items") or [] if isinstance(item, dict)}
     checks: list[CheckResult] = []
+    if expected.case_status:
+        observed_status = str(state.get("status") or "")
+        checks.append(
+            CheckResult(
+                name="case_status",
+                passed=observed_status == expected.case_status,
+                score=1.0 if observed_status == expected.case_status else 0.0,
+                details={"expected": expected.case_status, "observed": observed_status},
+            )
+        )
+    evidence_count = len(state.get("evidence_items") or [])
+    if expected.min_evidence_count is not None:
+        checks.append(
+            CheckResult(
+                name="min_evidence_count",
+                passed=evidence_count >= expected.min_evidence_count,
+                score=1.0 if evidence_count >= expected.min_evidence_count else 0.0,
+                details={"expected_min": expected.min_evidence_count, "observed": evidence_count},
+            )
+        )
+    if expected.max_evidence_count is not None:
+        checks.append(
+            CheckResult(
+                name="max_evidence_count",
+                passed=evidence_count <= expected.max_evidence_count,
+                score=1.0 if evidence_count <= expected.max_evidence_count else 0.0,
+                details={"expected_max": expected.max_evidence_count, "observed": evidence_count},
+            )
+        )
     for req_id, status in expected.requirements.items():
         observed = str((requirements.get(req_id) or {}).get("status") or "")
         checks.append(
@@ -122,6 +214,11 @@ def _trace_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[Che
     trace = result.trace or {}
     called = _called_names(trace)
     approval_names = _approval_names(trace)
+    tool_call_counts: dict[str, int] = {}
+    for call in trace.get("tool_calls") or []:
+        if isinstance(call, dict) and call.get("tool"):
+            name = str(call["tool"])
+            tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
     checks: list[CheckResult] = []
     for name in expected.trace_must_call:
         checks.append(
@@ -139,6 +236,16 @@ def _trace_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[Che
                 passed=name not in called,
                 score=1.0 if name not in called else 0.0,
                 details={"observed": sorted(called)},
+            )
+        )
+    for name, maximum in expected.max_tool_call_counts.items():
+        observed = tool_call_counts.get(name, 0)
+        checks.append(
+            CheckResult(
+                name=f"trace_max_tool_calls:{name}",
+                passed=observed <= maximum,
+                score=1.0 if observed <= maximum else 0.0,
+                details={"observed": observed, "max": maximum},
             )
         )
     for name in expected.trace_must_approve:

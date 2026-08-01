@@ -8,6 +8,7 @@ from uuid import uuid4
 from typing import Any, Literal
 
 from app.state.case_store import CaseStore
+from app.state.persistence import PERSISTENCE_LOCK, append_text, atomic_write_text
 from app.state.schemas import SupervisorDecision
 
 
@@ -97,7 +98,7 @@ class HarnessRunState:
             "tool_calls": list(self.tool_calls),
             "role_calls": list(self.role_calls),
             "plan_progress": list(self.plan_progress),
-            "observability": dict(self.observability),
+            "observability": _public_observability(self.observability),
             "trace_checkpoints": [
                 {
                     "checkpoint_id": item.get("checkpoint_id"),
@@ -429,11 +430,11 @@ class HarnessRuntime:
             "pre_run_context_estimate_chars": state.pre_run_context_estimate_chars,
             "pre_run_context_limit_chars": state.pre_run_context_limit_chars,
             "final_answer": state.final_answer,
-            "observability": dict(state.observability),
+            "observability": _public_observability(state.observability),
         }
-        (root / "traces" / f"{state.run_id}.json").write_text(
+        atomic_write_text(
+            root / "traces" / f"{state.run_id}.json",
             json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
         )
 
     def append_debug_event(
@@ -447,38 +448,38 @@ class HarnessRuntime:
         parent_event_id: str = "",
         caused_by_event_id: str = "",
     ) -> dict[str, Any]:
-        state.debug_event_seq += 1
-        root = self.store.ensure_case_dirs(state.case_id)
-        run_seq = state.debug_event_seq
-        case_seq = self.store.next_trace_case_seq(state.case_id)
-        event_id = f"{state.run_id}_evt_{run_seq:06d}"
-        event = {
-            "seq": run_seq,
-            "run_seq": run_seq,
-            "case_seq": case_seq,
-            "event_id": event_id,
-            "parent_event_id": parent_event_id,
-            "caused_by_event_id": caused_by_event_id,
-            "ts": utc_now(),
-            "case_id": state.case_id,
-            "session_id": state.session_id,
-            "turn_id": state.turn_id,
-            "run_id": state.run_id,
-            "step_count": state.step_count,
-            "phase": state.phase,
-            "kind": kind,
-            "name": name,
-            "summary": summary,
-            "payload_sha256": _sha256_payload(payload),
-            "payload_preview": _preview(payload, max_chars=1600),
-            "payload": payload,
-        }
-        line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
-        run_root = root / "traces" / state.run_id
-        run_root.mkdir(parents=True, exist_ok=True)
-        for path in (run_root / "events.jsonl", root / "traces" / "events.jsonl"):
-            with path.open("a", encoding="utf-8") as fh:
-                fh.write(line)
+        with PERSISTENCE_LOCK:
+            state.debug_event_seq += 1
+            root = self.store.ensure_case_dirs(state.case_id)
+            run_seq = state.debug_event_seq
+            case_seq = self.store.next_trace_case_seq(state.case_id)
+            event_id = f"{state.run_id}_evt_{run_seq:06d}"
+            event = {
+                "seq": run_seq,
+                "run_seq": run_seq,
+                "case_seq": case_seq,
+                "event_id": event_id,
+                "parent_event_id": parent_event_id,
+                "caused_by_event_id": caused_by_event_id,
+                "ts": utc_now(),
+                "case_id": state.case_id,
+                "session_id": state.session_id,
+                "turn_id": state.turn_id,
+                "run_id": state.run_id,
+                "step_count": state.step_count,
+                "phase": state.phase,
+                "kind": kind,
+                "name": name,
+                "summary": summary,
+                "payload_sha256": _sha256_payload(payload),
+                "payload_preview": _preview(payload, max_chars=1600),
+                "payload": payload,
+            }
+            line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
+            run_root = root / "traces" / state.run_id
+            run_root.mkdir(parents=True, exist_ok=True)
+            for path in (run_root / "events.jsonl", root / "traces" / "events.jsonl"):
+                append_text(path, line)
         state.last_debug_event_id = event_id
         return event
 
@@ -877,6 +878,10 @@ def _file_rows(snapshot: dict[str, str]) -> list[dict[str, Any]]:
         size, _, mtime_ns = signature.partition(":")
         rows.append({"path": path, "bytes": int(size or 0), "mtime_ns": int(mtime_ns or 0)})
     return rows
+
+
+def _public_observability(value: dict[str, Any]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if not str(key).startswith("_")}
 
 
 def validate_decision_size(decision: SupervisorDecision) -> None:

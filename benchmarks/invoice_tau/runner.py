@@ -119,13 +119,14 @@ class InvoiceTauBenchRunner:
         trace["events"] = events
         case_state = final_response.case_state.model_dump(mode="json") if final_response else _load_case_state(case_store, case_id)
         final_reply = final_response.reply if final_response else error
-        metrics = _metrics(trace, events, started)
+        metrics = _metrics(trace, events, started, case_state=case_state, case_dir=case_dir)
         metrics["scenario_budgets"] = dict(scenario.budgets or {})
         metrics["error"] = error
         result = ScenarioRunResult(
             scenario_id=scenario.id,
             run_index=run_index,
             mode=self.mode,  # type: ignore[arg-type]
+            category=_category_for(scenario),
             case_id=case_id,
             run_ids=_run_ids(trace, events),
             final_reply=final_reply,
@@ -207,9 +208,14 @@ def _restore_settings_env(values: dict[str, str | None]) -> None:
 
 def _attachments_for_turn(turn: UserTurnSpec, scenario_dir: Path) -> list[Attachment]:
     attachments: list[Attachment] = []
+    scenario_root = scenario_dir.resolve()
     for name in turn.attach:
-        path = scenario_dir / "attachments" / name
-        if not path.exists():
+        direct_path = (scenario_dir / name).resolve()
+        legacy_path = (scenario_dir / "attachments" / name).resolve()
+        path = direct_path if direct_path.is_file() else legacy_path
+        if not path.is_relative_to(scenario_root):
+            raise ValueError(f"Attachment must stay inside the scenario directory: {name}")
+        if not path.is_file():
             raise FileNotFoundError(f"Attachment not found: {path}")
         attachments.append(Attachment(name=path.name, path=str(path), content_type=_content_type(path)))
     return attachments
@@ -225,6 +231,10 @@ def _content_type(path: Path) -> str:
         return "application/json"
     if suffix == ".pdf":
         return "application/pdf"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".png":
+        return "image/png"
     return "application/octet-stream"
 
 
@@ -282,7 +292,14 @@ def _read_events(case_dir: Path) -> list[dict[str, Any]]:
     return events
 
 
-def _metrics(trace: dict[str, Any], events: list[dict[str, Any]], started: float) -> dict[str, Any]:
+def _metrics(
+    trace: dict[str, Any],
+    events: list[dict[str, Any]],
+    started: float,
+    *,
+    case_state: dict[str, Any],
+    case_dir: Path,
+) -> dict[str, Any]:
     model_calls = trace.get("model_calls") or []
     tool_calls = trace.get("tool_calls") or []
     role_calls = trace.get("role_calls") or []
@@ -298,8 +315,17 @@ def _metrics(trace: dict[str, Any], events: list[dict[str, Any]], started: float
         total_tokens += int(usage.get("total_tokens") or 0)
     if not total_tokens:
         total_tokens = input_tokens + output_tokens
+    requirement_status = {
+        str(item.get("id") or ""): str(item.get("status") or "")
+        for item in case_state.get("requirements") or []
+        if isinstance(item, dict)
+    }
     return {
         "wall_time_ms": round((time.perf_counter() - started) * 1000, 2),
+        "final_status": str(case_state.get("status") or ""),
+        "missing_requirements": sorted(key for key, status in requirement_status.items() if status == "missing"),
+        "conflict_requirements": sorted(key for key, status in requirement_status.items() if status == "conflict"),
+        "evidence_count": len(case_state.get("evidence_items") or []),
         "model_calls": len(model_calls),
         "tool_calls": len(tool_calls),
         "role_calls": len(role_calls),
@@ -309,6 +335,7 @@ def _metrics(trace: dict[str, Any], events: list[dict[str, Any]], started: float
         "approval_interrupts": len([event for event in events if event.get("kind") == "approval_interrupt"]),
         "approval_decisions": len([event for event in events if event.get("kind") == "approval_decision"]),
         "rag_events": len([event for event in events if event.get("kind") == "rag_guidance"]),
+        "artifact_summary": _artifact_summary(case_dir),
         "events": events,
     }
 
@@ -334,6 +361,33 @@ def _load_case_state(store: CaseStore, case_id: str) -> dict[str, Any]:
 
 def _safe_id(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in value)[:80]
+
+
+def _category_for(scenario: ScenarioSpec) -> str:
+    tags = set(scenario.tags or [])
+    if "create_case" in tags:
+        return "create_case"
+    if "chat" in tags:
+        return "chat"
+    if "materials_advisor" in tags:
+        return "material_help"
+    if "attachments" in tags:
+        return "material_review"
+    if "report" in tags:
+        return "report"
+    return "general"
+
+
+def _artifact_summary(case_dir: Path) -> dict[str, int]:
+    if not case_dir.exists():
+        return {"files": 0, "reports": 0, "pdfs": 0, "traces": 0}
+    files = [path for path in case_dir.rglob("*") if path.is_file()]
+    return {
+        "files": len(files),
+        "reports": len([path for path in files if "reports" in path.parts]),
+        "pdfs": len([path for path in files if path.suffix.lower() == ".pdf"]),
+        "traces": len([path for path in files if "traces" in path.parts]),
+    }
 
 
 def clean_report_dir(report_dir: Path) -> None:

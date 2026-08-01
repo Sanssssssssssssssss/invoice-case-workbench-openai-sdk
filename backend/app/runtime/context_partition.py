@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from app.agents.capabilities import ROLE_CAPABILITIES
 from app.config import PROJECT_ROOT, Settings
-from app.runtime.supervisor_contract import CAPABILITY_CARDS, SPECIALIST_TOOL_DESCRIPTIONS, SPECIALIST_TOOL_MODELS
+from app.runtime.supervisor_contract import CAPABILITY_CARDS, sorted_specialist_tool_specs
 from app.skills import SkillRegistry
 from app.tools.catalog import ToolCatalog
 
@@ -36,6 +36,60 @@ PARTITION_TOP_LEVEL_KEYS = (
 )
 PARTITION_USAGE_KEYS = ("prompt_tokens", "cached_tokens", "cache_hit_ratio")
 PARTITION_RUNTIME_KEYS = PARTITION_TOP_LEVEL_KEYS + ("role", "prompt_version")
+PARTITION_MANIFEST_KEYS = (
+    "unknown_context_keys",
+    "partition_policy_warnings",
+    "stable_prefix_exclusion_checks",
+    "dynamic_context_budget_chars",
+    "volatile_tail_budget_chars",
+)
+DYNAMIC_CONTEXT_KEYS = (
+    "case_brief",
+    "case_profile",
+    "case_next_action_hint",
+    "reply_brief",
+    "evidence_cards",
+    "session_summary",
+    "recent_turns",
+    "memory_hints",
+    "rag_context",
+    "attachment_manifest",
+    "open_questions",
+    "evidence_chain_context",
+    "role_result",
+    "case_state",
+    "evidence",
+    "conversation_summary",
+)
+VOLATILE_TAIL_KEYS = (
+    "current_goal",
+    "current_plan",
+    "attachments",
+    "recent_observations",
+    "next_expected_action",
+    "runtime_feedback",
+    "report_paths",
+    "user_message",
+    "user_question",
+    "user_request",
+    "mode",
+    "note",
+    "report_instructions",
+    "supervisor_task",
+    "attachment_context",
+    "extraction_context",
+    "extraction_result",
+    "target_evidence_id",
+    "target_attachment_id",
+    "user_correction",
+)
+
+
+@dataclass(frozen=True)
+class PartitionedContextPayload:
+    dynamic_context: dict[str, Any]
+    volatile_tail: dict[str, Any]
+    diagnostics: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -52,6 +106,7 @@ class ContextPacket:
     dynamic_context_hash: str
     volatile_tail_hash: str
     prompt_cache_key: str
+    partition_diagnostics: dict[str, Any]
 
     def runtime_metadata(self) -> dict[str, Any]:
         return {
@@ -72,6 +127,7 @@ class ContextPacket:
 
     def manifest_metadata(self) -> dict[str, Any]:
         metadata = self.runtime_metadata()
+        metadata.update({key: self.partition_diagnostics.get(key) for key in PARTITION_MANIFEST_KEYS})
         metadata["partition_previews"] = {"stable_prefix": _stable_prefix_preview(self)}
         metadata["partition_sections"] = {
             "dynamic_context": _section_index(self.dynamic_context),
@@ -103,7 +159,12 @@ def build_context_packet(
     tool_catalog_hash = stable_hash(tool_catalog_payload)
     skill_hash = stable_hash(skill_payload)
     tenant_policy_hash = stable_hash(tenant_policy_payload)
-    dynamic_context, volatile_tail = partition_context_payload(context_payload)
+    partitioned = partition_context_payload(
+        context_payload,
+        strict=bool(getattr(settings, "strict_context_partition", False)),
+    )
+    dynamic_context = partitioned.dynamic_context
+    volatile_tail = partitioned.volatile_tail
     stable_prefix = {
         "contract": "stable_prefix_v1",
         "role": normalized_role,
@@ -118,8 +179,9 @@ def build_context_packet(
         "tenant_policy": tenant_policy_payload,
     }
     _assert_stable_prefix(stable_prefix)
+    stable_prefix_hash = stable_hash(stable_prefix)
     prompt_cache_key = (
-        f"{PROMPT_CACHE_NAMESPACE}:{tenant_policy_hash}:{normalized_role}:{prompt_version}:{tool_catalog_hash}"
+        f"{PROMPT_CACHE_NAMESPACE}:{tenant_policy_hash[:16]}:{normalized_role}:{prompt_version}:{stable_prefix_hash[:24]}"
     )
     return ContextPacket(
         role=normalized_role,
@@ -127,17 +189,21 @@ def build_context_packet(
         stable_prefix=stable_prefix,
         dynamic_context=dynamic_context,
         volatile_tail=volatile_tail,
-        stable_prefix_hash=stable_hash(stable_prefix),
+        stable_prefix_hash=stable_prefix_hash,
         tool_catalog_hash=tool_catalog_hash,
         skill_hash=skill_hash,
         tenant_policy_hash=tenant_policy_hash,
         dynamic_context_hash=stable_hash(dynamic_context),
         volatile_tail_hash=stable_hash(volatile_tail),
         prompt_cache_key=prompt_cache_key,
+        partition_diagnostics={
+            **partitioned.diagnostics,
+            "stable_prefix_exclusion_checks": _stable_prefix_exclusion_checks(stable_prefix),
+        },
     )
 
 
-def partition_context_payload(context_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def partition_context_payload(context_payload: dict[str, Any], *, strict: bool = False) -> PartitionedContextPayload:
     payload = dict(context_payload or {})
     if "context_pack" in payload and isinstance(payload["context_pack"], dict):
         context = dict(payload["context_pack"])
@@ -145,44 +211,8 @@ def partition_context_payload(context_payload: dict[str, Any]) -> tuple[dict[str
     else:
         context = payload
         user_message = payload.get("user_message", "")
-    dynamic_keys = (
-        "case_brief",
-        "case_profile",
-        "case_next_action_hint",
-        "reply_brief",
-        "evidence_cards",
-        "session_summary",
-        "recent_turns",
-        "memory_hints",
-        "attachment_manifest",
-        "open_questions",
-        "evidence_chain_context",
-        "case_state",
-        "evidence",
-        "conversation_summary",
-    )
-    volatile_keys = (
-        "current_goal",
-        "current_plan",
-        "attachments",
-        "recent_observations",
-        "next_expected_action",
-        "runtime_feedback",
-        "report_paths",
-        "user_message",
-        "user_question",
-        "user_request",
-        "report_instructions",
-        "supervisor_task",
-        "attachment_context",
-        "extraction_context",
-        "extraction_result",
-        "target_evidence_id",
-        "target_attachment_id",
-        "user_correction",
-    )
-    dynamic = {key: context[key] for key in dynamic_keys if key in context}
-    volatile = {key: context[key] for key in volatile_keys if key in context}
+    dynamic = {key: context[key] for key in DYNAMIC_CONTEXT_KEYS if key in context}
+    volatile = {key: context[key] for key in VOLATILE_TAIL_KEYS if key in context}
     if user_message and "user_message" not in volatile:
         volatile["user_message"] = user_message
     other = {
@@ -190,9 +220,20 @@ def partition_context_payload(context_payload: dict[str, Any]) -> tuple[dict[str
         for key, value in context.items()
         if key not in dynamic and key not in volatile
     }
+    unknown_keys = sorted(str(key) for key in other)
+    warnings: list[str] = []
     if other:
+        warnings.append(f"unknown_context_keys:{','.join(unknown_keys)}")
+        if strict:
+            raise ValueError(f"Unknown prompt partition context keys: {unknown_keys}")
         dynamic["other_context"] = other
-    return _sorted_jsonable(dynamic), _sorted_jsonable(volatile)
+    dynamic = _sorted_jsonable(dynamic)
+    volatile = _sorted_jsonable(volatile)
+    return PartitionedContextPayload(
+        dynamic_context=dynamic,
+        volatile_tail=volatile,
+        diagnostics=_partition_diagnostics(dynamic, volatile, unknown_keys, warnings),
+    )
 
 
 def prompt_cache_model_settings_kwargs(settings: Settings, partition: dict[str, Any] | ContextPacket | None) -> dict[str, Any]:
@@ -261,12 +302,12 @@ def _tool_catalog_payload(catalog: ToolCatalog, *, role: str) -> dict[str, Any]:
     specialist_tools = [
         {
             "name": name,
-            "description": SPECIALIST_TOOL_DESCRIPTIONS.get(name, ""),
+            "description": description,
             "parameters": model.model_json_schema(),
         }
-        for name, model in sorted(SPECIALIST_TOOL_MODELS.items(), key=lambda item: item[0])
+        for name, description, model in sorted_specialist_tool_specs()
     ]
-    workspace_tools = sorted(catalog.visible_tools(), key=lambda item: str(item.get("name") or ""))
+    workspace_tools = catalog.visible_tools()
     if role != "planner":
         workspace_tools = []
         specialist_tools = []
@@ -360,6 +401,29 @@ def _assert_stable_prefix(prefix: dict[str, Any]) -> None:
     bad_keys = _volatile_keys(prefix)
     if bad_keys:
         raise ValueError(f"StablePrefix contains volatile keys: {bad_keys[:5]}")
+
+
+def _stable_prefix_exclusion_checks(prefix: dict[str, Any]) -> dict[str, Any]:
+    text = canonical_json(prefix)
+    return {
+        "contains_uuid": bool(UUID_RE.search(text)),
+        "contains_run_id": bool(RUN_ID_RE.search(text)),
+        "volatile_keys": _volatile_keys(prefix),
+    }
+
+
+def _partition_diagnostics(
+    dynamic: dict[str, Any],
+    volatile: dict[str, Any],
+    unknown_keys: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    return {
+        "unknown_context_keys": unknown_keys,
+        "partition_policy_warnings": warnings,
+        "dynamic_context_budget_chars": len(canonical_json(dynamic)),
+        "volatile_tail_budget_chars": len(canonical_json(volatile)),
+    }
 
 
 def _volatile_keys(value: Any, path: str = "") -> list[str]:

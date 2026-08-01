@@ -51,6 +51,7 @@ class Settings(BaseModel):
     llm_input_cost_per_1m: float = 0.0
     llm_output_cost_per_1m: float = 0.0
     llm_cached_input_cost_per_1m: float = 0.0
+    strict_context_partition: bool = False
 
     def timeout_for_role(self, role: str) -> float:
         if role == "evidence_reviewer":
@@ -179,4 +180,5 @@ def get_settings() -> Settings:
         llm_input_cost_per_1m=_float_env("INVOICE_AGENT_LLM_INPUT_COST_PER_1M", 0.0),
         llm_output_cost_per_1m=_float_env("INVOICE_AGENT_LLM_OUTPUT_COST_PER_1M", 0.0),
         llm_cached_input_cost_per_1m=_float_env("INVOICE_AGENT_LLM_CACHED_INPUT_COST_PER_1M", 0.0),
+        strict_context_partition=_bool_env("INVOICE_AGENT_STRICT_CONTEXT_PARTITION", False),
     )

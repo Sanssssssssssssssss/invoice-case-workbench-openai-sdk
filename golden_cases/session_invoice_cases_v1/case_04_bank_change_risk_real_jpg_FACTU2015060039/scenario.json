@@ -1,0 +1,19 @@
+{
+  "id": "golden_case_04_bank_change",
+  "name": "Unapproved supplier bank-account change",
+  "description": "The supplier email requests a bank change that is absent from the vendor master and has no approval evidence.",
+  "tags": ["golden", "attachments", "bank_change", "material_review"],
+  "user_script": [
+    {
+      "message": "请审核这些付款材料，重点核对供应商银行账户变更是否有充分依据。不要生成报告。",
+      "attach": [
+        "upload_to_app/01_invoice_extract_from_real_source.md",
+        "upload_to_app/02_purchase_order.md",
+        "upload_to_app/03_goods_receipt.md",
+        "upload_to_app/04_vendor_record.md",
+        "upload_to_app/05_duplicate_payment_check.md",
+        "upload_to_app/06_supplier_bank_change_email.md"
+      ]
+    }
+  ]
+}

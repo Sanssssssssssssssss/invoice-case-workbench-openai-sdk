@@ -28,10 +28,13 @@ STRONG_CONFLICT_TERMS = (
 
 NO_CONFLICT_TERMS = (
     "no conflict",
+    "no field conflict",
     "no discrepancy",
     "no duplicate invoice found",
     "no duplicate found",
+    "duplicate found: no",
     "duplicate invoice found: no",
+    "no duplicate-payment hit",
     "no prior payment found",
     "no clearing document exists",
     "prior payment found: no",
@@ -41,6 +44,7 @@ NO_CONFLICT_TERMS = (
     "未发现差异",
     "无差异",
     "未发现重复付款",
+    "未发现重复发票",
     "均未发现重复",
     "无未解决的重复付款冲突",
     "无数量冲突",
@@ -52,6 +56,15 @@ NO_CONFLICT_TERMS = (
     "反向征收",
     "可作为po核对参考",
     "可作为后续po核对参考",
+    "无冲突",
+    "无字段冲突",
+    "无材料冲突",
+    "无证据冲突",
+    "没有冲突",
+    "不存在冲突",
+    "未发现冲突",
+    "未显示冲突",
+    "未发现差异",
 )
 
 
@@ -140,6 +153,8 @@ def _evidence_conflict_text(data: dict[str, Any]) -> str:
 def _jsonish_text(value: Any) -> str:
     if isinstance(value, str):
         return value
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(exclude_none=True)
     return json.dumps(value, ensure_ascii=False, default=str)
 
 

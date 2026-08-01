@@ -14,12 +14,14 @@ from agents.run_state import RunState
 from pydantic import BaseModel
 
 from app.agents.manager import CaseManagerAgentFactory, MANAGER_PROMPT
+from app.agents.patch_builder.deterministic import reduce_review_to_patch
 from app.agents.registry import RoleRegistry
 from app.config import Settings, get_settings
 from app.context import ContextManager
 from app.harness import HarnessRuntime, HarnessRunState
 from app.llm import LlmClient, ModelCallRecord
 from app.observability.langfuse_tracer import LangfuseTracer, safe_role_input, safe_role_output
+from app.observability.model_metrics import mark_first_model_output, mark_model_started, model_ttft_ms
 from app.observability.openai_trace_bridge import sdk_run_summary
 from app.runtime.agents_sdk import build_run_config, close_run_config_client, run_agent_sync
 from app.runtime.checkpoints import RuntimeCheckpointStore
@@ -31,7 +33,7 @@ from app.runtime.policy_gate import PolicyGate, infer_reviewer_mode, requires_ma
 from app.runtime.reasoning_capture import append_reasoning_delta, extract_reasoning_from_result, extract_reasoning_from_stream_item, extract_stream_reasoning_delta
 from app.runtime.recovery_policy import RecoveryPolicy
 from app.runtime.retry import is_transient_llm_error
-from app.runtime.supervisor_contract import CAPABILITY_CARDS, SPECIALIST_TOOL_DESCRIPTIONS, SPECIALIST_TOOL_MODELS
+from app.runtime.supervisor_contract import CAPABILITY_CARDS, sorted_specialist_tool_specs
 from app.runtime.tool_runtime import ToolRuntime
 from app.runtime.trace_recorder import TraceRecorder
 from app.session_manager import SessionManager
@@ -79,13 +81,14 @@ class SdkManagerRunner:
         _ = planner_context
         tools = runner.sdk_tools(state=state, request=request, planner_context=planner_context)
         manager = runner.manager_factory.build(tools, metadata=_manager_metadata(runner, state))
+        started = time.perf_counter()
         result = run_agent_sync(
             manager,
             json.dumps(manager_input, ensure_ascii=False, default=str),
             max_turns=max(1, state.max_steps - state.step_count + 2),
             run_config=runner.run_config(state),
         )
-        runner.record_manager_model_call(state, manager_input, result)
+        runner.record_manager_model_call(state, manager_input, result, latency_ms=_elapsed_ms(started))
         interruptions = list(getattr(result, "interruptions", []) or [])
         sdk_state = result.to_state().to_string() if interruptions else ""
         return ManagerRunOutcome(
@@ -109,12 +112,14 @@ class SdkManagerRunner:
         manager = runner.manager_factory.build(tools, metadata=_manager_metadata(runner, state))
         run_config = runner.run_config(state)
         try:
+            started = time.perf_counter()
             result = Runner.run_streamed(
                 manager,
                 json.dumps(manager_input, ensure_ascii=False, default=str),
                 max_turns=max(1, state.max_steps - state.step_count + 2),
                 run_config=run_config,
             )
+            mark_model_started(state.observability, "planner")
             runner.emit_stream_event(
                 "model_started",
                 {"role": "planner", "model": runner.settings.llm_model, "step_count": state.step_count},
@@ -122,7 +127,7 @@ class SdkManagerRunner:
             )
             async for event in result.stream_events():
                 runner.record_sdk_stream_event(state, event)
-            runner.record_manager_model_call(state, manager_input, result)
+            runner.record_manager_model_call(state, manager_input, result, latency_ms=_elapsed_ms(started))
             return _manager_outcome_from_result(result)
         finally:
             await close_run_config_client(run_config)
@@ -149,13 +154,19 @@ class SdkManagerRunner:
                 run_state.approve(item)
             else:
                 run_state.reject(item, rejection_message=reason or "User rejected this tool call.")
+        started = time.perf_counter()
         result = run_agent_sync(
             manager,
             run_state,
             max_turns=max(1, state.max_steps - state.step_count + 2),
             run_config=runner.run_config(state),
         )
-        runner.record_manager_model_call(state, {"approval_resume": approved, "reason": reason}, result)
+        runner.record_manager_model_call(
+            state,
+            {"approval_resume": approved, "reason": reason},
+            result,
+            latency_ms=_elapsed_ms(started),
+        )
         new_interruptions = list(getattr(result, "interruptions", []) or [])
         return ManagerRunOutcome(
             final_output=str(getattr(result, "final_output", "") or ""),
@@ -189,12 +200,14 @@ class SdkManagerRunner:
                 run_state.reject(item, rejection_message=reason or "User rejected this tool call.")
         run_config = runner.run_config(state)
         try:
+            started = time.perf_counter()
             result = Runner.run_streamed(
                 manager,
                 run_state,
                 max_turns=max(1, state.max_steps - state.step_count + 2),
                 run_config=run_config,
             )
+            mark_model_started(state.observability, "planner")
             runner.emit_stream_event(
                 "model_started",
                 {"role": "planner", "model": runner.settings.llm_model, "approval_resume": approved},
@@ -202,7 +215,12 @@ class SdkManagerRunner:
             )
             async for event in result.stream_events():
                 runner.record_sdk_stream_event(state, event)
-            runner.record_manager_model_call(state, {"approval_resume": approved, "reason": reason}, result)
+            runner.record_manager_model_call(
+                state,
+                {"approval_resume": approved, "reason": reason},
+                result,
+                latency_ms=_elapsed_ms(started),
+            )
             return _manager_outcome_from_result(result)
         finally:
             await close_run_config_client(run_config)
@@ -287,6 +305,7 @@ class TurnRunner:
             harness=self.harness,
             context=self.context,
             sessions=self.sessions,
+            tool_catalog=self.tools,
             planner_prompt=MANAGER_PROMPT,
             planner_prompt_file="backend/app/agents/planner/prompt.md",
         )
@@ -835,8 +854,8 @@ class TurnRunner:
         planner_context: dict[str, Any],
     ) -> list[FunctionTool]:
         tools: list[FunctionTool] = []
-        for name, input_model in SPECIALIST_TOOL_MODELS.items():
-            tools.append(self._sdk_tool(name, SPECIALIST_TOOL_DESCRIPTIONS[name], input_model, state, request, planner_context))
+        for name, description, input_model in sorted_specialist_tool_specs():
+            tools.append(self._sdk_tool(name, description, input_model, state, request, planner_context))
         for tool_card in self.tools.visible_tools():
             name = str(tool_card.get("name") or "")
             if not name:
@@ -922,7 +941,14 @@ class TurnRunner:
             timeout_seconds=self.settings.timeout_for_role("planner"),
         )
 
-    def record_manager_model_call(self, state: HarnessRunState, manager_input: dict[str, Any], result: Any) -> None:
+    def record_manager_model_call(
+        self,
+        state: HarnessRunState,
+        manager_input: dict[str, Any],
+        result: Any,
+        *,
+        latency_ms: float | None = None,
+    ) -> None:
         usage = _usage_from_result(result)
         partition = with_usage_metrics(self.context.prompt_partition_metadata(state, "planner"), usage)
         self.context.update_context_manifest_usage(state, "planner", partition)
@@ -938,6 +964,8 @@ class TurnRunner:
             payload=manager_input,
             raw_response=output_preview,
             usage=usage,
+            latency_ms=latency_ms,
+            ttft_ms=model_ttft_ms(state.observability, "planner"),
             content_chars=len(output_preview),
             reasoning_excerpt=reasoning.text if reasoning else "",
             reasoning_chars=reasoning.chars if reasoning else 0,
@@ -955,6 +983,15 @@ class TurnRunner:
                 self.context.update_context_manifest_usage(state, target, record.prompt_partition)
                 return
 
+    def _sync_latest_model_ttft(self, state: HarnessRunState, role: str) -> None:
+        ttft_ms = model_ttft_ms(state.observability, role)
+        if ttft_ms is None:
+            return
+        for record in reversed(self.llm.calls):
+            if record.role == role and record.ttft_ms is None:
+                record.ttft_ms = ttft_ms
+                return
+
     def emit_stream_event(self, kind: str, payload: dict[str, Any] | None = None, *, summary: str = "") -> None:
         if not callable(self._stream_emit):
             return
@@ -969,6 +1006,7 @@ class TurnRunner:
             agent = getattr(event, "new_agent", None)
             role = _stream_agent_role(getattr(agent, "name", "") or "manager")
             state.observability["_active_stream_role"] = role
+            mark_model_started(state.observability, role)
             self.emit_stream_event(
                 "model_started",
                 {"role": role, "model": self.settings.llm_model},
@@ -980,6 +1018,7 @@ class TurnRunner:
             reasoning_delta = extract_stream_reasoning_delta(data)
             if reasoning_delta:
                 role = str(state.observability.get("_active_stream_role") or "planner")
+                mark_first_model_output(state.observability, role)
                 reasoning = _append_stream_reasoning(state, role, reasoning_delta)
                 self.emit_stream_event(
                     "model_thinking",
@@ -997,6 +1036,8 @@ class TurnRunner:
                 )
             delta = _stream_text_delta(data)
             if delta:
+                role = str(state.observability.get("_active_stream_role") or "planner")
+                mark_first_model_output(state.observability, role)
                 self.emit_stream_event(
                     "assistant_delta",
                     {"delta": delta, "role": "assistant", "step_count": state.step_count},
@@ -1015,6 +1056,7 @@ class TurnRunner:
                 capture = extract_reasoning_from_stream_item(item)
                 if capture:
                     role = str(state.observability.get("_active_stream_role") or "planner")
+                    mark_first_model_output(state.observability, role)
                     bucket = state.observability.get("_stream_reasoning")
                     current = bucket.get(role) if isinstance(bucket, dict) else None
                     if isinstance(current, dict) and int(current.get("chars") or 0) > 0:
@@ -1186,6 +1228,25 @@ class TurnRunner:
             payload["user_question"] = payload.get("question_focus")
         if role == "evidence_reviewer":
             payload["mode"] = infer_reviewer_mode(payload, state)
+        if role == "case_patch_writer":
+            reviewer_result = self.context.last_evidence_reviewer_result(state, mode=("review", "repair"))
+            if not reviewer_result:
+                return {"status": "error", "role": role, "error": {"type": "ValueError", "message": "No reviewed evidence is available."}}
+            result = reduce_review_to_patch(reviewer_result)
+            capability = self.roles.trace_metadata(role)
+            capability.update(
+                runtime="deterministic_reducer",
+                agent_as_tool=False,
+                prompt_version="case_patch_reducer_v1",
+                prompt_file="",
+                fallback_policy="fail_closed",
+            )
+            role_input = {"role_result": reviewer_result, "supervisor_task": supervisor_task(decision, state)}
+            self.harness.record_role_call(state, role, role_input, result, capability=capability)
+            observation = self.context.record_result(state, kind="role", name=role, result=result)
+            self.harness.record_observation(state, observation)
+            self._update_phase_after_role(state, role, result)
+            return _manager_success("role", role, observation=observation)
         role_capability = self.roles.trace_metadata(role)
         role_input = self.context_assembler.hydrate_role_input(state, role, payload, request.message)
         role_input["supervisor_task"] = supervisor_task(decision, state)
@@ -1242,6 +1303,7 @@ class TurnRunner:
                     role=role,
                     recovered_by="specialist_retry_success",
                 )
+                self._sync_latest_model_ttft(state, role)
                 self.trace_recorder.record_model_call_debug(state)
                 self._sync_context_manifest_usage(state, f"role:{role}", role)
                 if role == "evidence_reviewer" and self._record_reviewer_mode_mismatch(state, role, role_input, result, role_capability):
@@ -1269,8 +1331,6 @@ class TurnRunner:
                 return _manager_success("role", role, observation=observation)
             except Exception as exc:
                 recovery = self._recover_evidence_reviewer_timeout(state, role, role_input, role_capability, exc)
-                if not recovery:
-                    recovery = self._recover_case_patch_writer_failure(state, role, role_input, role_capability, exc)
                 if recovery:
                     span.update(
                         output=safe_role_output(recovery, error=f"recovered after {type(exc).__name__}"),
@@ -1353,69 +1413,6 @@ class TurnRunner:
         self.harness.record_observation(state, observation)
         self._update_phase_after_role(state, role, recovery)
         return recovery
-
-    def _recover_case_patch_writer_failure(
-        self,
-        state: HarnessRunState,
-        role: str,
-        role_input: dict[str, Any],
-        role_capability: dict[str, Any],
-        exc: Exception,
-    ) -> dict[str, Any] | None:
-        if role != "case_patch_writer" or not _is_recoverable_specialist_error(exc):
-            return None
-        reviewer_result = self.context.last_evidence_reviewer_result(state, mode=("review", "repair"))
-        suggested_updates = reviewer_result.get("suggested_patch") if isinstance(reviewer_result, dict) else None
-        if not isinstance(suggested_updates, dict) or not _case_updates_have_content(suggested_updates):
-            return None
-
-        recovery_name = "case_patch_writer_from_reviewer_suggested_patch_after_transient_failure"
-        writer_patch = {
-            "patch_type": "update_case",
-            "case_updates": suggested_updates,
-            "audit_note": "Recovered from evidence_reviewer.suggested_patch after case_patch_writer transient failure.",
-        }
-        writer_patch = self.patch_normalizer.preserve_reviewer_quote_fields(writer_patch, reviewer_result)
-        writer_patch = self.patch_normalizer.compact_for_write(writer_patch)
-        capability = dict(role_capability)
-        capability["runtime_recovery"] = recovery_name
-        _mark_latest_model_call_recovered(self.llm.calls, role=role, recovered_by=recovery_name, exc=exc)
-        self.harness.append_debug_event(
-            state,
-            kind="runtime_recovery",
-            name="case_patch_writer_suggested_patch",
-            payload={
-                "role": role,
-                "error": {"type": type(exc).__name__, "message": str(exc)},
-                "recovered_by": recovery_name,
-                "evidence_count": len(suggested_updates.get("add_evidence") or suggested_updates.get("evidence_items") or []),
-                "risk_count": len(suggested_updates.get("risk_flags") or []),
-            },
-            summary="Recovered case_patch_writer output from evidence_reviewer suggested_patch after transient failure.",
-            parent_event_id=state.last_action_event_id,
-            caused_by_event_id=state.last_action_event_id,
-        )
-        self.harness.record_role_call(state, role, role_input, writer_patch, capability=capability)
-        role_observation = self.context.record_result(state, kind="role", name=role, result=writer_patch)
-        role_observation["runtime_recovery"] = recovery_name
-        self.harness.record_observation(state, role_observation)
-        self._update_phase_after_role(state, role, writer_patch)
-
-        write_decision = SupervisorDecision(
-            action="write_case_patch",
-            target="write_case_patch",
-            input={"source": "runtime_recovery", "recovered_from": "case_patch_writer_transient_failure"},
-            reason="runtime_recovery:case_patch_writer_transient_failure",
-            confidence=1.0,
-        )
-        self.harness.record_supervisor_decision(state, write_decision)
-        try:
-            result = self.tool_runtime.call(state, "write_case_patch", {"patch": writer_patch}, internal=True)
-        except Exception as write_exc:
-            self.tool_runtime.call_and_record_error(state, "write_case_patch", {"patch": writer_patch}, write_exc)
-            return None
-        observation = _latest_observation(state, kind="tool", name="write_case_patch")
-        return _manager_success("tool", "write_case_patch", observation=observation, result=result)
 
     def _call_tool(self, state: HarnessRunState, request: AgentTurnRequest, decision: SupervisorDecision) -> dict[str, Any]:
         payload = self._tool_payload_defaults(decision.target, dict(decision.input or {}), state)
@@ -1613,6 +1610,24 @@ class TurnRunner:
         expected = str(role_input.get("mode") or "").strip().lower()
         observed = str((result or {}).get("mode") or "").strip().lower()
         if expected not in {"extract", "review", "repair"} or not observed or observed == expected:
+            return False
+        suggested_patch = result.get("suggested_patch") if isinstance(result.get("suggested_patch"), dict) else {}
+        if (
+            expected == "extract"
+            and observed == "review"
+            and (result.get("extraction_result") or result.get("extracted_fields"))
+            and not (suggested_patch.get("add_evidence") or suggested_patch.get("evidence_items"))
+        ):
+            result["mode"] = "extract"
+            self.harness.append_debug_event(
+                state,
+                kind="runtime_recovery",
+                name="evidence_reviewer_mode_normalized",
+                payload={"requested_mode": expected, "returned_mode": observed},
+                summary="Normalized extraction-shaped evidence_reviewer output to mode=extract.",
+                parent_event_id=state.last_action_event_id,
+                caused_by_event_id=state.last_action_event_id,
+            )
             return False
         message = f"evidence_reviewer returned mode={observed} for requested mode={expected}."
         self.harness.record_role_call(state, role, role_input, result, error=message, capability=role_capability)
@@ -1952,6 +1967,10 @@ def _usage_from_result(result: Any) -> dict[str, Any]:
     return extract_usage_from_result(result)
 
 
+def _elapsed_ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000, 2)
+
+
 def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
     evidence_text = _case_evidence_text(case_state)
     risk_text = " ".join(str(item) for item in getattr(case_state, "risk_flags", []) or [])
@@ -2035,6 +2054,8 @@ def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
         f"missing={_csv(missing_ids)}；"
         f"weak={_csv(weak_ids)}。"
     )
+    if "vendor_identity" in conflict_ids and any(term in risk_lower for term in ("bank_change", "vendor_master_approval", "银行变更")):
+        lines.append("- 冲突解释：供应商名称等身份字段已匹配；当前冲突指银行账户变更缺少供应商主数据审批依据。")
     risks = [str(item).strip() for item in getattr(case_state, "risk_flags", []) or [] if str(item).strip()]
     if risks:
         lines.append(f"- 风险标记：{_safe_text(risks[0], max_chars=260)}")
@@ -2137,24 +2158,6 @@ def _is_timeout_error(exc: Exception) -> bool:
 def _is_recoverable_specialist_error(exc: Exception) -> bool:
     text = f"{type(exc).__name__}: {exc}".lower()
     return _is_timeout_error(exc) or is_transient_llm_error(exc) or "overloaded" in text
-
-
-def _case_updates_have_content(updates: dict[str, Any]) -> bool:
-    for field in (
-        "requirements",
-        "remove_requirements",
-        "add_evidence",
-        "evidence_items",
-        "risk_flags",
-        "next_questions",
-        "evidence_cards",
-    ):
-        if updates.get(field):
-            return True
-    for field in ("summary", "conversation_summary", "case_profile", "next_action_hint", "reply_brief"):
-        if updates.get(field) is not None:
-            return True
-    return False
 
 
 def _report_requested_message(message: str) -> bool:
