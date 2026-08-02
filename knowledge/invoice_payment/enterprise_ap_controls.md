@@ -4,6 +4,27 @@ This file is RAG guidance for invoice and accounts-payable review. It is not sub
 
 All rule entries use the same shape: `profile_id`, `when_to_use`, `document_type`, `expected_fields`, `validation_checks`, `pass_partial_fail`, `advisor_guidance`, `evidence_boundary`, `risk_flags`, and `source_links`.
 
+## Requirement activation map
+
+The machine-readable ids, labels, owners, and profile membership live in `policies/aurora_ap_policy_v1.json`. These enterprise profiles are opt-in: retrieve the matching rule and activate the profile only when the user asks for that control or submitted evidence raises its trigger. `evidence` Requirements establish source material; `reviewer` Requirements are source-grounded semantic conclusions; `compiler` Requirements are projected only by the trusted proof graph.
+
+- `invoice_validation`: material `invoice`, `currency`, `tax_treatment` → conclusions `invoice_fields_valid`, `invoice_calculation_valid`.
+- `three_way_control`: materials `invoice`, `purchase_order`, `goods_receipt_or_service_acceptance` → conclusions `three_way_amount_match` (Compiler) and `three_way_quantity_match` (Reviewer).
+- `duplicate_control`: material `duplicate_payment_screen` → conclusion `no_active_duplicate` (Compiler). A complete search remains satisfied even when a candidate is found.
+- `vendor_control`: material `vendor_identity` → conclusion `vendor_identity_active`.
+- `bank_change_control`: materials `vendor_identity`, `vendor_bank_change_record` → conclusion `vendor_bank_account_authorized`.
+- `approval_control`: materials `approval_matrix`, `invoice_approval_record` → conclusion `approval_authority_satisfied`.
+- `sod_control`: material `sod_control_record` → conclusion `sod_control_satisfied`.
+- `payment_release_control`: material `payment_release_record` → conclusion `payment_release_authorized`.
+- `non_po_contract_control`: materials `invoice`, `contract_or_sow`, `service_acceptance` → conclusion `non_po_contract_match`.
+- `tax_account_coding_control`: material `tax_and_account_coding_record` → conclusion `tax_and_account_coding_valid`.
+- `exception_hold_control`: material `exception_hold_record` → conclusion `no_unresolved_payment_hold`. Releasing a hold does not rewrite the original mismatch.
+- `audit_control`: material `audit_trail_record` → conclusion `audit_chain_complete`; use as a report/decision-proof gate, not as a substitute for business evidence.
+
+Do not invent tenant values. In the current demo pack only the inclusive 2% three-way amount tolerance is configured. Approval limits, duplicate-search windows, quantity tolerances, bank-change cooling periods, tax rules, and retention periods remain explicitly unconfigured until an authoritative tenant source supplies them.
+
+Plain Evidence `supports` can satisfy only source-material Requirements. A Reviewer-owned conclusion requires one high-confidence `metadata.requirement_verdicts` envelope whose evidence ids cover every declared premise and resolve to trusted active attachments. `SUPPORTED` projects to satisfied, `REFUTED` to a reportable conflict, and missing premises, open questions, weak provenance, unconfigured policy values, or `UNKNOWN` remain incomplete/weak.
+
 ## Rule: Single Invoice Field Completeness
 
 - profile_id: `invoice_field_completeness`
@@ -75,6 +96,8 @@ All rule entries use the same shape: `profile_id`, `when_to_use`, `document_type
 
 ## Rule: AP Three-Way Matching
 
+Aurora's demo company hard policy is versioned separately in `policies/aurora_ap_policy_v1.json`: amount comparison uses an inclusive 2% tolerance and requires source-linked currency, amount scope, tax basis, coverage, and one shared source-grounded order/PO identity across invoice, PO, and GRN. Amount scope is document-specific (`invoice_total`, `order_total`, `received_value`, or `cumulative_received_value`); tax basis is a separate `gross|net` axis and must agree across documents. Missing or incompatible scope, tax basis, or receipt coverage is `INCOMPLETE`, not an amount mismatch; only complete comparable values outside tolerance are `DISPROVED`. Generic guidance in this document must not override that machine policy. “Evidence sufficient for report” means the system can support a finding; it does not mean the check passed, the case is low risk, or payment is authorized.
+
 - profile_id: `ap_three_way_matching`
 - when_to_use: Use only when the user explicitly asks for AP review, payment review, three-way matching, invoice-PO-GRN comparison, receipt matching, or purchase-order payment controls.
 - document_type: invoice plus purchase order plus goods receipt / product receipt / service acceptance
@@ -120,7 +143,7 @@ All rule entries use the same shape: `profile_id`, `when_to_use`, `document_type
 - validation_checks:
   - Compare exact and normalized invoice numbers.
   - Compare same supplier/vendor, same or near amount, same currency, and close invoice dates.
-  - Treat a duplicate hit as a risk finding; it does not make duplicate-payment-check satisfied in a low-risk sense until historical payment record and business explanation are reviewed.
+  - A complete source-traceable search can satisfy the source-material check even when it finds a candidate. Compile the candidate lifecycle separately as `no_active_duplicate=PROVED|DISPROVED|INCOMPLETE` from the historical payment and reversal evidence.
   - Distinguish true duplicate, credit/reversal, installment, recurring service, and false positive.
 - pass_partial_fail:
   - full: source duplicate-check export includes criteria, matched record, and conclusion with source locator.
@@ -128,7 +151,7 @@ All rule entries use the same shape: `profile_id`, `when_to_use`, `document_type
   - none: no historical search basis is provided.
 - advisor_guidance:
   - Ask AP controls/payment operations for duplicate-check export, historical payment record, clearing voucher, and business relationship explanation.
-  - For same-supplier/same-amount/near-reference hits, keep risk high until the matched record is explained.
+  - For same-supplier/same-amount/near-reference hits, keep the lifecycle conclusion incomplete until the matched record is explained.
 - evidence_boundary:
   - Duplicate hit is not proof that payment should proceed. It is an exception to document in the report.
 - risk_flags: `duplicate_payment_hit`, `near_duplicate_invoice_number`, `same_supplier_same_amount`, `historical_clearing_reference`, `duplicate_check_missing_search_basis`

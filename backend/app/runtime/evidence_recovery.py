@@ -41,9 +41,7 @@ def recover_text_direct_review(attachment_batch: dict[str, Any], *, error: Excep
     risk_flags = _risk_flags(duplicate)
     for item in items:
         if item["type"] == "duplicate_payment_check" and risk_flags:
-            conflict = _duplicate_conflict_text(duplicate)
-            item["conflicts"] = [conflict]
-            item["reviewer_notes"] = conflict
+            item["reviewer_notes"] = _duplicate_finding_text(duplicate)
             item["review_result"]["risk_flags"] = risk_flags
             item["metadata"]["duplicate_payment_facts"] = duplicate
     patch = {
@@ -64,12 +62,12 @@ def recover_text_direct_review(attachment_batch: dict[str, Any], *, error: Excep
         "credibility": "high",
         "extracted_fields": _merged_extracted_fields(items, duplicate),
         "source_traceability": "system_export",
-        "support_level": "partial" if duplicate else "full",
+        "support_level": "full",
         "risk_flags": risk_flags,
         "should_accept": True,
         "reason": _reason(error),
         "supports": _top_level_supports(items),
-        "conflicts": _top_level_conflicts(duplicate),
+        "conflicts": [],
         "evidence_cards": patch["evidence_cards"],
         "suggested_patch": patch,
         "reply_to_user": _reply_brief(duplicate),
@@ -295,10 +293,10 @@ def _risk_flags(duplicate: dict[str, Any]) -> list[str]:
     return [f"duplicate_payment_risk: prior payment or clearing record found {refs}".strip()]
 
 
-def _duplicate_conflict_text(duplicate: dict[str, Any]) -> str:
+def _duplicate_finding_text(duplicate: dict[str, Any]) -> str:
     prior = duplicate.get("prior_payment_doc") or "prior payment"
     clearing = duplicate.get("clearing_doc") or "clearing document"
-    return f"duplicate_payment_screen conflict: historical payment {prior} and clearing document {clearing} require reconciliation."
+    return f"Duplicate-payment search source accepted; historical payment {prior} and clearing document {clearing} require lifecycle reconciliation."
 
 
 def _requirements_for_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -333,22 +331,6 @@ def _top_level_supports(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in items:
         supports.extend(item.get("supports") or [])
     return supports[:12]
-
-
-def _top_level_conflicts(duplicate: dict[str, Any]) -> list[dict[str, Any]]:
-    if not duplicate:
-        return []
-    return [
-        {
-            "type": "risk",
-            "conflict_type": "duplicate_payment_screen",
-            "requirement": "duplicate_payment_screen",
-            "severity": "high",
-            "description": _duplicate_conflict_text(duplicate),
-            "quoted_text": str(duplicate.get("source_quote") or ""),
-            "affected_fields": ["prior_payment_doc", "clearing_doc"],
-        }
-    ]
 
 
 def _merged_extracted_fields(items: list[dict[str, Any]], duplicate: dict[str, Any]) -> dict[str, dict[str, Any]]:

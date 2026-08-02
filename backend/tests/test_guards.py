@@ -77,6 +77,20 @@ def test_case_state_consistency_allows_capability_introduction_without_case_trut
         enforce_case_state_consistency("五项核心材料均已满足，可以进入报告阶段。", state)
 
 
+def test_case_state_consistency_accepts_compiler_derived_requirement_support() -> None:
+    state = SimpleNamespace(
+        requirements=[SimpleNamespace(id="three_way_amount_match", status="satisfied", required=True)],
+        evidence_items=[SimpleNamespace(id="ev_001", supports=[])],
+        compiled_proof=SimpleNamespace(
+            claims=[SimpleNamespace(id="claim_001", evidence_id="ev_001", source_quote="Total GBP 100", source_locator="page 1")],
+            checks=[SimpleNamespace(id="REQ_THREE_WAY_AMOUNT_MATCH", program_id="amount", requirement_id="three_way_amount_match", status="PROVED", input_claim_ids=["claim_001"])],
+            decisions=[SimpleNamespace(program_id="amount", root_check_id="REQ_THREE_WAY_AMOUNT_MATCH")],
+        ),
+    )
+
+    assert enforce_case_state_consistency("status = ready_for_report", state) == "status = ready_for_report"
+
+
 def test_case_state_consistency_ignores_optional_weak_but_blocks_optional_conflict() -> None:
     text = "status = ready_for_report"
     ok_state = SimpleNamespace(

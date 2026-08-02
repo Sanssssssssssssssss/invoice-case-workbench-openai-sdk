@@ -7,9 +7,14 @@ from pathlib import Path
 import pytest
 
 from app.context import classify_runtime_error
-from app.state.attachment_manifest import load_attachment_manifest, update_manifest_summaries
+from app.state.attachment_manifest import (
+    link_manifest_evidence,
+    load_attachment_manifest,
+    trusted_sources_for_evidence,
+    update_manifest_summaries,
+)
 from app.state.case_store import CaseStore
-from app.state.schemas import Attachment
+from app.state.schemas import Attachment, EvidenceItem
 from app.tools.catalog import ToolCatalog
 from app.tools.document_extraction import _line_items_from_tables
 from app.tools.file_workspace import FileWorkspace
@@ -178,6 +183,90 @@ def test_read_attachment_copies_original_and_marks_text_extraction(tmp_path) -> 
     assert entry["summary"]
 
 
+def test_compiler_source_binding_uses_runtime_manifest_and_rejects_tampering(tmp_path) -> None:
+    source = tmp_path / "invoice.md"
+    source.write_text("Invoice INV-TRUST-001 Total GBP 10000", encoding="utf-8")
+    store = CaseStore(tmp_path / "cases")
+    result = FileWorkspace(store).read_attachment(
+        "case_trusted_source",
+        [Attachment(name="invoice.md", path=str(source), content_type="text/markdown")],
+    )
+    item = result["attachments"][0]
+    evidence = EvidenceItem(
+        id="ev_invoice",
+        type="invoice",
+        source="attachment",
+        metadata={"original_ref": item["original_ref"]},
+    )
+
+    trusted = trusted_sources_for_evidence(store, "case_trusted_source", [evidence])
+    assert "Total GBP 10000" in " ".join(trusted["ev_invoice"]["texts"])
+
+    store.resolve_case_path("case_trusted_source", item["original_ref"]).write_text("tampered", encoding="utf-8")
+    assert trusted_sources_for_evidence(store, "case_trusted_source", [evidence]) == {}
+
+
+def test_compiler_source_binding_rejects_mixed_attachment_identity(tmp_path) -> None:
+    invoice = tmp_path / "invoice.md"
+    purchase_order = tmp_path / "po.md"
+    invoice.write_text("Invoice INV-BIND-001 Total GBP 10000", encoding="utf-8")
+    purchase_order.write_text("Purchase order PO-BIND-001 Total GBP 10000", encoding="utf-8")
+    store = CaseStore(tmp_path / "cases")
+    result = FileWorkspace(store).read_attachment(
+        "case_mixed_attachment_identity",
+        [
+            Attachment(name=invoice.name, path=str(invoice), content_type="text/markdown"),
+            Attachment(name=purchase_order.name, path=str(purchase_order), content_type="text/markdown"),
+        ],
+    )
+    attachments = {item["name"]: item for item in result["attachments"]}
+    evidence = EvidenceItem(
+        id="ev_invoice",
+        type="invoice",
+        source="attachment",
+        metadata={
+            "attachment_id": attachments["invoice.md"]["attachment_id"],
+            "original_ref": attachments["po.md"]["original_ref"],
+            "source_filename": "invoice.md",
+        },
+    )
+
+    assert trusted_sources_for_evidence(store, "case_mixed_attachment_identity", [evidence]) == {}
+
+    evidence.metadata = {"attachment_id": attachments["invoice.md"]["attachment_id"]}
+    trusted = trusted_sources_for_evidence(store, "case_mixed_attachment_identity", [evidence])
+    assert "INV-BIND-001" in " ".join(trusted["ev_invoice"]["texts"])
+
+    evidence.metadata = {"source_filename": "invoice.md"}
+    trusted = trusted_sources_for_evidence(store, "case_mixed_attachment_identity", [evidence])
+    assert "INV-BIND-001" in " ".join(trusted["ev_invoice"]["texts"])
+
+
+def test_compiler_source_binding_ignores_fuzzy_manifest_evidence_ids(tmp_path) -> None:
+    source = tmp_path / "invoice.md"
+    source.write_text("Invoice INV-FUZZY-001 Total GBP 10000", encoding="utf-8")
+    store = CaseStore(tmp_path / "cases")
+    FileWorkspace(store).read_attachment(
+        "case_fuzzy_attachment_identity",
+        [Attachment(name=source.name, path=str(source), content_type="text/markdown")],
+    )
+    evidence = EvidenceItem(
+        id="ev_fuzzy",
+        type="invoice",
+        source="attachment",
+        summary="Invoice INV-FUZZY-001 Total GBP 10000",
+    )
+    state = store.load("case_fuzzy_attachment_identity")
+    state.evidence_items = [evidence]
+
+    link_manifest_evidence(store, "case_fuzzy_attachment_identity", state)
+
+    manifest = load_attachment_manifest(store, "case_fuzzy_attachment_identity")
+    assert "ev_fuzzy" in manifest["attachments"][0]["evidence_ids"]
+    assert "INV-FUZZY-001" in manifest["attachments"][0]["reason"]
+    assert trusted_sources_for_evidence(store, "case_fuzzy_attachment_identity", [evidence]) == {}
+
+
 def test_read_attachment_can_expand_prior_manifest_file(tmp_path) -> None:
     source = tmp_path / "invoice.md"
     source.write_text("Invoice INV-EXPAND-001 Amount 10000 CNY", encoding="utf-8")
@@ -274,6 +363,17 @@ def test_read_attachment_extracts_text_pdf_and_preview(tmp_path) -> None:
     assert visible_invoice["crop_path"] == invoice_field["crop_path"]
     assert item["visual_check"]["visible_sections"]["invoice_number"] == "yes"
     assert store.resolve_case_path("case_pdf_text", item["preview_paths"][0]).exists()
+    manifest = load_attachment_manifest(store, "case_pdf_text")
+    assert manifest["attachments"][0]["extraction_sha256"]
+    evidence = EvidenceItem(
+        id="ev_pdf",
+        type="invoice",
+        source="attachment",
+        metadata={"original_ref": item["original_ref"]},
+    )
+    assert "INV-PDF-001" in " ".join(trusted_sources_for_evidence(store, "case_pdf_text", [evidence])["ev_pdf"]["texts"])
+    store.resolve_case_path("case_pdf_text", item["extraction_ref"]).write_text("{}", encoding="utf-8")
+    assert trusted_sources_for_evidence(store, "case_pdf_text", [evidence]) == {}
 
 
 def test_pdf_field_crop_prefers_value_block_over_invoice_title(tmp_path) -> None:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 from app.state.attachment_manifest import load_attachment_manifest, save_attachment_manifest
 from app.state.case_store import CaseStore
 from app.tools.catalog import ToolCatalog
@@ -49,6 +52,27 @@ def test_case_385104_superseded_png_repair_releases_amount_and_source_traceabili
         },
     )
 
+    original_ref = "attachments/originals/invoice.pdf"
+    source_path = store.resolve_case_path(case_id, original_ref)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"%PDF-1.4 regression fixture")
+    extraction_ref = "evidence/extractions/att_corrected_invoice.json"
+    extraction_path = store.resolve_case_path(case_id, extraction_ref)
+    extraction_path.parent.mkdir(parents=True, exist_ok=True)
+    extraction_path.write_text(json.dumps({
+        "attachment_id": "att_corrected_invoice",
+        "full_text": "Grand Total 319.00",
+    }), encoding="utf-8")
+    save_attachment_manifest(store, case_id, {"attachments": [{
+        "attachment_id": "att_corrected_invoice",
+        "name": "invoice.pdf",
+        "original_ref": original_ref,
+        "status": "active",
+        "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        "extraction_ref": extraction_ref,
+        "extraction_sha256": hashlib.sha256(extraction_path.read_bytes()).hexdigest(),
+    }]})
+
     updated = store.apply_patch(
         case_id,
         {
@@ -58,6 +82,7 @@ def test_case_385104_superseded_png_repair_releases_amount_and_source_traceabili
                     {
                         "id": "ev_004",
                         "type": "invoice",
+                        "source": "attachment",
                         "credibility": "high",
                         "summary": "PDF repair confirms amount and original source.",
                         "review_result": {"should_accept": True, "evidence_type": "invoice"},
@@ -71,10 +96,11 @@ def test_case_385104_superseded_png_repair_releases_amount_and_source_traceabili
                         ],
                         "conflicts": [],
                         "metadata": {
+                            "classification": "business_evidence",
                             "review_stage": "corrected",
                             "supersedes_evidence_id": "ev_001",
                             "source_doc_id": "pdf_upload",
-                            "original_ref": "attachments/originals/invoice.pdf",
+                            "original_ref": original_ref,
                         },
                     }
                 ],

@@ -6,7 +6,7 @@ The benchmark follows the tau-bench pattern:
 
 - Multi-turn user scripts define what the user says, what files they attach, and how approval prompts are answered.
 - The runner exercises the real application API boundary through `AgentRuntime` and `TurnRunner`.
-- Domain policy is encoded in scenario fixtures and deterministic verifiers.
+- Company policy is loaded from the canonical `policies/aurora_ap_policy_v1.json`; scenario fixtures provide evidence, and deterministic verifiers assert the resulting proof contract.
 - Contract pass is judged by final case state, trace behavior, artifacts, safety constraints, and budgets.
 - LLM quality score is reported separately through a judge model; a contract pass is not a perfect quality score.
 - `pass^k` is supported through repeated runs with `--k`.
@@ -137,6 +137,7 @@ Scenario checks cover:
 - Required and forbidden reply text.
 - Case status and evidence counts.
 - Requirement statuses and risk flags.
+- Compiled proof status, outcome, policy version, and required proof obligations.
 - Evidence types.
 - Required and forbidden tool/role calls.
 - Approval interrupts and decisions.
@@ -145,6 +146,8 @@ Scenario checks cover:
 - Safety constraints such as prompt-injection leakage and approval bypass.
 - Encoding cleanliness: benchmark outputs must not contain `???`, replacement characters, `undefined`, `not valid JSON`, streaming failure text, or generic manager failure text.
 - Budgets for model calls, tool calls, role calls, tokens, and wall time.
+
+`semantic_duplicate_reversal_001` is the evidence-language Compiler acceptance case. It seeds the stable `duplicate_payment_screen` input Requirement, requires a source-bound `candidate_found` lifecycle IR and validated LLM judgment, and expects the Compiler to derive `no_active_duplicate=PROVED` consistently across canonical proof, Requirement projection, and the final reply.
 
 ## Adding A Scenario
 

@@ -9,6 +9,9 @@
 - Approval date: 2026-04-25
 - Currency: CNY
 - PO total amount: 13800.00
+- Amount basis: order_total
+- Tax basis: gross
+- Comparison coverage: full PO-9001 scope
 - Linked invoice: INV-9001
 
 Line items:

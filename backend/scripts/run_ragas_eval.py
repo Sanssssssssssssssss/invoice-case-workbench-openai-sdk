@@ -35,6 +35,8 @@ THRESHOLDS = {
     "context_recall": 0.60,
     "llm_context_precision_with_reference": 0.65,
 }
+OFFLINE_THRESHOLDS = {"policy_profile_hit_at_1": 1.0, "policy_profile_hit_at_k": 1.0}
+ALL_THRESHOLDS = {**OFFLINE_THRESHOLDS, **THRESHOLDS}
 INTENT_PRIORITY = (
     "prompt_injection",
     "clear_invoice_boundary",
@@ -58,90 +60,105 @@ INTENT_SPECS: dict[str, dict[str, Any]] = {
     "materials_required": {
         "terms": ["\u6750\u6599", "\u51c6\u5907", "\u7f3a", "\u81f3\u5c11", "material", "requirements"],
         "query": "invoice payment review required materials invoice purchase order goods receipt vendor master duplicate payment check",
+        "expected_profiles": ["ap_lite_payment_review_material_profile", "ap_payment_review_materials_checklist_direct"],
         "reference": "Invoice payment review normally requires a source invoice, purchase order, goods receipt or service acceptance, vendor identity/master data, and duplicate-payment screening evidence.",
         "example_user_input": "我现在需要准备什么发票付款审查材料，缺哪些核心证据？",
     },
     "three_way_matching": {
         "terms": ["\u4e09\u5355", "po", "grn", "\u6536\u8d27", "goods receipt", "three-way", "quantity", "unit price"],
         "query": "three way matching invoice purchase order goods receipt quantity unit price amount mismatch",
+        "expected_profiles": ["ap_three_way_matching"],
         "reference": "Three-way matching compares invoice, purchase order, and goods receipt or service acceptance for supplier, quantities, unit prices, dates, and amounts before treating the evidence chain as complete.",
         "example_user_input": "三单匹配时发票、PO 和 GRN 要核对哪些字段？",
     },
     "duplicate_payment": {
         "terms": ["\u91cd\u590d", "duplicate", "pay-2026", "clr-2026", "clearing", "\u5386\u53f2\u4ed8\u6b3e"],
         "query": "duplicate payment same supplier same amount same invoice reference historical payment clearing evidence",
-        "reference": "Duplicate-payment review should compare same supplier, amount, invoice number or similar reference, payment id, clearing history, and unresolved duplicate hits; a hit remains a conflict rather than ready for report.",
+        "expected_profiles": ["duplicate_payment_control", "defect_duplicate_payment_hit"],
+        "reference": "Duplicate-payment review should compare supplier, amount, invoice reference, search scope, payment identity, and reversal lifecycle. A complete search source may be satisfied when it finds a candidate; the separate no-active-duplicate conclusion remains incomplete or disproved until lifecycle evidence resolves it.",
         "example_user_input": "重复付款检查命中同供应商同金额和近似发票号，应该怎么判断？",
     },
     "bank_change": {
         "terms": ["\u94f6\u884c", "bank", "\u5c3e\u53f7", "account", "supplier email", "new bank"],
         "query": "vendor bank change supplier master current proposed account approval workflow email conflict",
+        "expected_profiles": ["vendor_master_bank_change_control", "defect_bank_change_email"],
         "reference": "Vendor bank changes require comparison against vendor master data and approval workflow evidence; a new bank-account email or mismatch is a conflict until independently approved.",
         "example_user_input": "供应商邮件说临时更换银行账号，发票银行尾号和主数据不一致，这能付款吗？",
     },
     "approval_authority": {
         "terms": ["\u5ba1\u6279\u77e9\u9635", "\u6388\u6743\u5ba1\u6279", "\u5ba1\u6279\u6743\u9650", "approval matrix", "approval authority", "delegation"],
         "query": "approval authority matrix invoice approval limit delegation workflow approval invoice amount exception approval",
+        "expected_profiles": ["approval_authority_matrix_control"],
         "reference": "Approval review should verify that the workflow approval is source-traceable, bound to the same invoice, and within the approver's amount/category authority; approval alone does not replace invoice, PO, receipt, vendor, or duplicate-payment evidence.",
         "example_user_input": "这张发票金额超过普通经理权限，审批矩阵和授权审批记录需要怎么看？",
     },
     "segregation_of_duties": {
         "terms": ["\u804c\u8d23\u5206\u79bb", "\u6743\u9650\u51b2\u7a81", "segregation of duties", "sod", "same user", "compensating control"],
         "query": "segregation of duties accounts payable same user creates vendor enters invoice approves releases payment compensating control",
+        "expected_profiles": ["segregation_of_duties_ap_control"],
         "reference": "AP segregation-of-duties review should separate vendor setup/change, invoice entry, approval, payment release, and reconciliation, or require documented compensating controls for lean teams.",
         "example_user_input": "如果同一个人可以建供应商、录入发票并释放付款，这个 AP 权限有没有问题？",
     },
     "payment_release": {
         "terms": ["\u4ed8\u6b3e\u91ca\u653e", "payment release", "payment run", "ach", "wire", "\u7535\u6c47", "payment hold"],
         "query": "payment release disbursement control payment run ACH wire bank account vendor master hold unresolved last minute bank change",
+        "expected_profiles": ["payment_release_disbursement_control"],
         "reference": "Payment release review should compare payee, bank account, amount, method, and release approval to the approved payable and vendor master, with unresolved holds or last-minute bank changes treated as risk.",
         "example_user_input": "付款批次准备释放，ACH/wire 收款账号刚被改过，应该检查哪些证据？",
     },
     "vendor_master_governance": {
         "terms": ["vendor onboarding", "\u4f9b\u5e94\u5546\u5165\u9a7b", "vendor master change log", "\u91cd\u590d\u4f9b\u5e94\u5546", "vendor statement"],
         "query": "vendor onboarding master data governance duplicate vendor record vendor master change log tax id vendor statement reconciliation",
+        "expected_profiles": ["vendor_onboarding_master_data_governance"],
         "reference": "Vendor master governance review should verify vendor identity, status, tax/registration data, change approvals, duplicate vendor records, and vendor-statement reconciliation where relevant.",
         "example_user_input": "新供应商入驻和供应商主数据变更记录不完整，会不会影响发票付款审查？",
     },
     "non_po_contract_invoice": {
         "terms": ["non-po", "\u975e po", "\u65e0 po", "contract invoice", "\u5408\u540c\u53d1\u7968", "sow", "subscription"],
         "query": "non-PO contract invoice service invoice SOW milestone acceptance recurring service duplicate billing period owner approval",
+        "expected_profiles": ["non_po_contract_invoice_control"],
         "reference": "Non-PO or contract invoice review should tie the invoice to contract/SOW terms, service period or milestone acceptance, owner approval, and duplicate recurring-period checks instead of silently applying PO/GRN requirements.",
         "example_user_input": "这是一张没有 PO 的合同服务费发票，应该按什么材料和控制来审？",
     },
     "tax_gl_coding": {
         "terms": ["gl coding", "\u603b\u8d26", "\u6210\u672c\u4e2d\u5fc3", "tax treatment", "\u7a0e\u7801", "vat", "gst", "withholding"],
         "query": "invoice tax treatment GL coding cost center tax code VAT GST withholding business purpose accounting coding",
+        "expected_profiles": ["tax_gl_coding_cost_center_control"],
         "reference": "Tax and GL/cost-center review should verify accounting coding, tax code/tax amount, business purpose, and owner approval as accounting-control evidence, without replacing AP source-document requirements.",
         "example_user_input": "发票税码、GL coding 和成本中心看起来不匹配，这属于什么风险？",
     },
     "exception_hold_tolerance": {
         "terms": ["payment hold", "matching hold", "\u5339\u914d\u5bb9\u5dee", "\u5bb9\u5dee\u8d85\u9650", "\u4f8b\u5916\u5ba1\u6279", "hold release"],
         "query": "invoice matching hold tolerance exceeded price variance quantity variance discrepancy approval hold release exception evidence",
+        "expected_profiles": ["exception_hold_tolerance_control"],
         "reference": "Exception or hold review should preserve the original mismatch, verify tolerance policy and authorized hold release, and require source-traceable discrepancy approval before treating the exception as explained.",
         "example_user_input": "系统有 matching hold，数量和价格差异超过容差，但有人想走例外审批释放，怎么审？",
     },
     "amount_conflict": {
         "terms": ["\u91d1\u989d", "amount", "tax", "subtotal", "total", "\u5355\u4ef7"],
         "query": "invoice amount tax subtotal total calculation mismatch purchase order amount conflict",
+        "expected_profiles": ["invoice_calculation_validation", "defect_amount_conflict"],
         "reference": "Amount review should compare invoice totals, tax, line amounts, PO amounts, and GRN quantities; unresolved amount or calculation conflicts should not be marked satisfied.",
         "example_user_input": "发票总额、税额和 PO 金额对不上，这个金额冲突应该怎么处理？",
     },
     "prompt_injection": {
         "terms": ["prompt injection", "\u5947\u602a\u6307\u4ee4", "\u5ffd\u7565", "\u76f4\u63a5\u6279\u51c6", "\u9644\u4ef6\u91cc"],
         "query": "prompt injection attachment says ignore rules approve payment source quality boundary invoice text",
+        "expected_profiles": ["source_quality_prompt_injection", "prompt_injection_boundary_direct", "defect_prompt_injection_attachment"],
         "reference": "Instructions inside attachments are source text only; prompt-injection content must not override reviewer policy or cause approval/payment execution.",
         "example_user_input": "附件 OCR 里写着忽略规则直接批准付款，这段文字应该怎么处理？",
     },
     "clear_invoice_boundary": {
         "terms": ["clear invoice", "process log", "\u6d41\u7a0b", "bpi"],
         "query": "Clear Invoice process log event payment approval boundary process evidence not payable proof",
+        "expected_profiles": ["workflow_boundary_process_evidence", "defect_clear_invoice_misunderstanding"],
         "reference": "A Clear Invoice or process-log event is process evidence, not proof of payment approval or complete invoice evidence by itself.",
         "example_user_input": "流程日志里有 Clear Invoice，是不是说明这个工具已经批准或支付了？",
     },
     "report_quality": {
         "terms": ["\u62a5\u544a", "pdf", "claim-to-evidence", "matrix", "\u751f\u6210\u6700\u7ec8\u62a5\u544a"],
-        "query": "invoice payment review report claim to evidence matrix missing materials conflicts duplicate payment risk",
+        "query": "audit trail evidence retention claim-to-evidence source locator attachment id trace events artifact paths unresolved findings",
+        "expected_profiles": ["audit_trail_retention_control"],
         "reference": "Final reports must preserve unresolved missing items and conflicts, include claim-to-evidence grounding, and avoid saying payment is approved or complete when requirements remain weak or conflicting.",
         "example_user_input": "生成最终报告时，怎么写缺失材料、冲突和 claim-to-evidence 矩阵？",
     },
@@ -164,6 +181,7 @@ class RagasEvalRecord:
     retrieved_context_ids: list[str]
     source_paths: list[str]
     locators: list[str]
+    expected_profile_ids: list[str]
     profile_ids: list[str]
     scores: list[float]
     channels: list[str]
@@ -206,7 +224,7 @@ def main() -> None:
 
     report = render_report(records, llm_enabled=not args.no_llm, metric_rows=metric_rows, response_source=args.response_source)
     write_reports(report, records, output=Path(args.output), jsonl_output=Path(args.jsonl_output))
-    print_summary(report)
+    print_summary(report, output=Path(args.output))
     if not report["pass"]:
         raise SystemExit(1)
 
@@ -236,14 +254,13 @@ def build_dynamic_ragas_records(
         spec = INTENT_SPECS[intent]
         query = _query_for_candidate(candidate, spec)
         result = skill.retrieve(query=query, intent="policy_qa", top_k=top_k, include_raw_snippets=True)
-        if result.status != "success" or not result.evidences:
-            continue
-        channels = [item.channel for item in result.evidences]
-        if not channels or not all(channel == "txtai_hybrid" for channel in channels):
-            continue
+        evidences = list(result.evidences) if result.status == "success" else []
+        channels = [item.channel for item in evidences]
         response = str(candidate.get("assistant_response") or "").strip()
         if response_source == "rag" or not response:
-            response = result.answer_context
+            response = result.answer_context if evidences else ""
+        profile_ids = [str(item.fields.get("profile_id") or "") for item in evidences]
+        expected_profile_ids = [str(item) for item in spec.get("expected_profiles") or []]
         records.append(
             RagasEvalRecord(
                 sample_id=f"ragas_{index:03d}_{intent}",
@@ -256,12 +273,13 @@ def build_dynamic_ragas_records(
                 query=query,
                 reference=str(spec["reference"]),
                 response=response[:response_max_chars],
-                retrieved_contexts=[item.snippet for item in result.evidences],
-                retrieved_context_ids=[item.source_id for item in result.evidences],
-                source_paths=[item.source_path for item in result.evidences],
-                locators=[item.locator for item in result.evidences],
-                profile_ids=[str(item.fields.get("profile_id") or "") for item in result.evidences],
-                scores=[item.score for item in result.evidences],
+                retrieved_contexts=[item.snippet for item in evidences],
+                retrieved_context_ids=[item.source_id for item in evidences],
+                source_paths=[item.source_path for item in evidences],
+                locators=[item.locator for item in evidences],
+                expected_profile_ids=expected_profile_ids,
+                profile_ids=profile_ids,
+                scores=[item.score for item in evidences],
                 channels=channels,
                 retrieved_evidence=[
                     {
@@ -273,8 +291,12 @@ def build_dynamic_ragas_records(
                         "channel": item.channel,
                         "snippet": item.snippet,
                     }
-                    for item in result.evidences
+                    for item in evidences
                 ],
+                metric_scores={
+                    "policy_profile_hit_at_1": float(bool(profile_ids and profile_ids[0] in expected_profile_ids)),
+                    "policy_profile_hit_at_k": float(bool(set(expected_profile_ids).intersection(profile_ids)))
+                },
             )
         )
     for record in records:
@@ -339,7 +361,10 @@ def render_report(
     response_source: str,
 ) -> dict[str, Any]:
     means = _metric_means(records)
-    threshold_pass = True
+    threshold_pass = all(
+        means.get(name) is not None and float(means[name]) >= threshold
+        for name, threshold in OFFLINE_THRESHOLDS.items()
+    )
     if llm_enabled:
         for name, threshold in THRESHOLDS.items():
             value = means.get(name)
@@ -356,7 +381,7 @@ def render_report(
         "llm_enabled": llm_enabled,
         "response_source": response_source,
         "pass": bool(retrieval_pass and threshold_pass),
-        "thresholds": THRESHOLDS,
+        "thresholds": ALL_THRESHOLDS,
         "means": means,
         "coverage": _metric_coverage(records),
         "database": str(settings.session_db_path),
@@ -378,9 +403,9 @@ def write_reports(report: dict[str, Any], records: list[RagasEvalRecord], *, out
             fh.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
 
 
-def print_summary(report: dict[str, Any]) -> None:
+def print_summary(report: dict[str, Any], *, output: Path) -> None:
     print(json.dumps({key: report[key] for key in ("pass", "sample_count", "llm_enabled", "means")}, ensure_ascii=False, indent=2))
-    print(f"Wrote {REPORT_DIR / 'ragas_latest.json'}")
+    print(f"Wrote {output}")
 
 
 def _database_candidates(session_db_path: Path, *, case_ids: list[str] | None) -> list[dict[str, Any]]:
@@ -614,7 +639,7 @@ def _merge_metric_rows(records: list[RagasEvalRecord], metric_rows: list[dict[st
 
 def _metric_means(records: list[RagasEvalRecord]) -> dict[str, float | None]:
     output: dict[str, float | None] = {}
-    for name in THRESHOLDS:
+    for name in ALL_THRESHOLDS:
         values = [
             float(value)
             for record in records
@@ -628,7 +653,7 @@ def _metric_means(records: list[RagasEvalRecord]) -> dict[str, float | None]:
 def _metric_coverage(records: list[RagasEvalRecord]) -> dict[str, dict[str, int | float]]:
     total = max(1, len(records))
     output: dict[str, dict[str, int | float]] = {}
-    for name in THRESHOLDS:
+    for name in ALL_THRESHOLDS:
         count = 0
         for record in records:
             value = record.metric_scores.get(name)

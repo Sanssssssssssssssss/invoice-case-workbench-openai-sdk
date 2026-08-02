@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import csv
@@ -75,6 +76,7 @@ def write_extraction_dossiers(store: Any, case_id: str, items: list[dict[str, An
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(dossier, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
         item["extraction_ref"] = rel
+        item["extraction_sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
         item["extraction_methods"] = dossier.get("extraction_methods", [])
         item["body_markdown"] = _brief(dossier.get("body_markdown") or dossier.get("full_text") or "", 2400)
         item["field_inventory"] = dossier.get("field_inventory", [])[:24]
@@ -92,6 +94,7 @@ def write_extraction_dossiers(store: Any, case_id: str, items: list[dict[str, An
             {
                 "attachment_id": attachment_id,
                 "extraction_ref": rel,
+                "extraction_sha256": item["extraction_sha256"],
                 "field_inventory_count": len(dossier.get("field_inventory") or []),
                 "page_count": len(dossier.get("pages") or []),
                 "table_count": len(dossier.get("tables") or []),

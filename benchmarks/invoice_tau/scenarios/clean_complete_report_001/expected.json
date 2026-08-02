@@ -5,8 +5,13 @@
     "purchase_order": "satisfied",
     "goods_receipt_or_service_acceptance": "satisfied",
     "vendor_identity": "satisfied",
-    "duplicate_payment_screen": "satisfied"
+    "duplicate_payment_screen": "satisfied",
+    "no_active_duplicate": "satisfied",
+    "three_way_amount_match": "satisfied"
   },
+  "proof_status": "PROVED",
+  "proof_outcome": "EVIDENCE_SUFFICIENT_FOR_REPORT",
+  "proof_policy_version": "aurora_ap_lite_v1",
   "must_have_evidence_types": ["invoice", "purchase_order", "goods_receipt", "vendor_record", "duplicate_payment_check"],
   "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch", "report_writer", "write_case_file", "render_pdf"],
   "trace_must_approve": ["write_case_file", "render_pdf"],

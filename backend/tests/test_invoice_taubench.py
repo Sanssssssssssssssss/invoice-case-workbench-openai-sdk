@@ -128,7 +128,10 @@ def test_invoice_taubench_duplicate_conflict_verifier_fields(tmp_path) -> None:
 
     checks = {check.name: check for check in result.checks}
     assert checks["requirement:duplicate_payment_screen"].passed
-    assert checks["forbidden_requirement:duplicate_payment_screen:satisfied"].passed
+    assert checks["requirement:no_active_duplicate"].passed
+    assert checks["forbidden_requirement:duplicate_payment_screen:conflict"].passed
+    assert checks["proof_status"].passed
+    assert checks["proof_outcome"].passed
     assert checks["risk_flag_contains:duplicate_payment_hit"].passed
     assert checks["trace_must_not_call:render_pdf"].passed
 
@@ -180,6 +183,23 @@ def test_invoice_taubench_enforces_per_tool_call_limit() -> None:
 
     assert not checks["trace_max_tool_calls:render_pdf"].passed
     assert checks["trace_max_tool_calls:render_pdf"].details == {"observed": 2, "max": 1}
+
+
+def test_invoice_taubench_does_not_fallback_when_target_proof_is_missing() -> None:
+    result = ScenarioRunResult(
+        scenario_id="missing_target_proof",
+        case_state={
+            "compiled_proof": {
+                "decision": {"requirement_id": "other", "proof_status": "PROVED"},
+                "decisions": [{"requirement_id": "other", "proof_status": "PROVED"}],
+            }
+        },
+    )
+    expected = ExpectedSpec(proof_requirement_id="target", proof_status="PROVED")
+
+    checks = {check.name: check for check in verify_run(result, expected, SCENARIOS_ROOT)}
+
+    assert not checks["proof_status"].passed
 
 
 def test_invoice_taubench_risk_flag_aliases_accept_live_variants() -> None:

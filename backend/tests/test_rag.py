@@ -204,3 +204,33 @@ def test_rag_index_rebuilds_when_knowledge_files_change(tmp_path, monkeypatch) -
 
     assert result.status == "success"
     assert "beta vendor bank approval" in result.evidences[0].snippet
+
+
+def test_rag_indexes_tail_of_long_rule_block(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INVOICE_AGENT_ENABLE_VECTOR", "0")
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    tail_marker = "posted_full_reversal_lifecycle_marker"
+    (knowledge / "long_rule.md").write_text("profile_id: long_rule\n" + ("scope evidence " * 180) + tail_marker, encoding="utf-8")
+
+    result = RagSkill([knowledge], tmp_path / "rag").retrieve(tail_marker, top_k=2)
+
+    assert result.status == "success"
+    assert any(tail_marker in item.snippet for item in result.evidences)
+    assert any(item.fields.get("profile_id") == "long_rule" for item in result.evidences)
+
+
+def test_rag_does_not_inherit_profile_across_rule_headings(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INVOICE_AGENT_ENABLE_VECTOR", "0")
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "rules.md").write_text(
+        "## First Rule\n\nprofile_id: first_rule\n\nfirst evidence\n\n"
+        "## Second Rule\n\nprofile_id: second_rule\n" + ("second evidence " * 120),
+        encoding="utf-8",
+    )
+
+    docs = RagSkill([knowledge], tmp_path / "rag")._load_or_build_index()
+    heading = next(item for item in docs if item["text"] == "## Second Rule")
+    assert heading["fields"].get("profile_id") is None
+    assert any(item["fields"].get("profile_id") == "second_rule" for item in docs)

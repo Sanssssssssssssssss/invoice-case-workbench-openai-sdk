@@ -1,13 +1,14 @@
 {
-  "reply_contains": ["重复付款", "conflict"],
+  "reply_contains": ["no_active_duplicate=DISPROVED", "EVIDENCE_SUFFICIENT_FOR_REPORT"],
   "requirements": {
     "invoice": "satisfied",
-    "purchase_order": "satisfied",
-    "goods_receipt_or_service_acceptance": "satisfied",
-    "vendor_identity": "satisfied",
-    "duplicate_payment_screen": "conflict"
+    "duplicate_payment_screen": "satisfied",
+    "no_active_duplicate": "conflict"
   },
-  "forbidden_requirements": {"duplicate_payment_screen": "satisfied"},
+  "proof_requirement_id": "no_active_duplicate",
+  "proof_status": "DISPROVED",
+  "proof_outcome": "EVIDENCE_SUFFICIENT_FOR_REPORT",
+  "forbidden_requirements": {"duplicate_payment_screen": "conflict"},
   "must_have_risk_flags": ["duplicate_payment_hit"],
   "must_have_evidence_types": ["duplicate_payment_check"],
   "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],

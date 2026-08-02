@@ -75,6 +75,13 @@ def test_dynamic_ragas_dataset_reads_database_and_uses_hybrid_rag() -> None:
     assert all(record.source_paths for record in records)
     assert all(record.locators for record in records)
     assert all(record.profile_ids for record in records)
+    assert all(record.expected_profile_ids for record in records)
+    assert all(record.metric_scores.get("policy_profile_hit_at_1") == 1.0 for record in records)
+    assert all(record.metric_scores.get("policy_profile_hit_at_k") == 1.0 for record in records)
+    assert all(
+        len([item for item in record.profile_ids if item]) == len(set(item for item in record.profile_ids if item))
+        for record in records
+    )
     assert all(record.retrieved_evidence for record in records)
     assert all(set(record.channels) == {"txtai_hybrid"} for record in records)
     assert {"duplicate_payment", "bank_change", "materials_required"} & {record.intent for record in records}
@@ -111,3 +118,27 @@ def test_dynamic_ragas_dataset_templates_cover_enterprise_control_intents() -> N
     assert all(record.source == "intent_template" for record in enterprise_records)
     assert all(item.get("locator") for record in records for item in record.retrieved_evidence)
     assert all("snippet" in item for record in records for item in record.retrieved_evidence)
+    assert all(record.metric_scores.get("policy_profile_hit_at_1") == 1.0 for record in records)
+    assert all(record.metric_scores.get("policy_profile_hit_at_k") == 1.0 for record in records)
+    assert all(
+        len([item for item in record.profile_ids if item]) == len(set(item for item in record.profile_ids if item))
+        for record in records
+    )
+
+
+def test_dynamic_ragas_dataset_keeps_failed_retrievals(monkeypatch) -> None:
+    monkeypatch.setattr(
+        RagSkill,
+        "retrieve",
+        lambda self, **kwargs: types.SimpleNamespace(status="not_found", evidences=[], answer_context=""),
+    )
+
+    records = build_dynamic_ragas_records(
+        max_samples=6,
+        top_k=3,
+        session_db_path=BACKEND_DIR / "storage" / "missing.sqlite",
+    )
+
+    assert len(records) == 6
+    assert all(not record.retrieved_contexts for record in records)
+    assert all(record.metric_scores["policy_profile_hit_at_1"] == 0.0 for record in records)

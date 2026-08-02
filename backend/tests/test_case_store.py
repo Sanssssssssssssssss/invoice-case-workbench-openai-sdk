@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
+from app.state.attachment_manifest import save_attachment_manifest
 from app.state.schemas import AgentTurnRequest, CasePatch, ConflictRecord, default_requirements
-from app.state.case_store import CaseStore, FileBoundaryError, _parse_amount
+from app.state.case_store import CaseStore, FileBoundaryError
 
 
 def test_case_creation_and_patch(tmp_path) -> None:
@@ -41,6 +42,35 @@ def test_case_creation_and_patch(tmp_path) -> None:
     assert "invoice" in updated.weak_materials
     invoice_requirement = next(item for item in updated.requirements if item.id == "invoice")
     assert invoice_requirement.status == "submitted"
+
+
+def test_case_store_rejects_duplicate_evidence_ids(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+
+    with pytest.raises(ValueError, match="Duplicate evidence id"):
+        store.apply_patch("case_duplicate_ids", {
+            "patch_type": "add_evidence",
+            "case_updates": {"add_evidence": [
+                {"id": "ev_same", "type": "invoice"},
+                {"id": "ev_same", "type": "invoice"},
+            ]},
+        })
+
+    assert store.load("case_duplicate_ids").evidence_items == []
+
+
+def test_generated_evidence_id_skips_an_existing_id(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    store.apply_patch("case_generated_id", {
+        "patch_type": "add_evidence",
+        "case_updates": {"add_evidence": [{"id": "ev_002", "type": "invoice"}]},
+    })
+    updated = store.apply_patch("case_generated_id", {
+        "patch_type": "add_evidence",
+        "case_updates": {"add_evidence": [{"type": "invoice"}]},
+    })
+
+    assert [item.id for item in updated.evidence_items] == ["ev_002", "ev_003"]
 
 
 def test_agent_turn_request_default_case_id_is_timestamped() -> None:
@@ -91,6 +121,7 @@ def test_ap_chain_evidence_backfills_missing_core_requirements(tmp_path) -> None
                         "id": "ev_invoice",
                         "type": "invoice",
                         "credibility": "high",
+                        "source": "attachment",
                         "summary": "Invoice INV-6101 amount 8800.00 CNY.",
                         "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-6101"}],
                     },
@@ -188,8 +219,9 @@ def test_evidence_support_requirement_aliases_are_canonicalized(tmp_path) -> Non
     assert "duplicate_payment_screen" in supports
 
 
-def test_cross_evidence_amount_mismatch_blocks_ready_for_report(tmp_path) -> None:
+def test_cross_evidence_amount_mismatch_is_a_reportable_proof_finding(tmp_path) -> None:
     store = CaseStore(tmp_path)
+    case_id = "case_amount_mismatch"
     canonical_requirements = [
         {"id": "invoice", "label": "Invoice"},
         {"id": "purchase_order", "label": "Purchase order"},
@@ -197,8 +229,30 @@ def test_cross_evidence_amount_mismatch_blocks_ready_for_report(tmp_path) -> Non
         {"id": "vendor_identity", "label": "Vendor identity"},
         {"id": "duplicate_payment_screen", "label": "Duplicate payment screen"},
     ]
+    source_texts = {
+        "ev_invoice": "Invoice INV-9001 remains payable | Order reference PO-9001 | Total EUR 38,086.30 | Invoice total | Gross total",
+        "ev_po": "Order reference PO-9001 | Total EUR 35,039.40 | PO total | Gross total",
+        "ev_grn": "Order reference PO-9001 | Received EUR 35,039.40 | Received value | Gross received value | Received complete",
+        "ev_vendor": "Vendor ACME is active",
+        "ev_dup": "Search target INV-9001 | Search covers posted and cleared payments | Search found no candidate payment",
+    }
+    manifest_rows = []
+    for evidence_id, source_text in source_texts.items():
+        original_ref = f"attachments/originals/{evidence_id}.md"
+        source_path = store.resolve_case_path(case_id, original_ref)
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(source_text, encoding="utf-8")
+        manifest_rows.append({
+            "attachment_id": f"att_{evidence_id}",
+            "name": f"{evidence_id}.md",
+            "original_ref": original_ref,
+            "status": "active",
+            "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+            "evidence_ids": [evidence_id],
+        })
+    save_attachment_manifest(store, case_id, {"attachments": manifest_rows})
     updated = store.apply_patch(
-        "case_amount_mismatch",
+        case_id,
         {
             "patch_type": "add_evidence",
             "case_updates": {
@@ -208,63 +262,205 @@ def test_cross_evidence_amount_mismatch_blocks_ready_for_report(tmp_path) -> Non
                         "id": "ev_invoice",
                         "type": "invoice",
                         "credibility": "high",
+                        "source": "attachment",
                         "summary": "Invoice total amount 38086.30 EUR.",
                         "review_result": {"should_accept": True, "evidence_type": "invoice"},
                         "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice"}],
-                        "metadata": {"extracted_fields": {"amount_total": {"value": "38,086.30"}}},
+                            "metadata": {
+                                "classification": "business_evidence",
+                                "original_ref": "attachments/originals/ev_invoice.md",
+                                "extracted_fields": {
+                                    "amount_total": {"value": "38,086.30", "source_quote": "Total EUR 38,086.30", "source_locator": "invoice total", "confidence": "high"},
+                                    "basis": {"value": "invoice_total", "source_quote": "Invoice total", "source_locator": "invoice total", "confidence": "high"},
+                                    "tax_basis": {"value": "gross", "source_quote": "Gross total", "source_locator": "invoice total", "confidence": "high"},
+                                    "coverage": {"value": "full", "source_quote": "Invoice total", "source_locator": "invoice total", "confidence": "high"},
+                                },
+                                "claim_to_source_refs": [
+                                    {
+                                        "id": "CLM_INVOICE_PAYABLE_IDENTITY",
+                                        "subject": "invoice",
+                                        "predicate": "payable_identity",
+                                        "value_type": "string",
+                                        "typed_value": "payable:INV-9001",
+                                        "source_quote": "Invoice INV-9001 remains payable",
+                                        "source_locator": "invoice header",
+                                        "confidence": "high",
+                                    },
+                                    {
+                                        "id": "CLM_INVOICE_ORDER_SCOPE_IDENTITY",
+                                        "subject": "invoice",
+                                        "predicate": "order_scope_identity",
+                                        "value_type": "string",
+                                        "typed_value": "PO-9001",
+                                        "source_quote": "Order reference PO-9001",
+                                        "source_locator": "invoice order reference",
+                                        "confidence": "high",
+                                    },
+                                ],
+                                "semantic_judgments": [{
+                                    "id": "JDG_AMOUNT_SCOPE_COMPARABLE",
+                                    "verdict": "SUPPORTED",
+                                    "input_refs": [
+                                        {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
+                                        {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
+                                        {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
+                                    ],
+                                    "supporting_refs": [
+                                        {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
+                                        {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
+                                        {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
+                                    ],
+                                    "confidence": "high",
+                                    "reason": "The totals use the same gross, full-document economic scope.",
+                                }],
+                            },
                     },
                     {
                         "id": "ev_po",
                         "type": "purchase_order",
                         "credibility": "high",
+                        "source": "attachment",
                         "summary": "PO total amount 35039.40 EUR.",
                         "review_result": {"should_accept": True, "evidence_type": "purchase_order"},
                         "supports": [{"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO"}],
-                        "metadata": {"extracted_fields": {"amount_total": {"value": "35,039.40"}}},
+                        "metadata": {
+                            "classification": "business_evidence",
+                            "original_ref": "attachments/originals/ev_po.md",
+                            "extracted_fields": {
+                                "amount_total": {"value": "35,039.40", "source_quote": "Total EUR 35,039.40", "source_locator": "PO total", "confidence": "high"},
+                                "basis": {"value": "order_total", "source_quote": "PO total", "source_locator": "PO total", "confidence": "high"},
+                                "tax_basis": {"value": "gross", "source_quote": "Gross total", "source_locator": "PO total", "confidence": "high"},
+                                "coverage": {"value": "full", "source_quote": "PO total", "source_locator": "PO total", "confidence": "high"},
+                            },
+                            "claim_to_source_refs": [{
+                                "id": "CLM_PO_ORDER_SCOPE_IDENTITY",
+                                "subject": "purchase_order",
+                                "predicate": "order_scope_identity",
+                                "value_type": "string",
+                                "typed_value": "PO-9001",
+                                "source_quote": "Order reference PO-9001",
+                                "source_locator": "PO header",
+                                "confidence": "high",
+                            }],
+                        },
                     },
                     {
                         "id": "ev_grn",
                         "type": "goods_receipt",
                         "credibility": "high",
+                        "source": "attachment",
                         "summary": "Received value 35039.40 EUR.",
                         "review_result": {"should_accept": True, "evidence_type": "goods_receipt"},
                         "supports": [{"requirement": "goods_receipt", "support_level": "full", "quoted_text": "GRN"}],
-                        "metadata": {"extracted_fields": {"received_value": {"value": "35,039.40"}}},
+                        "metadata": {
+                            "classification": "business_evidence",
+                            "original_ref": "attachments/originals/ev_grn.md",
+                            "extracted_fields": {
+                                "received_value": {"value": "35,039.40", "source_quote": "Received EUR 35,039.40", "source_locator": "GRN value", "confidence": "high"},
+                                "basis": {"value": "received_value", "source_quote": "Received value", "source_locator": "GRN value", "confidence": "high"},
+                                "tax_basis": {"value": "gross", "source_quote": "Gross received value", "source_locator": "GRN value", "confidence": "high"},
+                                "coverage": {"value": "full", "source_quote": "Received complete", "source_locator": "GRN status", "confidence": "high"},
+                            },
+                            "claim_to_source_refs": [{
+                                "id": "CLM_GRN_ORDER_SCOPE_IDENTITY",
+                                "subject": "goods_receipt",
+                                "predicate": "order_scope_identity",
+                                "value_type": "string",
+                                "typed_value": "PO-9001",
+                                "source_quote": "Order reference PO-9001",
+                                "source_locator": "GRN header",
+                                "confidence": "high",
+                            }],
+                        },
                     },
                     {
                         "id": "ev_vendor",
                         "type": "vendor_record",
                         "credibility": "high",
-                        "summary": "Vendor active.",
+                        "source": "attachment",
+                        "summary": "Vendor ACME is active.",
                         "review_result": {"should_accept": True, "evidence_type": "vendor_record"},
-                        "supports": [{"requirement": "vendor_record", "support_level": "full", "quoted_text": "Vendor"}],
+                        "supports": [{"requirement": "vendor_identity", "support_level": "full", "quoted_text": "Vendor ACME is active"}],
+                        "metadata": {"classification": "business_evidence", "original_ref": "attachments/originals/ev_vendor.md"},
                     },
                     {
                         "id": "ev_dup",
                         "type": "duplicate_payment_check",
                         "credibility": "high",
-                        "summary": "No duplicate payment found.",
+                        "source": "attachment",
+                        "summary": "Complete search found no candidate payment.",
                         "review_result": {"should_accept": True, "evidence_type": "duplicate_payment_check"},
-                        "supports": [{"requirement": "duplicate_payment_check", "support_level": "full", "quoted_text": "No duplicate"}],
+                        "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "Search found no candidate payment"}],
+                        "metadata": {
+                            "classification": "business_evidence",
+                            "original_ref": "attachments/originals/ev_dup.md",
+                            "claim_to_source_refs": [
+                                {
+                                    "id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY",
+                                    "subject": "duplicate_search",
+                                    "predicate": "payable_identity",
+                                    "value_type": "string",
+                                    "typed_value": "payable:INV-9001",
+                                    "source_quote": "Search target INV-9001",
+                                    "source_locator": "search header",
+                                    "confidence": "high",
+                                },
+                                {
+                                    "id": "CLM_DUPLICATE_SEARCH_COVERAGE",
+                                    "subject": "duplicate_search",
+                                    "predicate": "coverage",
+                                    "value_type": "enum",
+                                    "typed_value": "complete",
+                                    "source_quote": "Search covers posted and cleared payments",
+                                    "source_locator": "search header",
+                                    "confidence": "high",
+                                },
+                                {
+                                    "id": "CLM_DUPLICATE_SEARCH_RESULT",
+                                    "subject": "duplicate_search",
+                                    "predicate": "result",
+                                    "value_type": "enum",
+                                    "typed_value": "no_candidate",
+                                    "source_quote": "Search found no candidate payment",
+                                    "source_locator": "search result",
+                                    "confidence": "high",
+                                },
+                            ],
+                            "semantic_judgments": [{
+                                "id": "JDG_NO_ACTIVE_DUPLICATE",
+                                "verdict": "SUPPORTED",
+                                "input_refs": [
+                                    {"evidence_id": "ev_invoice", "claim_id": "CLM_INVOICE_PAYABLE_IDENTITY", "subject": "invoice", "predicate": "payable_identity"},
+                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY", "subject": "duplicate_search", "predicate": "payable_identity"},
+                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_COVERAGE", "subject": "duplicate_search", "predicate": "coverage"},
+                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_RESULT", "subject": "duplicate_search", "predicate": "result"},
+                                ],
+                                "supporting_refs": [
+                                    {"evidence_id": "ev_invoice", "claim_id": "CLM_INVOICE_PAYABLE_IDENTITY", "subject": "invoice", "predicate": "payable_identity"},
+                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY", "subject": "duplicate_search", "predicate": "payable_identity"},
+                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_COVERAGE", "subject": "duplicate_search", "predicate": "coverage"},
+                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_RESULT", "subject": "duplicate_search", "predicate": "result"},
+                                ],
+                                "opposing_refs": [],
+                                "open_questions": [],
+                                "confidence": "high",
+                                "reason": "The complete search found no candidate payment.",
+                            }],
+                        },
                     },
                 ],
             },
-            "audit_note": "amount mismatch should block report readiness",
+            "audit_note": "amount mismatch should be reportable",
         },
     )
 
-    assert updated.status == "collecting_materials"
-    assert "purchase_order" in updated.conflict_materials
-    assert "goods_receipt_or_service_acceptance" in updated.conflict_materials
-    assert any("cross_evidence_amount_mismatch" in item for item in updated.risk_flags)
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [("€82 003,30", "82003.30"), ("82,003.30 EUR", "82003.30"), ("319.00 INR", "319.00")],
-)
-def test_parse_amount_supports_invoice_number_formats(raw: str, expected: str) -> None:
-    assert _parse_amount(raw) == Decimal(expected)
+    assert updated.status == "ready_for_report"
+    assert "purchase_order" in updated.satisfied_materials
+    assert "goods_receipt_or_service_acceptance" in updated.satisfied_materials
+    assert updated.conflict_materials == ["three_way_amount_match"]
+    assert updated.compiled_proof.decision.proof_status == "DISPROVED"
+    assert updated.compiled_proof.decision.outcome == "EVIDENCE_SUFFICIENT_FOR_REPORT"
+    assert all(not item.conflicts for item in updated.evidence_items[:3])
 
 
 def test_accepted_core_documents_backfill_supports_to_ready(tmp_path) -> None:
@@ -325,7 +521,8 @@ def test_accepted_core_documents_backfill_supports_to_ready(tmp_path) -> None:
         for evidence in updated.evidence_items
         for support in evidence.supports
     }
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
+    assert updated.compiled_proof.decision.proof_status == "INCOMPLETE"
     assert statuses["invoice"] == "satisfied"
     assert statuses["purchase_order"] == "satisfied"
     assert statuses["goods_receipt_or_service_acceptance"] == "satisfied"
@@ -375,7 +572,7 @@ def test_duplicate_payment_conflict_support_is_not_upgraded_to_satisfied(tmp_pat
     assert updated.status == "collecting_materials"
 
 
-def test_negative_duplicate_payment_check_is_not_derived_as_conflict(tmp_path) -> None:
+def test_negative_duplicate_text_does_not_bypass_semantic_proof(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_duplicate_negative",
@@ -408,11 +605,14 @@ def test_negative_duplicate_payment_check_is_not_derived_as_conflict(tmp_path) -
         },
     )
 
-    requirement = updated.requirements[0]
+    requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_screen")
     evidence = updated.evidence_items[0]
     assert evidence.conflicts == []
     assert requirement.status == "satisfied"
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
+    assert updated.compiled_proof is not None
+    assert updated.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
+    assert "no_active_duplicate" in updated.missing_materials
 
 
 def test_no_field_conflict_chinese_note_is_not_derived_as_conflict(tmp_path) -> None:
@@ -659,8 +859,9 @@ def test_requirement_conflict_is_scoped_to_matching_requirement(tmp_path) -> Non
 
 def test_superseded_conflicting_evidence_no_longer_blocks_requirement(tmp_path) -> None:
     store = CaseStore(tmp_path)
+    case_id = "case_supersede_conflict"
     store.apply_patch(
-        "case_supersede_conflict",
+        case_id,
         {
             "patch_type": "add_evidence",
             "case_updates": {
@@ -689,8 +890,20 @@ def test_superseded_conflicting_evidence_no_longer_blocks_requirement(tmp_path) 
         },
     )
 
+    original_ref = "attachments/originals/corrected_invoice.md"
+    source_path = store.resolve_case_path(case_id, original_ref)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("Grand Total 319.00", encoding="utf-8")
+    save_attachment_manifest(store, case_id, {"attachments": [{
+        "attachment_id": "att_corrected_invoice",
+        "name": "corrected_invoice.md",
+        "original_ref": original_ref,
+        "status": "active",
+        "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    }]})
+
     updated = store.apply_patch(
-        "case_supersede_conflict",
+        case_id,
         {
             "patch_type": "add_evidence",
             "case_updates": {
@@ -698,6 +911,7 @@ def test_superseded_conflicting_evidence_no_longer_blocks_requirement(tmp_path) 
                     {
                         "id": "ev_002",
                         "type": "invoice",
+                        "source": "attachment",
                         "credibility": "high",
                         "summary": "PDF repair confirms total.",
                         "review_result": {"should_accept": True, "evidence_type": "invoice"},
@@ -705,7 +919,12 @@ def test_superseded_conflicting_evidence_no_longer_blocks_requirement(tmp_path) 
                             {"requirement": "amount_total", "support_level": "full", "quoted_text": "Grand Total 319.00"}
                         ],
                         "conflicts": [],
-                        "metadata": {"review_stage": "corrected", "supersedes_evidence_id": "ev_001"},
+                        "metadata": {
+                            "classification": "business_evidence",
+                            "original_ref": original_ref,
+                            "review_stage": "corrected",
+                            "supersedes_evidence_id": "ev_001",
+                        },
                     }
                 ]
             },
@@ -720,6 +939,42 @@ def test_superseded_conflicting_evidence_no_longer_blocks_requirement(tmp_path) 
     assert updated.status == "ready_for_report"
     assert old_evidence.metadata["review_stage"] == "superseded"
     assert old_evidence.metadata["superseded_by_evidence_id"] == "ev_002"
+
+
+def test_untrusted_attachment_cannot_supersede_case_evidence(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    updated = store.apply_patch("case_untrusted_supersession", {
+        "patch_type": "add_evidence",
+        "case_updates": {
+            "requirements": [{"id": "amount_total", "required": True}],
+            "add_evidence": [
+                {
+                    "id": "ev_old",
+                    "type": "invoice",
+                    "review_result": {"should_accept": True},
+                    "supports": [{"requirement": "amount_total", "support_level": "partial"}],
+                    "conflicts": [{"requirement": "amount_total", "description": "unresolved amount"}],
+                },
+                {
+                    "id": "ev_untrusted_replacement",
+                    "type": "invoice",
+                    "source": "attachment",
+                    "credibility": "high",
+                    "review_result": {"should_accept": True},
+                    "supports": [{"requirement": "amount_total", "support_level": "full"}],
+                    "metadata": {
+                        "classification": "business_evidence",
+                        "original_ref": "attachments/originals/not_in_manifest.md",
+                        "supersedes_evidence_id": "ev_old",
+                    },
+                },
+            ],
+        },
+    })
+
+    old = next(item for item in updated.evidence_items if item.id == "ev_old")
+    assert old.metadata.get("review_stage") != "superseded"
+    assert next(item for item in updated.requirements if item.id == "amount_total").status == "conflict"
 
 
 def test_conflicting_evidence_still_blocks_without_supersedes(tmp_path) -> None:
@@ -1281,7 +1536,13 @@ def test_conflicted_evidence_keeps_requirement_in_conflict(tmp_path) -> None:
                         "summary": "invoice amount conflicts with PO",
                         "review_result": {"should_accept": True, "reason": "invoice accepted", "evidence_type": "invoice"},
                         "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "INV-001"}],
-                        "conflicts": ["Invoice amount 12800 conflicts with PO amount 13800"],
+                        "conflicts": [
+                            {
+                                "conflict_type": "amount_mismatch",
+                                "requirement": "invoice",
+                                "description": "Invoice amount 12800 conflicts with PO amount 13800",
+                            }
+                        ],
                     }
                 ]
             },
@@ -1296,7 +1557,7 @@ def test_conflicted_evidence_keeps_requirement_in_conflict(tmp_path) -> None:
     assert updated.status == "collecting_materials"
 
 
-def test_reviewer_note_conflict_is_derived_into_truth_source(tmp_path) -> None:
+def test_reviewer_note_alone_does_not_become_truth_conflict(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_derived_conflict",
@@ -1323,10 +1584,10 @@ def test_reviewer_note_conflict_is_derived_into_truth_source(tmp_path) -> None:
 
     po_requirement = next(item for item in updated.requirements if item.id == "purchase_order")
     assert updated.evidence_items[0].id == "ev_001"
-    assert updated.evidence_items[0].conflicts
-    assert po_requirement.status == "conflict"
+    assert updated.evidence_items[0].conflicts == []
+    assert po_requirement.status == "satisfied"
     assert "purchase_order" not in updated.missing_materials
-    assert "purchase_order" in updated.conflict_materials
+    assert "purchase_order" in updated.satisfied_materials
 
 
 def test_resolved_conflict_note_is_not_derived_or_counted_as_active_conflict(tmp_path) -> None:
@@ -1386,13 +1647,14 @@ def test_resolved_conflict_note_is_not_derived_or_counted_as_active_conflict(tmp
     assert updated.status == "ready_for_report"
 
 
-def test_duplicate_positive_hit_is_derived_into_conflict(tmp_path) -> None:
+def test_duplicate_candidate_source_stays_satisfied_while_semantic_proof_is_incomplete(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_duplicate_hit",
         {
             "patch_type": "add_evidence",
             "case_updates": {
+                "requirements": [{"id": "duplicate_payment_screen"}],
                 "add_evidence": [
                     {
                         "type": "duplicate_payment_check",
@@ -1406,7 +1668,7 @@ def test_duplicate_positive_hit_is_derived_into_conflict(tmp_path) -> None:
                         },
                         "supports": [
                             {
-                                "requirement": "duplicate_payment_check",
+                                "requirement": "duplicate_payment_screen",
                                 "support_level": "full",
                                 "quoted_text": "Duplicate invoice found: Yes",
                             }
@@ -1418,11 +1680,16 @@ def test_duplicate_positive_hit_is_derived_into_conflict(tmp_path) -> None:
         },
     )
 
-    duplicate_requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_check")
-    assert updated.evidence_items[0].conflicts
-    assert duplicate_requirement.status == "conflict"
-    assert "duplicate_payment_check" in updated.conflict_materials
-    assert "duplicate_payment_check" not in updated.missing_materials
+    source_requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_screen")
+    semantic_requirement = next(item for item in updated.requirements if item.id == "no_active_duplicate")
+    assert updated.evidence_items[0].conflicts == []
+    assert source_requirement.status == "satisfied"
+    assert semantic_requirement.status == "missing"
+    assert updated.compiled_proof is not None
+    assert updated.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
+    assert updated.compiled_proof.decision_for("no_active_duplicate").outcome == "HOLD_FOR_EVIDENCE"
+    assert "duplicate_payment_screen" not in updated.conflict_materials
+    assert "no_active_duplicate" in updated.missing_materials
     assert updated.status == "collecting_materials"
 
 
@@ -1775,7 +2042,13 @@ def test_optional_invoice_conflict_still_blocks(tmp_path) -> None:
                             {"requirement": "source_traceability", "support_level": "full", "quoted_text": "source page 1"},
                             {"requirement": "template_match", "support_level": "partial", "quoted_text": "template mismatch"},
                         ],
-                        "conflicts": ["template mismatch"],
+                        "conflicts": [
+                            {
+                                "conflict_type": "template_mismatch",
+                                "requirement": "template_match",
+                                "description": "template mismatch",
+                            }
+                        ],
                     }
                 ],
             },
@@ -1813,11 +2086,100 @@ def test_ap_lite_requirements_are_distinct_from_legacy_five(tmp_path) -> None:
         "goods_receipt_or_service_acceptance",
         "vendor_identity",
         "duplicate_payment_screen",
+        "no_active_duplicate",
+        "three_way_amount_match",
     ]
     assert "goods_receipt" not in ids
     assert "vendor_record" not in ids
     assert "duplicate_payment_check" not in ids
     assert updated.missing_materials == ids
+
+
+def test_patch_cannot_create_compiler_requirement_or_support_it_directly(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+
+    updated = store.apply_patch(
+        "case_compiler_requirement_inactive",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": [
+                    {
+                        "id": "three_way_amount_match",
+                        "kind": "field",
+                        "required": False,
+                        "status": "satisfied",
+                        "evidence_ids": ["ev_fake"],
+                    }
+                ],
+                "add_evidence": [
+                    {
+                        "id": "ev_legacy",
+                        "type": "invoice",
+                        "supports": [
+                            {
+                                "requirement": "three_way_amount_match",
+                                "support_level": "full",
+                                "quoted_text": "legacy support",
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert updated.requirements == []
+    assert updated.compiled_proof is None
+    assert updated.evidence_items[0].supports == []
+
+
+def test_compiler_requirement_definition_and_projection_ignore_patch_updates(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    base_requirements = [
+        {"id": "invoice"},
+        {"id": "purchase_order"},
+        {"id": "goods_receipt_or_service_acceptance"},
+        {"id": "duplicate_payment_screen"},
+    ]
+    store.apply_patch(
+        "case_compiler_requirement_active",
+        {
+            "patch_type": "update_case",
+            "case_updates": {
+                "requirements": base_requirements
+                + [
+                    {"id": "three_way_amount_match", "kind": "field", "required": False},
+                    {"id": "no_active_duplicate", "kind": "field", "required": False},
+                ]
+            },
+        },
+    )
+
+    updated = store.apply_patch(
+        "case_compiler_requirement_active",
+        {
+            "patch_type": "update_case",
+            "case_updates": {
+                "remove_requirements": ["three_way_amount_match", "no_active_duplicate"],
+                "requirements": [
+                    {"id": "three_way_amount_match", "kind": "field", "required": False},
+                    {"id": "no_active_duplicate", "kind": "risk_check", "required": False},
+                ],
+            },
+        },
+    )
+
+    derived = {
+        item.id: item
+        for item in updated.requirements
+        if item.id in {"three_way_amount_match", "no_active_duplicate"}
+    }
+    assert set(derived) == {"three_way_amount_match", "no_active_duplicate"}
+    assert all(item.kind == "cross_check" for item in derived.values())
+    assert all(item.required is True for item in derived.values())
+    assert all(item.status == "missing" for item in derived.values())
+    assert all(item.evidence_ids == [] for item in derived.values())
 
 
 def test_duplicate_negative_chinese_notes_are_not_derived_into_conflict(tmp_path) -> None:
@@ -2021,7 +2383,7 @@ def test_patch_normalizes_conflict_objects(tmp_path) -> None:
     assert updated.evidence_items[0].conflicts[0].description == "PR material is not invoice evidence"
 
 
-def test_structured_conflict_scope_does_not_leak_from_description(tmp_path) -> None:
+def test_structured_conflict_scope_respects_explicit_requirement(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_conflict_scope",
@@ -2069,7 +2431,46 @@ def test_structured_conflict_scope_does_not_leak_from_description(tmp_path) -> N
     )
 
     statuses = {item.id: item.status for item in updated.requirements}
-    assert statuses == {"invoice": "satisfied", "purchase_order": "conflict"}
+    assert statuses == {"invoice": "conflict", "purchase_order": "conflict"}
+
+
+def test_compiler_does_not_mutate_recorded_amount_conflicts(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    updated = store.apply_patch(
+        "case_internal_amount_conflict",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": [
+                    {"id": "invoice"},
+                    {"id": "purchase_order"},
+                    {"id": "goods_receipt_or_service_acceptance"},
+                ],
+                "add_evidence": [{
+                    "type": "invoice",
+                    "review_result": {"should_accept": True},
+                    "supports": [{"requirement": "invoice", "support_level": "full"}],
+                    "conflicts": [
+                        {
+                            "conflict_type": "amount_mismatch",
+                            "requirement": "invoice",
+                            "description": "Invoice line sum differs from its stated total.",
+                            "source_values": {"line_sum": "90", "stated_total": "100"},
+                        },
+                        {"conflict_type": "cross_evidence_amount_mismatch", "requirement": "invoice"},
+                    ],
+                }],
+                "risk_flags": ["cross_evidence_amount_mismatch: legacy"],
+            },
+        },
+    )
+
+    assert next(item for item in updated.requirements if item.id == "invoice").status == "conflict"
+    assert [item.conflict_type for item in updated.evidence_items[0].conflicts] == [
+        "amount_mismatch",
+        "cross_evidence_amount_mismatch",
+    ]
+    assert updated.risk_flags == ["cross_evidence_amount_mismatch: legacy"]
 
 
 def test_patch_accepts_evidence_type_alias(tmp_path) -> None:

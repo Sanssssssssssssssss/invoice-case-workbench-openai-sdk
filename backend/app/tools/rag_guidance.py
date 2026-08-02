@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -89,9 +90,7 @@ def _advisor_guidance_query(user_question: str, case_state: dict[str, Any], atta
     if not text:
         return ""
     return (
-        "invoice review material requirements advisor guidance invoice-only AP lite "
-        "field completeness tax amount duplicate payment bank change approval matrix segregation of duties "
-        "payment release vendor onboarding non-PO contract invoice GL coding exception hold audit trail OCR process boundary "
+        "invoice review material requirements advisor guidance "
         f"{text[:1200]}"
     )
 
@@ -102,11 +101,14 @@ def _review_guidance_query(
     attachment_manifest: dict[str, Any],
     extraction_result: dict[str, Any],
 ) -> str:
+    attachment_terms = _compact_attachment_terms(attachment_context)
+    manifest_terms = _compact_manifest_terms(attachment_manifest)
+    extraction_terms = _compact_extraction_terms(extraction_result)
     text = (
         f"{user_message}\n"
-        f"{_compact_attachment_terms(attachment_context)}\n"
-        f"{_compact_manifest_terms(attachment_manifest)}\n"
-        f"{_compact_extraction_terms(extraction_result)}"
+        f"{attachment_terms}\n"
+        f"{manifest_terms}\n"
+        f"{extraction_terms}"
     ).strip()
     lower = text.lower()
     markers = (
@@ -121,8 +123,6 @@ def _review_guidance_query(
         "three-way",
         "purchase order",
         "goods receipt",
-        "po",
-        "grn",
         "clear invoice",
         "prompt injection",
         "signature",
@@ -188,11 +188,12 @@ def _review_guidance_query(
         "tolerance",
         "audit trail",
     )
-    if not any(marker in lower for marker in markers):
+    if not any(marker in lower for marker in markers) and not re.search(r"\b(?:po|grn)\b", lower):
         return ""
     profile_terms: list[str] = ["invoice_field_completeness", "invoice_only_material_profile"]
-    if any(term in lower for term in ("ap review", "payment review", "three-way", "purchase order", "goods receipt", "po", "grn", "发票付款审查", "付款审查", "三单匹配")):
-        profile_terms.append("ap_lite_payment_review_material_profile case_playbook_aurora invoice payment review AP lite PO GRN Aurora")
+    ap_scope = any(term in lower for term in ("ap review", "payment review", "three-way", "purchase order", "goods receipt", "发票付款审查", "付款审查", "三单匹配", "三单金额匹配", "三单数量匹配")) or bool(re.search(r"\b(?:po|grn)\b", lower))
+    if ap_scope:
+        profile_terms.append("ap_lite_payment_review_material_profile case_playbook_aurora ap_three_way_matching invoice payment review AP lite PO GRN Aurora")
     if "flipkart" in lower or "ws retail" in lower:
         profile_terms.append("case_05_flipkart_ws_retail_invoice_bill flipkart_retail_invoice_bill Flipkart WS Retail invoice authorized signatory retail invoice bill")
     if "sap" in lower:
@@ -205,7 +206,7 @@ def _review_guidance_query(
             "case_04_mouadhamri_FACTU2015060039_bank_change "
             "mouadhamri_invoice_dataset_FACTU scanned invoice template family"
         )
-    if any(term in lower for term in ("signature", "signatory", "authorized", "template", "layout", "same vendor", "reference invoice", "visual match", "profile match", "签名", "签章", "授权", "模板", "版式", "同厂商", "匹配", "样例")):
+    if any(term in lower for term in ("signature", "signatory", "authorized", "template", "layout", "same vendor", "reference invoice", "visual match", "profile match", "签名", "签章", "授权", "模板", "版式", "同厂商", "样例")):
         profile_terms.append(
             "signature template visual layout same vendor reference invoice "
             "case_01_mouadhamri_FACTU2015020048_clean "
@@ -217,11 +218,13 @@ def _review_guidance_query(
             "matched_profile same_vendor_reference matched_layout_clues boundary consistency signal"
         )
     if "duplicate" in lower or "重复付款" in lower:
-        profile_terms.append("duplicate_payment_control duplicate payment historical clearing")
+        profile_terms.append("duplicate_payment_control duplicate payment candidate lifecycle reversal historical clearing")
     if "bank" in lower or "银行变更" in lower:
         profile_terms.append("vendor_master_bank_change_control bank change supplier master")
     if "prompt injection" in lower or "注入" in lower:
         profile_terms.append("source_quality_prompt_injection prompt injection attachment boundary")
+    if "clear invoice" in lower:
+        profile_terms.append("workflow_boundary_process_evidence Clear Invoice process evidence boundary")
     if any(term in lower for term in ("approval matrix", "approval authority", "delegation", "审批矩阵", "授权审批", "审批权限")):
         profile_terms.append("approval_authority_matrix_control approval limit delegation workflow approval")
     if any(term in lower for term in ("segregation of duties", "sod", "same user", "职责分离", "权限冲突")):
@@ -238,11 +241,11 @@ def _review_guidance_query(
         profile_terms.append("exception_hold_tolerance_control matching hold tolerance exceeded discrepancy approval")
     if "audit trail" in lower or "审计留痕" in lower or "claim-to-evidence" in lower:
         profile_terms.append("audit_trail_retention_control audit trail claim-to-evidence source locator")
+    context = "\n".join((str(user_message or "")[:500], extraction_terms[:700], attachment_terms[:350], manifest_terms[:350]))
     return (
         f"{' '.join(profile_terms)} "
         "invoice evidence review rules template profile expected fields visual layout "
-        "defects duplicate payment bank change approval authority segregation of duties payment release vendor master non-PO tax GL hold audit trail prompt injection OCR boundary "
-        f"{text[:900]}"
+        f"{context[:1500]}"
     ).strip()
 
 
@@ -254,12 +257,23 @@ def _compact_extraction_terms(extraction_result: dict[str, Any]) -> str:
         value = extraction_result.get(key)
         if value:
             pieces.append(str(value))
+    pieces.append(_field_inventory_terms(extraction_result.get("field_inventory")))
     source_docs = extraction_result.get("source_docs") or extraction_result.get("documents") or []
     if isinstance(source_docs, list):
         for item in source_docs[:4]:
             if isinstance(item, dict):
                 pieces.append(" ".join(str(item.get(key) or "") for key in ("doc_type", "title", "visual_summary", "extracted_summary")))
-    return "\n".join(piece for piece in pieces if piece)[:900]
+                pieces.append(_field_inventory_terms(item.get("field_inventory")))
+    return "\n".join(piece for piece in pieces if piece)[:1200]
+
+
+def _field_inventory_terms(value: Any) -> str:
+    rows = value if isinstance(value, list) else []
+    return " ".join(
+        " ".join(str(row.get(key) or "") for key in ("field", "value", "status"))
+        for row in rows[:24]
+        if isinstance(row, dict)
+    )
 
 
 def _compact_attachment_terms(items: list[dict[str, Any]]) -> str:

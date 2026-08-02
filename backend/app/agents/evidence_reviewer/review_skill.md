@@ -85,7 +85,7 @@ Good reviewer note:
 - Clear Invoice, BPI, ERP process log, workflow log: classification=`process_only`; support_level=`none` for core requirements; do not ask for exact PO/GRN/supplier ids if those ids appear only in the log.
 - RAG or policy text: classification=`policy_guidance`; source=`rag` only if actually submitted as evidence; never mark case evidence full from policy guidance alone.
 - A user request to use RAG/profile/policy as evidence is not submitted case evidence. Return support_level=`none`, should_accept=false, suggested_patch with no add_evidence, and explain that RAG/profile content is guidance only.
-- Duplicate-payment positive hit or historical clearing/payment reference: support_level=`partial`, conflict severity=`high`, risk flag must mention unresolved duplicate-payment risk.
+- A complete, source-traceable duplicate-payment search stays `duplicate_payment_screen=full` even when it finds a candidate. Record the risk flag, then express the candidate lifecycle only through `JDG_NO_ACTIVE_DUPLICATE`; missing lifecycle evidence is `UNKNOWN`, not a source-material conflict.
 - Cross-case invoice or supplier mismatch: accept only as a local record if useful, but add `cross_case_or_mixed_case_document`; do not overwrite the active case's satisfied/missing interpretation.
 - OCR sparse, garbled, or missing document id/supplier/amount/date: at most partial; if document type is uncertain, none.
 

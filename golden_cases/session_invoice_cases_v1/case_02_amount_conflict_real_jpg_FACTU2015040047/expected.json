@@ -1,16 +1,20 @@
 {
   "case_status": "collecting_materials",
   "min_evidence_count": 5,
-  "reply_any_of": ["金额", "差异", "冲突", "amount", "mismatch"],
+  "reply_any_of": ["口径", "basis", "coverage", "含税", "未税", "HOLD"],
   "requirements": {
     "invoice": "satisfied",
-    "purchase_order": "conflict",
-    "goods_receipt_or_service_acceptance": "conflict",
+    "purchase_order": "satisfied",
+    "goods_receipt_or_service_acceptance": "satisfied",
     "vendor_identity": "satisfied",
-    "duplicate_payment_screen": "satisfied"
+    "duplicate_payment_screen": "satisfied",
+    "three_way_amount_match": "weak"
   },
+  "proof_status": "INCOMPLETE",
+  "proof_outcome": "HOLD_FOR_EVIDENCE",
+  "proof_policy_version": "aurora_ap_lite_v1",
+  "proof_obligation_ids": ["OBL_AMOUNT_BASIS_COMPATIBLE"],
   "forbidden_requirements": {"invoice": "missing"},
-  "must_have_risk_flags": ["cross_evidence_amount_mismatch"],
   "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
   "trace_must_not_call": ["report_writer", "write_case_file", "render_pdf"],
   "artifacts_must_not_exist": ["reports/*.md", "reports/*.pdf"]

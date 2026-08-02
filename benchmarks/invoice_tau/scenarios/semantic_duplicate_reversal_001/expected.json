@@ -1,0 +1,19 @@
+{
+  "case_status": "ready_for_report",
+  "min_evidence_count": 4,
+  "reply_any_of": ["生命周期", "全额冲销", "经济效力", "报告"],
+  "requirements": {
+    "invoice": "satisfied",
+    "duplicate_payment_screen": "satisfied",
+    "no_active_duplicate": "satisfied"
+  },
+  "proof_requirement_id": "no_active_duplicate",
+  "proof_status": "PROVED",
+  "proof_outcome": "EVIDENCE_SUFFICIENT_FOR_REPORT",
+  "proof_policy_version": "aurora_ap_lite_v1",
+  "must_have_evidence_types": ["invoice", "duplicate_payment_check"],
+  "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
+  "trace_must_not_call": ["report_writer", "write_case_file", "render_pdf"],
+  "artifacts_must_not_exist": ["reports/*.md", "reports/*.pdf"],
+  "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 600000}
+}

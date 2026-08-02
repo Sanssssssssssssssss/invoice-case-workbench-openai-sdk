@@ -1,5 +1,7 @@
 # Clear Invoice Boundary
 
+profile_id: `workflow_boundary_process_evidence`
+
 In ERP and process-mining contexts, a Clear Invoice event is historical evidence that an invoice was cleared in a source system or event log. It is not a local permission for this workbench agent to claim payment or approval.
 
 Allowed local wording:

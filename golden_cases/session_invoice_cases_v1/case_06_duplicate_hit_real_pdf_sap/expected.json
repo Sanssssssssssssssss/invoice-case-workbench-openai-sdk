@@ -4,8 +4,13 @@
   "reply_any_of": ["重复", "历史付款", "冲突", "duplicate", "reconcile"],
   "requirements": {
     "goods_receipt_or_service_acceptance": "satisfied",
-    "duplicate_payment_screen": "conflict"
+    "duplicate_payment_screen": "conflict",
+    "three_way_amount_match": "weak"
   },
+  "proof_status": "INCOMPLETE",
+  "proof_outcome": "HOLD_FOR_EVIDENCE",
+  "proof_policy_version": "aurora_ap_lite_v1",
+  "proof_obligation_ids": ["OBL_AMOUNT_BASIS_COMPATIBLE"],
   "forbidden_requirements": {
     "invoice": "missing",
     "purchase_order": "missing",

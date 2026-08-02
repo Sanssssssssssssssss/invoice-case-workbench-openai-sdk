@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +11,21 @@ from app.config import get_settings
 from app.domain.invoice_requirements import (
     AP_LITE_REQUIREMENTS,
     AP_THREE_WAY_REQUIREMENTS,
+    COMPILER_DERIVED_REQUIREMENTS,
+    DYNAMIC_SUPPORT_REQUIREMENTS,
     INVOICE_FIELD_REQUIREMENTS,
+    INVOICE_REQUIRED_FIELD_REQUIREMENTS,
+    REVIEWER_DERIVED_REQUIREMENTS,
     default_requirement_required,
+    is_known_requirement,
+    requirement_kind,
     requirement_label,
+    requirement_premises,
+    requirement_unconfigured_policy_values,
 )
-from app.domain.risk_rules import derived_conflicts, resolved_conflict_note
-from app.state.attachment_manifest import link_manifest_evidence
+from app.domain.invoice_proof_compiler import compile_evidence_proof
+from app.domain.risk_rules import resolved_conflict_note
+from app.state.attachment_manifest import link_manifest_evidence, trusted_sources_for_evidence
 from app.state.persistence import PERSISTENCE_LOCK, append_text, atomic_write_text
 from app.state.schemas import CasePatch, CaseState, ConflictRecord, EvidenceItem, Requirement, new_case_state
 
@@ -39,32 +48,7 @@ SUPPORT_REQUIREMENT_ID_ALIASES = {
     "duplicate_payment_check": "duplicate_payment_screen",
     "duplicate_check": "duplicate_payment_screen",
 }
-OPTIONAL_DYNAMIC_SUPPORT_REQUIREMENTS = {
-    "invoice_number",
-    "supplier",
-    "buyer",
-    "invoice_date",
-    "amount_total",
-    "currency_tax",
-    "line_items_product_title",
-    "signature_or_authorized_signatory",
-    "source_traceability",
-    "template_match",
-    "po_number",
-    "po_ref",
-    "po_amount",
-    "po_date",
-    "grn_number",
-    "received_quantity",
-    "inspection_status",
-    "vendor_status",
-    "vendor_id",
-    "bank_last_four",
-    "duplicate_invoice_found",
-    "prior_payment_found",
-    "clearing_document",
-    "payment_reference",
-}
+OPTIONAL_DYNAMIC_SUPPORT_REQUIREMENTS = DYNAMIC_SUPPORT_REQUIREMENTS
 
 
 def utc_now() -> str:
@@ -171,35 +155,15 @@ class CaseStore:
         if updates.get("evidence_cards") is not None:
             state.evidence_cards = _compact_jsonish_records(updates.get("evidence_cards") or [], limit=24, max_chars=1800)
         self._apply_requirement_updates(state, updates)
+        _ensure_requirement_premises(state)
         if "risk_flags" in updates:
             state.risk_flags = _unique_strings(list(state.risk_flags) + list(updates.get("risk_flags") or []))
         if "next_questions" in updates:
             state.next_questions = _unique_strings(list(updates.get("next_questions") or []))
         if "evidence_items" in updates:
-            self._ensure_requirements_for_evidence(state, updates.get("evidence_items") or [])
-            for raw in updates.get("evidence_items") or []:
-                data = _normalize_evidence_data(raw)
-                _normalize_evidence_supports_for_state(state, data)
-                _normalize_evidence_metadata(data)
-                _backfill_supports_from_extracted_fields(state, data)
-                if not data.get("id"):
-                    data["id"] = self.next_evidence_id(state)
-                if not data.get("created_at"):
-                    data["created_at"] = utc_now()
-                item = EvidenceItem.model_validate(data)
-                state.evidence_items.append(item)
+            self._append_evidence_updates(state, updates.get("evidence_items") or [])
         if "add_evidence" in updates:
-            self._ensure_requirements_for_evidence(state, updates.get("add_evidence") or [])
-            for raw in updates.get("add_evidence") or []:
-                data = _normalize_evidence_data(raw)
-                _normalize_evidence_supports_for_state(state, data)
-                _normalize_evidence_metadata(data)
-                _backfill_supports_from_extracted_fields(state, data)
-                if not data.get("id"):
-                    data["id"] = self.next_evidence_id(state)
-                if not data.get("created_at"):
-                    data["created_at"] = utc_now()
-                state.evidence_items.append(EvidenceItem.model_validate(data))
+            self._append_evidence_updates(state, updates.get("add_evidence") or [])
         self._refresh_requirements(state)
         self.save(state)
         self.append_audit(case_id, patch)
@@ -209,6 +173,8 @@ class CaseStore:
         existing = {item.id: item for item in state.requirements}
         for raw_id in updates.get("remove_requirements") or []:
             requirement_id = _normalize_requirement_id(raw_id)
+            if requirement_id in COMPILER_DERIVED_REQUIREMENTS:
+                continue
             if not requirement_id or requirement_id not in existing:
                 continue
             if _requirement_has_evidence(state, requirement_id):
@@ -221,16 +187,25 @@ class CaseStore:
             requirement_id = _normalize_requirement_id(data.get("id"))
             if not requirement_id:
                 continue
-            data["id"] = requirement_id
-            data["label"] = str(data.get("label") or requirement_label(requirement_id))
-            data.setdefault("required", default_requirement_required(requirement_id))
+            if not is_known_requirement(requirement_id):
+                raise ValueError(f"Unknown requirement id: {requirement_id}")
+            if requirement_id in COMPILER_DERIVED_REQUIREMENTS:
+                continue
             if requirement_id in existing:
                 current = existing[requirement_id]
-                for field in ("label", "kind", "required", "guidance"):
-                    if field in data:
-                        setattr(current, field, data[field])
+                current.label = requirement_label(requirement_id)
+                current.kind = requirement_kind(requirement_id)
+                current.required = _requirement_required_in_state(state, requirement_id, explicit=True)
+                if "guidance" in data:
+                    current.guidance = str(data.get("guidance") or "")
             else:
-                requirement = Requirement.model_validate(data)
+                requirement = Requirement(
+                    id=requirement_id,
+                    label=requirement_label(requirement_id),
+                    kind=requirement_kind(requirement_id),
+                    required=default_requirement_required(requirement_id),
+                    guidance=str(data.get("guidance") or ""),
+                )
                 state.requirements.append(requirement)
                 existing[requirement_id] = requirement
 
@@ -243,6 +218,9 @@ class CaseStore:
             derived_support_ids = bool(support_ids)
         if not support_ids:
             return
+        unknown_catalog_ids = sorted(requirement_id for requirement_id in support_ids if not is_known_requirement(requirement_id))
+        if unknown_catalog_ids:
+            raise ValueError(f"Evidence support references unknown requirements: {unknown_catalog_ids}")
         if _looks_like_wrong_ap_default(state, existing, support_ids):
             state.requirements = []
             existing = set()
@@ -255,7 +233,7 @@ class CaseStore:
                         Requirement(
                             id=requirement_id,
                             label=requirement_label(requirement_id),
-                            kind=_infer_requirement_kind(requirement_id),
+                            kind=requirement_kind(requirement_id),
                             required=default_requirement_required(requirement_id),
                         )
                     )
@@ -276,17 +254,44 @@ class CaseStore:
         requirement_ids = _initial_requirement_ids_from_evidence(raw_items, support_ids)
         ap_chain = _has_ap_chain_evidence(raw_items, support_ids)
         for requirement_id in requirement_ids:
+            inferred_optional = (
+                requirement_id in OPTIONAL_DYNAMIC_SUPPORT_REQUIREMENTS
+                and requirement_id not in INVOICE_REQUIRED_FIELD_REQUIREMENTS
+            )
             state.requirements.append(
                 Requirement(
                     id=requirement_id,
                     label=requirement_label(requirement_id),
-                    kind=_infer_requirement_kind(requirement_id),
-                    required=False if ap_chain and requirement_id in INVOICE_FIELD_REQUIREMENTS else default_requirement_required(requirement_id),
+                    kind=requirement_kind(requirement_id),
+                    required=False
+                    if (ap_chain and requirement_id in INVOICE_FIELD_REQUIREMENTS) or inferred_optional
+                    else default_requirement_required(requirement_id),
                 )
             )
 
+    def _append_evidence_updates(self, state: CaseState, raw_items: list[Any]) -> None:
+        self._ensure_requirements_for_evidence(state, raw_items)
+        used_ids = {item.id for item in state.evidence_items}
+        for raw in raw_items:
+            data = _normalize_evidence_data(raw)
+            _normalize_evidence_supports_for_state(state, data)
+            _normalize_evidence_metadata(data)
+            _backfill_supports_from_extracted_fields(state, data)
+            evidence_id = str(data.get("id") or self.next_evidence_id(state)).strip()
+            if evidence_id in used_ids:
+                raise ValueError(f"Duplicate evidence id: {evidence_id}")
+            data["id"] = evidence_id
+            if not data.get("created_at"):
+                data["created_at"] = utc_now()
+            state.evidence_items.append(EvidenceItem.model_validate(data))
+            used_ids.add(evidence_id)
+
     def next_evidence_id(self, state: CaseState) -> str:
-        return f"ev_{len(state.evidence_items) + 1:03d}"
+        used_ids = {item.id for item in state.evidence_items}
+        index = len(used_ids) + 1
+        while f"ev_{index:03d}" in used_ids:
+            index += 1
+        return f"ev_{index:03d}"
 
     def _add_optional_dynamic_requirements(self, state: CaseState, requirement_ids: list[str]) -> set[str]:
         added: set[str] = set()
@@ -299,7 +304,7 @@ class CaseStore:
                 Requirement(
                     id=requirement_id,
                     label=requirement_label(requirement_id),
-                    kind=_infer_requirement_kind(requirement_id),
+                    kind=requirement_kind(requirement_id),
                     required=False,
                 )
             )
@@ -318,17 +323,68 @@ class CaseStore:
         append_text(root / "traces" / "case_audit.jsonl", json.dumps(record, ensure_ascii=False) + "\n")
 
     def _refresh_requirements(self, state: CaseState) -> None:
-        _apply_cross_evidence_matching_conflicts(state)
-        _apply_supersession_metadata(state)
-        active_evidence = _active_evidence_items(state)
+        _canonicalize_requirement_definitions(state)
+        _ensure_requirement_premises(state)
+        link_manifest_evidence(self, state.case_id, state)
+        trusted_sources = trusted_sources_for_evidence(self, state.case_id, state.evidence_items)
+        trusted_evidence_ids = set(trusted_sources)
+        _apply_supersession_metadata(state, trusted_evidence_ids)
+        state.requirements = [
+            item for item in state.requirements if item.id not in COMPILER_DERIVED_REQUIREMENTS
+        ]
+        active_evidence = _active_evidence_items(state, trusted_evidence_ids)
+        compiled = compile_evidence_proof(
+            active_evidence,
+            state.verification_records,
+            active_requirement_ids={_canonical_ap_requirement_id(item.id) for item in state.requirements},
+            trusted_sources={item.id: trusted_sources[item.id] for item in active_evidence if item.id in trusted_sources},
+        )
+        state.compiled_proof = compiled if compiled.decisions else None
+        compiled_requirements = {
+            decision.requirement_id for decision in compiled.decisions
+        }
+        existing_requirements = {item.id for item in state.requirements}
+        for requirement_id in sorted(compiled_requirements - existing_requirements):
+            state.requirements.append(
+                Requirement(
+                    id=requirement_id,
+                    label=requirement_label(requirement_id),
+                    kind="cross_check",
+                    required=True,
+                )
+            )
         evidence_by_requirement: dict[str, list[EvidenceItem]] = {}
         for item in active_evidence:
             if _is_advisory_memory_evidence(item):
                 continue
             for support in item.supports:
-                if support.requirement:
+                if support.requirement and support.requirement not in COMPILER_DERIVED_REQUIREMENTS:
                     evidence_by_requirement.setdefault(support.requirement, []).append(item)
         for req in state.requirements:
+            if req.id in compiled_requirements and state.compiled_proof:
+                decision = next(item for item in state.compiled_proof.decisions if item.requirement_id == req.id)
+                final = next(
+                    item
+                    for item in state.compiled_proof.checks
+                    if item.program_id == decision.program_id and item.id == decision.root_check_id
+                )
+                claim_evidence = {
+                    claim.id: claim.evidence_id for claim in state.compiled_proof.claims
+                }
+                req.evidence_ids = _unique_strings(
+                    [claim_evidence[claim_id] for claim_id in final.input_claim_ids if claim_id in claim_evidence]
+                )
+                req.kind = "cross_check"
+                req.required = True
+                req.status = {
+                    "PROVED": "satisfied",
+                    "DISPROVED": "conflict",
+                    "INCOMPLETE": "weak" if req.evidence_ids else "missing",
+                    "NOT_APPLICABLE": "weak",
+                }[final.status]
+                continue
+            if req.id in REVIEWER_DERIVED_REQUIREMENTS:
+                continue
             related = _unique_evidence(evidence_by_requirement.get(req.id, []))
             ids = [item.id for item in related]
             legacy_ids = list(req.evidence_ids or [])
@@ -339,19 +395,109 @@ class CaseStore:
                     req.evidence_ids = legacy_ids
                 continue
             req.status = _requirement_status(related, req.id)
+        reportable_reviewer_conflicts = _project_reviewer_requirements(
+            state,
+            active_evidence,
+            trusted_evidence_ids,
+        )
         buckets = _material_buckets(state)
         state.missing_materials = buckets["missing_materials"]
         state.weak_materials = buckets["weak_materials"]
         state.conflict_materials = buckets["conflict_materials"]
         state.satisfied_materials = buckets["satisfied_materials"]
-        blockers = state.missing_materials + state.weak_materials + state.conflict_materials
+        reportable_proof_conflicts = {
+            decision.requirement_id
+            for decision in state.compiled_proof.decisions
+            if decision.proof_status == "DISPROVED" and decision.outcome == "EVIDENCE_SUFFICIENT_FOR_REPORT"
+        } if state.compiled_proof else set()
+        reportable_conflicts = reportable_proof_conflicts | reportable_reviewer_conflicts
+        blocking_conflicts = [item for item in state.conflict_materials if item not in reportable_conflicts]
+        blockers = state.missing_materials + state.weak_materials + blocking_conflicts
         if blockers:
             state.status = "collecting_materials" if state.evidence_items else "new"
         elif state.evidence_items and state.requirements:
             state.status = "ready_for_report"
         elif state.evidence_items:
             state.status = "collecting_materials"
-        link_manifest_evidence(self, state.case_id, state)
+
+
+def _project_reviewer_requirements(
+    state: CaseState,
+    active_evidence: list[EvidenceItem],
+    trusted_evidence_ids: set[str],
+) -> set[str]:
+    requirements = {item.id: item for item in state.requirements}
+    acceptable = {
+        item.id: item
+        for item in active_evidence
+        if item.id in trusted_evidence_ids
+        and item.review_result.get("should_accept") is True
+        and str(item.metadata.get("classification") or "business_evidence") == "business_evidence"
+        and not _is_advisory_memory_evidence(item)
+    }
+    envelopes: dict[str, list[dict[str, Any]]] = {}
+    for carrier in acceptable.values():
+        for raw in carrier.metadata.get("requirement_verdicts") or []:
+            if not isinstance(raw, dict):
+                continue
+            requirement_id = _normalize_requirement_id(raw.get("requirement_id"))
+            if requirement_id in REVIEWER_DERIVED_REQUIREMENTS:
+                envelopes.setdefault(requirement_id, []).append(raw)
+
+    reportable: set[str] = set()
+    for requirement_id in REVIEWER_DERIVED_REQUIREMENTS:
+        requirement = requirements.get(requirement_id)
+        if requirement is None:
+            continue
+        premises = [requirements.get(item) for item in requirement_premises(requirement_id)]
+        if any(item is None or item.status not in {"accepted", "satisfied"} for item in premises):
+            requirement.status = "weak"
+            requirement.evidence_ids = []
+            continue
+        if requirement_unconfigured_policy_values(requirement_id):
+            requirement.status = "weak"
+            requirement.evidence_ids = []
+            continue
+
+        valid: list[tuple[str, list[str]]] = []
+        for raw in envelopes.get(requirement_id, []):
+            verdict = str(raw.get("verdict") or "").upper()
+            raw_evidence_ids = raw.get("evidence_ids")
+            open_questions = raw.get("open_questions")
+            evidence_ids = _unique_strings(raw_evidence_ids) if isinstance(raw_evidence_ids, list) else []
+            if (
+                verdict not in {"SUPPORTED", "REFUTED", "UNKNOWN"}
+                or str(raw.get("confidence") or "").lower() != "high"
+                or not isinstance(open_questions, list)
+                or open_questions
+                or not str(raw.get("reason") or "").strip()
+                or not evidence_ids
+                or any(item not in acceptable for item in evidence_ids)
+                or any(
+                    not any(
+                        any(
+                            support.requirement == premise.id and support.support_level == "full"
+                            for support in acceptable[evidence_id].supports
+                        )
+                        for evidence_id in evidence_ids
+                    )
+                    for premise in premises
+                    if premise is not None
+                )
+            ):
+                continue
+            valid.append((verdict, evidence_ids))
+
+        verdicts = {verdict for verdict, _ in valid}
+        requirement.evidence_ids = _unique_strings([item for _, ids in valid for item in ids])
+        if verdicts == {"SUPPORTED"}:
+            requirement.status = "satisfied"
+        elif verdicts == {"REFUTED"}:
+            requirement.status = "conflict"
+            reportable.add(requirement_id)
+        else:
+            requirement.status = "weak"
+    return reportable
 
 
 def _unique_strings(values: list[Any]) -> list[str]:
@@ -424,8 +570,8 @@ def _material_buckets(state: CaseState) -> dict[str, list[str]]:
     return {key: _unique_strings(value) for key, value in buckets.items()}
 
 
-def _active_evidence_items(state: CaseState) -> list[EvidenceItem]:
-    superseded = _superseded_evidence_ids(state.evidence_items)
+def _active_evidence_items(state: CaseState, trusted_evidence_ids: set[str]) -> list[EvidenceItem]:
+    superseded = _superseded_evidence_ids(state.evidence_items, trusted_evidence_ids)
     return [item for item in state.evidence_items if item.id not in superseded]
 
 
@@ -444,27 +590,12 @@ def _is_advisory_memory_evidence(item: EvidenceItem) -> bool:
     return "memory_hint_only_not_case_truth" in source_ref
 
 
-def _superseded_evidence_ids(items: list[EvidenceItem]) -> set[str]:
-    result: set[str] = set()
-    valid_ids = {item.id for item in items}
-    for item in items:
-        if not _can_supersede_evidence(item):
-            continue
-        for old_id in _metadata_supersedes_ids(item.metadata):
-            if old_id in valid_ids and old_id != item.id:
-                result.add(old_id)
-    return result
+def _superseded_evidence_ids(items: list[EvidenceItem], trusted_evidence_ids: set[str]) -> set[str]:
+    return set(_supersession_map(items, trusted_evidence_ids))
 
 
-def _apply_supersession_metadata(state: CaseState) -> bool:
-    superseded_by: dict[str, str] = {}
-    valid_ids = {item.id for item in state.evidence_items}
-    for item in state.evidence_items:
-        if not _can_supersede_evidence(item):
-            continue
-        for old_id in _metadata_supersedes_ids(item.metadata):
-            if old_id in valid_ids and old_id != item.id:
-                superseded_by[old_id] = item.id
+def _apply_supersession_metadata(state: CaseState, trusted_evidence_ids: set[str]) -> bool:
+    superseded_by = _supersession_map(state.evidence_items, trusted_evidence_ids)
     if not superseded_by:
         return False
     changed = False
@@ -484,13 +615,32 @@ def _apply_supersession_metadata(state: CaseState) -> bool:
     return changed
 
 
-def _can_supersede_evidence(item: EvidenceItem) -> bool:
-    if not _metadata_supersedes_ids(item.metadata):
+def _supersession_map(items: list[EvidenceItem], trusted_evidence_ids: set[str]) -> dict[str, str]:
+    counts = Counter(item.id for item in items)
+    by_id = {item.id: item for item in items if counts[item.id] == 1}
+    candidates: dict[str, list[str]] = {}
+    for item in items:
+        if counts[item.id] != 1 or not _can_supersede_evidence(item, trusted_evidence_ids):
+            continue
+        for old_id in _metadata_supersedes_ids(item.metadata):
+            old = by_id.get(old_id)
+            if old is not None and old.id != item.id and old.type == item.type:
+                candidates.setdefault(old_id, []).append(item.id)
+    return {old_id: replacements[0] for old_id, replacements in candidates.items() if len(replacements) == 1}
+
+
+def _can_supersede_evidence(item: EvidenceItem, trusted_evidence_ids: set[str]) -> bool:
+    if item.id not in trusted_evidence_ids or item.source != "attachment" or item.credibility == "low":
         return False
     review_result = item.review_result if isinstance(item.review_result, dict) else {}
-    if review_result and review_result.get("should_accept") is False:
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    if review_result.get("should_accept") is not True or _is_advisory_memory_evidence(item):
         return False
-    return True
+    if str(metadata.get("classification") or "").lower() != "business_evidence":
+        return False
+    if str(metadata.get("review_stage") or "").lower() != "corrected":
+        return False
+    return bool(_metadata_supersedes_ids(metadata))
 
 
 def _metadata_supersedes_ids(metadata: Any) -> list[str]:
@@ -522,125 +672,6 @@ def _refresh_material_buckets(state: CaseState) -> bool:
     return before != after
 
 
-CROSS_EVIDENCE_AMOUNT_MISMATCH = "cross_evidence_amount_mismatch"
-
-
-def _apply_cross_evidence_matching_conflicts(state: CaseState) -> bool:
-    changed = False
-    for item in state.evidence_items:
-        cleaned = [conflict for conflict in list(item.conflicts or []) if CROSS_EVIDENCE_AMOUNT_MISMATCH not in _jsonish_text(conflict)]
-        if cleaned != list(item.conflicts or []):
-            item.conflicts = cleaned
-            changed = True
-    state.risk_flags = [risk for risk in list(state.risk_flags or []) if CROSS_EVIDENCE_AMOUNT_MISMATCH not in str(risk)]
-
-    invoice = _first_evidence_of_type(state, {"invoice"})
-    purchase_order = _first_evidence_of_type(state, {"purchase_order"})
-    goods_receipt = _first_evidence_of_type(state, {"goods_receipt", "service_acceptance"})
-    invoice_amount = _amount_from_evidence(invoice, preferred_fields=("amount_total", "invoice_total", "total"))
-    po_amount = _amount_from_evidence(purchase_order, preferred_fields=("po_amount", "amount_total", "total"))
-    grn_amount = _amount_from_evidence(goods_receipt, preferred_fields=("received_value", "grn_amount", "amount_total", "total"))
-
-    if invoice_amount is not None and po_amount is not None and abs(invoice_amount - po_amount) > Decimal("0.01"):
-        changed |= _add_cross_amount_conflict(
-            purchase_order,
-            requirement="purchase_order",
-            description=f"Invoice amount {invoice_amount} differs from PO amount {po_amount}.",
-        )
-    if invoice_amount is not None and grn_amount is not None and abs(invoice_amount - grn_amount) > Decimal("0.01"):
-        changed |= _add_cross_amount_conflict(
-            goods_receipt,
-            requirement="goods_receipt_or_service_acceptance",
-            description=f"Invoice amount {invoice_amount} differs from goods receipt value {grn_amount}.",
-        )
-    if changed:
-        state.risk_flags = _unique_strings(
-            list(state.risk_flags or []) + [f"{CROSS_EVIDENCE_AMOUNT_MISMATCH}: invoice/PO/GRN amount mismatch"]
-        )
-    return changed
-
-
-def _first_evidence_of_type(state: CaseState, types: set[str]) -> EvidenceItem | None:
-    for item in state.evidence_items:
-        if str(item.type or "").strip().lower() in types:
-            return item
-    return None
-
-
-def _amount_from_evidence(item: EvidenceItem | None, *, preferred_fields: tuple[str, ...]) -> Decimal | None:
-    if item is None:
-        return None
-    metadata = item.metadata if isinstance(item.metadata, dict) else {}
-    fields = metadata.get("extracted_fields") if isinstance(metadata.get("extracted_fields"), dict) else {}
-    for field in preferred_fields:
-        value = fields.get(field)
-        amount = _parse_amount(value.get("value") or value.get("source_quote")) if isinstance(value, dict) else _parse_amount(value)
-        if amount is not None:
-            return amount
-    text = " ".join(
-        _jsonish_text(value)
-        for value in (item.summary, item.content, item.quoted_text, item.review_result, item.metadata)
-        if value
-    )
-    return _amount_from_text(text, preferred_fields=preferred_fields)
-
-
-def _amount_from_text(text: str, *, preferred_fields: tuple[str, ...]) -> Decimal | None:
-    label_groups = {
-        "amount_total": ("total amount", "grand total", "invoice amount", "search amount", "total"),
-        "invoice_total": ("total amount", "grand total", "invoice amount", "total"),
-        "po_amount": ("po total amount", "purchase order amount", "po amount", "total amount", "total"),
-        "received_value": ("received value", "receipt value", "grn amount", "value"),
-        "grn_amount": ("received value", "receipt value", "grn amount", "value"),
-        "total": ("total amount", "grand total", "total", "value"),
-    }
-    labels: list[str] = []
-    for field in preferred_fields:
-        labels.extend(label_groups.get(field, (field.replace("_", " "),)))
-    for label in labels:
-        pattern = re.compile(rf"{re.escape(label)}\s*[:=]?\s*([0-9](?:[0-9\s,.]*[0-9])?)", re.IGNORECASE)
-        match = pattern.search(text)
-        if match:
-            amount = _parse_amount(match.group(1))
-            if amount is not None:
-                return amount
-    return None
-
-
-def _parse_amount(value: Any) -> Decimal | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    match = re.search(r"([0-9](?:[0-9\s,.]*[0-9])?)", text)
-    if not match:
-        return None
-    number = re.sub(r"\s+", "", match.group(1))
-    if "," in number and "." in number:
-        number = number.replace(".", "").replace(",", ".") if number.rfind(",") > number.rfind(".") else number.replace(",", "")
-    elif "," in number:
-        number = number.replace(",", ".") if len(number.rsplit(",", 1)[1]) <= 2 else number.replace(",", "")
-    try:
-        return Decimal(number)
-    except InvalidOperation:
-        return None
-
-
-def _add_cross_amount_conflict(item: EvidenceItem | None, *, requirement: str, description: str) -> bool:
-    if item is None:
-        return False
-    conflict = ConflictRecord(
-        conflict_type=CROSS_EVIDENCE_AMOUNT_MISMATCH,
-        requirement=requirement,
-        severity="high",
-        description=description,
-    )
-    conflicts = list(item.conflicts or [])
-    if any(_conflict_data(current) == conflict.model_dump(exclude_none=True) for current in conflicts):
-        return False
-    item.conflicts = _unique_conflicts(conflicts + [conflict])
-    return True
-
-
 def _normalize_evidence_data(raw: Any) -> dict[str, Any]:
     data = raw.model_dump(exclude_none=True) if hasattr(raw, "model_dump") else dict(raw or {})
     if not data.get("type") and data.get("evidence_type"):
@@ -657,9 +688,6 @@ def _normalize_evidence_data(raw: Any) -> dict[str, Any]:
         )
     if _is_prompt_injection_evidence(data):
         _quarantine_prompt_injection_evidence(data)
-    else:
-        derived = [] if str(data.get("type") or "") == "invoice" else derived_conflicts(data)
-        data["conflicts"] = _unique_conflicts(data["conflicts"] + derived)
     _backfill_conflict_requirement_support(data)
     if not _is_cross_case_evidence(data) and not _is_prompt_injection_evidence(data):
         _backfill_accepted_core_document_support(data)
@@ -895,10 +923,20 @@ def _normalize_support_records(value: Any) -> list[Any]:
 
 def _normalize_evidence_supports_for_state(state: CaseState, data: dict[str, Any]) -> None:
     existing = {item.id for item in state.requirements}
-    if not existing:
-        return
     supports = data.get("supports")
     if not isinstance(supports, list):
+        return
+    supports = [
+        support
+        for support in supports
+        if not (
+            isinstance(support, dict)
+            and _normalize_requirement_id(support.get("requirement"))
+            in COMPILER_DERIVED_REQUIREMENTS | REVIEWER_DERIVED_REQUIREMENTS
+        )
+    ]
+    data["supports"] = supports
+    if not existing:
         return
     for support in supports:
         if not isinstance(support, dict):
@@ -949,9 +987,6 @@ def _conflict_requirement_id(conflict: Any) -> str:
             requirement_id = _safe_requirement_id(item)
             if requirement_id:
                 return requirement_id
-    text = _jsonish_text(conflict).lower()
-    if "duplicate_payment_screen" in text or "duplicate_payment_check" in text:
-        return "duplicate_payment_screen"
     return ""
 
 
@@ -993,9 +1028,8 @@ def _backfill_accepted_core_document_support(data: dict[str, Any]) -> None:
     if not requirement_id:
         return
     if any(
-        _conflict_mentions_requirement(conflict, requirement_id)
+        _conflict_mentions_requirement(conflict, requirement_id) and not resolved_conflict_note(conflict)
         for conflict in data.get("conflicts") or []
-        if not resolved_conflict_note(conflict)
     ):
         return
     supports = _normalize_support_records(data.get("supports"))
@@ -1046,7 +1080,7 @@ def _support_requirement_ids(raw_items: list[Any], *, existing: set[str] | None 
                 if existing_ids
                 else _normalize_requirement_id(support_data.get("requirement"))
             )
-            if requirement_id:
+            if requirement_id and requirement_id not in COMPILER_DERIVED_REQUIREMENTS:
                 result.append(requirement_id)
     return _unique_strings(result)
 
@@ -1394,120 +1428,62 @@ def _requirement_has_evidence(state: CaseState, requirement_id: str) -> bool:
     return any(requirement_id in item.evidence_ids for item in state.requirements if item.id == requirement_id)
 
 
-def _infer_requirement_kind(requirement_id: str) -> str:
-    if requirement_id in {
-        "invoice",
-        "purchase_order",
-        "goods_receipt",
-        "vendor_record",
-        "goods_receipt_or_service_acceptance",
-        "vendor_identity",
-    }:
-        return "document"
-    if requirement_id in {"duplicate_payment_check", "duplicate_payment_screen", "template_match"}:
-        return "risk_check"
-    if requirement_id in {"source_traceability", "signature_or_authorized_signatory"}:
-        return "visual"
-    return "field"
+def _canonicalize_requirement_definitions(state: CaseState) -> None:
+    for requirement in state.requirements:
+        if not is_known_requirement(requirement.id):
+            continue
+        requirement.label = requirement_label(requirement.id)
+        requirement.kind = requirement_kind(requirement.id)
+        requirement.required = _requirement_required_in_state(
+            state,
+            requirement.id,
+            current_required=requirement.required,
+        )
 
 
-CONFLICT_TERMS = (
-    "冲突",
-    "不一致",
-    "不符",
-    "差异",
-    "mismatch",
-    "conflict",
-    "discrepancy",
-    "duplicate found",
-    "duplicate invoice found: yes",
-    "potential duplicate payment",
-    "prior payment found: yes",
-    "clearing document found: yes",
-    "存在历史付款",
-    "疑似重复付款",
-    "重复付款检查命中",
-    "潜在重复付款",
-    "historical payment",
-)
-
-NO_CONFLICT_TERMS = (
-    "未发现冲突",
-    "无冲突",
-    "未发现差异",
-    "无差异",
-    "no conflict",
-    "no discrepancy",
-    "no duplicate invoice found",
-    "no duplicate found",
-    "duplicate invoice found: no",
-    "duplicate invoice found = no",
-    "no prior payment found",
-    "historical payment record found: no",
-    "historical payment record found = no",
-    "historical payment record found: no matching record",
-    "historical payment record found = no matching record",
-    "no matching historical payment record",
-    "no clearing document exists",
-    "prior payment found: no",
-    "prior payment found = no",
-    "clearing document found: no",
-    "clearing document found = no",
-    "clearing document found: no matching record",
-    "clearing document found = no matching record",
-    "no matching record in current search result",
-    "negative duplicate check",
-    "negative duplicate-payment check",
-    "未发现历史付款",
-    "未发现重复付款",
-    "未发现重复风险",
-    "未发现重复发票",
-    "未发现历史付款记录",
-    "未发现重复风险信号",
-    "无重复风险",
-    "无重复风险信号",
-    "无历史付款记录",
-    "无清账凭证",
-    "均未发现重复",
-    "不存在历史付款",
-    "无未解决的重复付款冲突",
-    "无未解决的冲突",
-    "无数量冲突",
-    "无金额冲突",
-    "无银行冲突",
-    "无供应商冲突",
-)
+def _ensure_requirement_premises(state: CaseState) -> None:
+    existing = {item.id: item for item in state.requirements}
+    for conclusion in list(state.requirements):
+        for requirement_id in requirement_premises(conclusion.id):
+            current = existing.get(requirement_id)
+            if current is not None:
+                if conclusion.required:
+                    current.required = True
+                continue
+            current = Requirement(
+                id=requirement_id,
+                label=requirement_label(requirement_id),
+                kind=requirement_kind(requirement_id),
+                required=conclusion.required,
+            )
+            state.requirements.append(current)
+            existing[requirement_id] = current
 
 
-def _derived_conflicts(data: dict[str, Any]) -> list[str]:
-    if data.get("conflicts"):
-        return []
-    text = _evidence_conflict_text(data)
-    if not text:
-        return []
-    lowered = text.lower()
-    conflict_text = lowered
-    for term in NO_CONFLICT_TERMS:
-        conflict_text = conflict_text.replace(term, " ")
-    if not any(term in conflict_text for term in CONFLICT_TERMS):
-        return []
-    summary = _first_non_empty_text(data.get("reviewer_notes"), data.get("summary"), data.get("content"))
-    if len(summary) > 220:
-        summary = summary[:217].rstrip() + "..."
-    return [f"Derived conflict signal from reviewer output: {summary}"]
-
-
-def _evidence_conflict_text(data: dict[str, Any]) -> str:
-    pieces = [
-        data.get("summary"),
-        data.get("content"),
-        data.get("reviewer_notes"),
-        data.get("supports"),
-        data.get("quoted_text"),
-        data.get("metadata"),
-        data.get("review_result"),
-    ]
-    return " ".join(_jsonish_text(piece) for piece in pieces if piece)
+def _requirement_required_in_state(
+    state: CaseState,
+    requirement_id: str,
+    *,
+    explicit: bool = False,
+    current_required: bool | None = None,
+) -> bool:
+    active_ids = {item.id for item in state.requirements}
+    ap_ids = active_ids.intersection(AP_LITE_REQUIREMENTS)
+    if requirement_id in INVOICE_FIELD_REQUIREMENTS and "invoice" in ap_ids and len(ap_ids) >= 3:
+        return False
+    if any(item.required and requirement_id in requirement_premises(item.id) for item in state.requirements):
+        return True
+    if explicit:
+        return default_requirement_required(requirement_id)
+    optional_premise = any(
+        not item.required and requirement_id in requirement_premises(item.id)
+        for item in state.requirements
+    )
+    if current_required is False and (
+        requirement_id in OPTIONAL_DYNAMIC_SUPPORT_REQUIREMENTS or optional_premise
+    ):
+        return False
+    return default_requirement_required(requirement_id)
 
 
 def _jsonish_text(value: Any) -> str:
@@ -1516,14 +1492,6 @@ def _jsonish_text(value: Any) -> str:
     if hasattr(value, "model_dump"):
         value = value.model_dump(exclude_none=True)
     return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def _first_non_empty_text(*values: Any) -> str:
-    for value in values:
-        text = _jsonish_text(value).strip() if value is not None else ""
-        if text:
-            return text
-    return "reviewer output indicates an unresolved evidence conflict"
 
 
 def _string_list(value: Any) -> list[str]:
@@ -1664,9 +1632,8 @@ def _item_has_requirement_conflict(item: EvidenceItem, requirement_id: str) -> b
     if not conflicts:
         return False
     return any(
-        _conflict_mentions_requirement(conflict, requirement_id)
+        _conflict_mentions_requirement(conflict, requirement_id) and not resolved_conflict_note(conflict)
         for conflict in conflicts
-        if not resolved_conflict_note(conflict)
     )
 
 
@@ -1674,18 +1641,6 @@ def _conflict_mentions_requirement(conflict: Any, requirement_id: str) -> bool:
     data = _conflict_data(conflict)
     expected = SUPPORT_REQUIREMENT_ID_ALIASES.get(requirement_id, requirement_id)
     if isinstance(data, dict):
-        conflict_type = str(data.get("conflict_type") or data.get("type") or "").lower()
-        source_values = data.get("source_values")
-        conflict_text = _jsonish_text(data).lower()
-        cross_document_amount = conflict_type == CROSS_EVIDENCE_AMOUNT_MISMATCH or (
-            conflict_type == "amount_mismatch"
-            and (
-                isinstance(source_values, dict) and len(source_values) > 1
-                or any(marker in conflict_text for marker in ("purchase_order", "po/grn", "po amount", "采购订单", "收货单"))
-            )
-        )
-        if expected == "invoice" and cross_document_amount:
-            return False
         explicit = _safe_requirement_id(data.get("requirement"))
         if explicit:
             return SUPPORT_REQUIREMENT_ID_ALIASES.get(explicit, explicit) == expected
@@ -1697,45 +1652,4 @@ def _conflict_mentions_requirement(conflict: Any, requirement_id: str) -> bool:
         }
         if affected_ids:
             return expected in affected_ids
-    text = _jsonish_text(conflict).lower()
-    if not text:
-        return False
-    aliases = {
-        "invoice_number": ("invoice_number", "invoice no", "invoice number", "invoice #", "发票号", "发票编号"),
-        "supplier": ("supplier", "vendor", "sold by", "供应商", "销售方"),
-        "buyer": ("buyer", "customer", "billing address", "购买方", "客户", "买方"),
-        "invoice_date": ("invoice_date", "invoice date", "date", "发票日期", "日期"),
-        "amount_total": ("amount_total", "amount", "total", "grand total", "金额", "总额", "合计"),
-        "currency_tax": ("currency_tax", "currency", "tax", "vat", "gst", "cst", "币种", "税", "税额"),
-        "line_items_product_title": ("line_items_product_title", "line item", "product", "title", "qty", "商品", "明细", "行项目"),
-        "signature_or_authorized_signatory": (
-            "signature_or_authorized_signatory",
-            "signature",
-            "signatory",
-            "authorized signatory",
-            "签名",
-            "签章",
-            "授权签署",
-        ),
-        "source_traceability": (
-            "source_traceability",
-            "traceability",
-            "source path missing",
-            "original_ref missing",
-            "original ref missing",
-            "来源可追溯",
-            "来源缺失",
-            "原件缺失",
-            "不可追溯",
-        ),
-        "template_match": ("template_match", "template", "profile", "模板", "版式"),
-        "invoice": ("invoice", "发票"),
-        "purchase_order": ("purchase_order", "po", "purchase order", "采购订单"),
-        "goods_receipt": ("goods_receipt", "grn", "goods receipt", "收货"),
-        "goods_receipt_or_service_acceptance": ("goods_receipt_or_service_acceptance", "grn", "service acceptance", "收货", "服务验收"),
-        "vendor_identity": ("vendor_identity", "vendor", "supplier", "供应商"),
-        "duplicate_payment_screen": ("duplicate_payment_screen", "duplicate", "prior payment", "重复付款", "历史付款"),
-        "duplicate_payment_check": ("duplicate_payment_check", "duplicate", "prior payment", "重复付款", "历史付款"),
-    }
-    terms = (requirement_id, *aliases.get(requirement_id, ()))
-    return any(str(term).lower() in text for term in terms if str(term).strip())
+    return False

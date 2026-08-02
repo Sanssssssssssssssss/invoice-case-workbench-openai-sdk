@@ -13,6 +13,7 @@ from app.state.schemas import RagEvidence, RagResult
 
 
 SUPPORTED_SUFFIXES = {".md", ".txt", ".json"}
+INDEX_SCHEMA_VERSION = 4
 TOKEN_RE = re.compile(r"[A-Za-z0-9_-]+|[\u4e00-\u9fff]")
 FIELD_PATTERNS = {
     "profile_id": re.compile(r"\bprofile_id\s*:\s*`?([A-Za-z0-9_-]+)`?", re.I),
@@ -58,6 +59,7 @@ class RagSkill:
             intent=intent,
             filters=filters or {},
         )
+        scored = _dedupe_profiles(scored, docs)
         evidences = _render_evidences(
             scored[: max(1, top_k)],
             docs,
@@ -88,6 +90,7 @@ class RagSkill:
             manifest_txtai_path = Path(str(data.get("txtai_path") or self.txtai_path))
             if (
                 isinstance(docs, list)
+                and data.get("schema_version") == INDEX_SCHEMA_VERSION
                 and data.get("knowledge_roots") == root_signature
                 and data.get("knowledge_signature") == knowledge_signature
                 and data.get("engine") == "txtai"
@@ -107,6 +110,7 @@ class RagSkill:
             json.dumps(
                 {
                     "engine": "txtai",
+                    "schema_version": INDEX_SCHEMA_VERSION,
                     "index_mode": self.index_mode,
                     "txtai_path": str(self.txtai_path),
                     "knowledge_roots": root_signature,
@@ -136,14 +140,21 @@ class RagSkill:
                 if not text.strip():
                     continue
                 rel = _safe_relative(path, base)
+                current_profile = ""
                 for index, chunk in enumerate(_chunks(text), start=1):
+                    if chunk.lstrip().startswith("## "):
+                        current_profile = ""
+                    fields = _extract_fields(chunk)
+                    current_profile = str(fields.get("profile_id") or current_profile)
+                    if current_profile:
+                        fields.setdefault("profile_id", current_profile)
                     docs.append(
                         {
                             "source_path": rel,
                             "locator": f"chunk {index}",
                             "text": chunk,
                             "tokens": _tokens(chunk),
-                            "fields": _extract_fields(chunk),
+                            "fields": fields,
                         }
                     )
         return docs
@@ -208,6 +219,9 @@ def _apply_business_scoring(
         score = float(base_score)
         score += _lexical_score(query_tokens, Counter(doc.get("tokens") or []), text)
         score += _filter_bonus(filters, text, doc)
+        profile_id = str((doc.get("fields") or {}).get("profile_id") or "")
+        if profile_id and profile_id.lower() in query.lower():
+            score += 5.0
         if intent == "policy_qa" and "policy" in source_path.lower():
             score += 0.8
         if "invoice" in query.lower() and "invoice" in text.lower():
@@ -231,6 +245,12 @@ def _render_evidences(
         source_path = str(doc.get("source_path") or "")
         locator = str(doc.get("locator") or "")
         snippet = _best_snippet(str(doc.get("text") or ""), query_tokens)
+        profile_id = str((doc.get("fields") or {}).get("profile_id") or "")
+        if profile_id and profile_id not in snippet:
+            snippet = f"profile_id: `{profile_id}`\n{snippet}"
+        fields = _extract_fields(snippet) or dict(doc.get("fields") or {})
+        if profile_id:
+            fields["profile_id"] = profile_id
         evidences.append(
             RagEvidence(
                 source_id=_stable_id(source_path, locator),
@@ -238,12 +258,25 @@ def _render_evidences(
                 source_type=_source_type(source_path),
                 locator=locator,
                 snippet=snippet if include_raw_snippets else snippet[:280],
-                fields=_extract_fields(snippet) or dict(doc.get("fields") or {}),
+                fields=fields,
                 score=round(float(score), 4),
                 channel=channel,
             )
         )
     return evidences
+
+
+def _dedupe_profiles(scored: list[tuple[float, int]], docs: list[dict[str, Any]]) -> list[tuple[float, int]]:
+    result: list[tuple[float, int]] = []
+    seen: set[str] = set()
+    for row in scored:
+        profile_id = str((docs[row[1]].get("fields") or {}).get("profile_id") or "")
+        if profile_id and profile_id in seen:
+            continue
+        result.append(row)
+        if profile_id:
+            seen.add(profile_id)
+    return result
 
 
 def _not_found() -> RagResult:
@@ -294,12 +327,15 @@ def _chunks(text: str, max_chars: int = 1400) -> list[str]:
     chunks: list[str] = []
     current = ""
     for block in blocks:
-        if len(current) + len(block) + 2 <= max_chars:
-            current = f"{current}\n\n{block}".strip()
-        else:
-            if current:
+        if current and block.lstrip().startswith("## "):
+            chunks.append(current)
+            current = ""
+        for start in range(0, len(block), max_chars):
+            piece = block[start : start + max_chars]
+            if current and len(current) + len(piece) + 2 > max_chars:
                 chunks.append(current)
-            current = block[:max_chars]
+                current = ""
+            current = f"{current}\n\n{piece}".strip()
     if current:
         chunks.append(current)
     return chunks
@@ -344,7 +380,12 @@ def _best_snippet(text: str, query_tokens: list[str], max_chars: int = 900) -> s
         key=lambda paragraph: sum(1 for token in query_tokens if token and token in paragraph.lower()),
     )
     if len(best) > max_chars:
-        return best[: max_chars - 3].rstrip() + "..."
+        lowered = best.lower()
+        anchors = [lowered.find(token) for token in query_tokens if token and lowered.find(token) >= 0]
+        start = max(0, min(anchors) - max_chars // 3) if anchors else 0
+        start = min(start, len(best) - max_chars)
+        snippet = best[start : start + max_chars]
+        return f"{'...' if start else ''}{snippet.rstrip()}{'...' if start + max_chars < len(best) else ''}"
     return best
 
 

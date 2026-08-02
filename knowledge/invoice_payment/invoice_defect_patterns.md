@@ -10,8 +10,8 @@ This file gives evidence_reviewer and materials_advisor concrete defect patterns
 - expected_fields: invoice total, PO unit price/quantity, GRN received quantity, tax, currency, line item.
 - validation_checks:
   - Identify the exact field and source value on each document.
-  - Keep the conflict active until corrected source material or reconciliation note explains it.
-  - Do not describe the case as complete or low risk while conflict exists.
+  - Keep the failed amount check active until corrected source material or reconciliation evidence explains it.
+  - Distinguish report readiness from check success: traceable comparable values can be sufficient to report a `DISPROVED` finding, but never justify a low-risk or approval claim.
 - advisor_guidance: Ask for corrected invoice/PO/GRN or reconciliation explanation from AP owner, buyer, or receiver.
 - evidence_boundary: A conflict is a risk finding; it cannot be smoothed over by a narrative summary.
 - risk_flags: `amount_conflict`, `quantity_conflict`, `tax_mismatch`, `currency_conflict`
@@ -27,7 +27,7 @@ This file gives evidence_reviewer and materials_advisor concrete defect patterns
   - Treat a hit as high risk until historical record and business explanation are reviewed.
   - Distinguish true duplicate from credit note, reversal, installment, or recurring service.
 - advisor_guidance: Ask for historical payment record, clearing voucher, duplicate search basis, and business relationship explanation.
-- evidence_boundary: Duplicate hit is not a satisfied low-risk state.
+- evidence_boundary: A hit does not invalidate a complete search source. Its economic effect belongs in the compiled `no_active_duplicate` finding and remains incomplete until lifecycle evidence resolves it.
 - risk_flags: `duplicate_payment_hit`, `same_supplier_same_amount`, `near_duplicate_invoice_number`
 - Chinese retrieval keywords: 重复付款命中, 同供应商同金额, 近似发票号, 历史付款, 清账凭证
 

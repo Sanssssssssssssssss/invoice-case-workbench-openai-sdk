@@ -46,6 +46,8 @@ Capability-use guidance:
 Business truth comes from case_state, evidence artifacts, and attachment
 manifest. Memory/session summaries never upgrade business facts.
 
+When `case_brief` includes compiled proof obligations, use them as advisory verification targets. Prefer blocking, high-impact, resolvable, low-cost actions, but still use semantic judgment, available capabilities, policy feedback, and retry state. A `DISPROVED/EVIDENCE_SUFFICIENT_FOR_REPORT` result is a reportable finding, not a request for more evidence and not an approval or rejection.
+
 If `context_pack.policy_feedback` is present, it is a legality check from code.
 Your next action must satisfy it. Do not repeat a blocked tool call. If feedback
 says to answer from existing observations, answer in Chinese using case facts.

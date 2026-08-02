@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,7 @@ def _upsert_manifest_read_items(
             entry["reason"] = str(current.get("reason") or entry.get("reason") or "")
             for key in (
                 "extraction_ref",
+                "extraction_sha256",
                 "field_inventory",
                 "page_summaries",
                 "quality_notes",
@@ -163,14 +165,58 @@ def link_manifest_evidence(store: Any, case_id: str, case_state: Any) -> None:
         _link_manifest_evidence(store, case_id, case_state)
 
 
+def trusted_sources_for_evidence(
+    store: Any,
+    case_id: str,
+    evidence_items: list[Any],
+) -> dict[str, dict[str, Any]]:
+    """Return runtime-owned source text from a direct, precise attachment binding."""
+
+    manifest = load_attachment_manifest(store, case_id)
+    result: dict[str, dict[str, Any]] = {}
+    evidence_id_counts = Counter(str(getattr(item, "id", "") or "") for item in evidence_items)
+    for evidence in evidence_items:
+        evidence_id = str(getattr(evidence, "id", "") or "")
+        if not evidence_id or evidence_id_counts[evidence_id] != 1:
+            continue
+        metadata = getattr(evidence, "metadata", {}) or {}
+        entry = _find_precise_manifest_entry(manifest, _evidence_match_probes(evidence, metadata))
+        if entry is None or str(entry.get("status") or "") not in REF_STATUSES:
+            continue
+        original_ref = str(entry.get("original_ref") or "")
+        expected_digest = str(entry.get("sha256") or "")
+        if not original_ref or not expected_digest:
+            continue
+        try:
+            source_path = store.resolve_case_path(case_id, original_ref)
+        except Exception:
+            continue
+        if not source_path.is_file() or _source_sha256(store, case_id, original_ref, {}) != expected_digest:
+            continue
+        texts = _trusted_source_texts(store, case_id, entry, source_path)
+        if texts:
+            result[evidence_id] = {
+                "texts": texts,
+                "sha256": expected_digest,
+                "original_ref": original_ref,
+                "extraction_sha256": str(entry.get("extraction_sha256") or ""),
+            }
+    return result
+
+
 def _link_manifest_evidence(store: Any, case_id: str, case_state: Any) -> None:
     manifest = load_attachment_manifest(store, case_id)
     changed = False
     for evidence in getattr(case_state, "evidence_items", []) or []:
         metadata = getattr(evidence, "metadata", {}) or {}
         probes = _evidence_match_probes(evidence, metadata)
-        entry = _find_manifest_entry(manifest, probes)
-        if not entry:
+        has_precise_identity = _has_precise_attachment_identity(probes)
+        entry = (
+            _find_precise_manifest_entry(manifest, probes)
+            if has_precise_identity
+            else _find_manifest_entry(manifest, probes)
+        )
+        if not entry and not has_precise_identity:
             entry = _find_manifest_entry_by_evidence_text(manifest, evidence, metadata)
         if not entry:
             continue
@@ -187,6 +233,41 @@ def _link_manifest_evidence(store: Any, case_id: str, case_state: Any) -> None:
         changed = True
     if changed:
         save_attachment_manifest(store, case_id, manifest)
+
+
+def _trusted_source_texts(store: Any, case_id: str, entry: dict[str, Any], source_path: Path) -> tuple[str, ...]:
+    values: list[str] = []
+    extraction_ref = str(entry.get("extraction_ref") or "")
+    if extraction_ref:
+        expected_digest = str(entry.get("extraction_sha256") or "")
+        try:
+            dossier_path = store.resolve_case_path(case_id, extraction_ref)
+            if not expected_digest or hashlib.sha256(dossier_path.read_bytes()).hexdigest() != expected_digest:
+                raise OSError("untrusted extraction dossier")
+            dossier = json.loads(dossier_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            dossier = {}
+        if isinstance(dossier, dict) and str(dossier.get("attachment_id") or "") == str(entry.get("attachment_id") or ""):
+            values.extend(str(dossier.get(key) or "") for key in ("full_text", "body_markdown"))
+            for key, field in (
+                ("pages", "text"),
+                ("blocks", "text"),
+                ("tables", "markdown"),
+                ("tables", "csv"),
+                ("field_inventory", "source_quote"),
+                ("block_crops", "text"),
+            ):
+                values.extend(
+                    str(row.get(field) or "")
+                    for row in dossier.get(key) or []
+                    if isinstance(row, dict)
+                )
+    if source_path.suffix.lower() in {".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm"}:
+        try:
+            values.append(source_path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            pass
+    return tuple(_unique_strings(values))
 
 
 def attachment_manifest_for_context(store: Any, case_id: str, *, limit: int = CONTEXT_ITEM_LIMIT) -> dict[str, Any]:
@@ -264,6 +345,7 @@ def _entry_from_read_item(
         "extraction_method": str(item.get("extraction_method") or ""),
         "extraction_methods": [str(value) for value in item.get("extraction_methods") or [] if str(value)],
         "extraction_ref": str(item.get("extraction_ref") or ""),
+        "extraction_sha256": str(item.get("extraction_sha256") or ""),
         "field_inventory": _brief_records(item.get("field_inventory"), 24),
         "page_summaries": _brief_records(item.get("page_summaries"), 8),
         "quality_notes": _brief_list(item.get("quality_notes"), 12, 220),
@@ -340,11 +422,34 @@ def _reason_from_evidence(evidence: Any, metadata: dict[str, Any]) -> str:
 
 def _evidence_match_probes(evidence: Any, metadata: dict[str, Any]) -> dict[str, Any]:
     return {
+        "attachment_id": metadata.get("attachment_id") or "",
         "original_ref": metadata.get("original_ref") or "",
+        "source_filename": metadata.get("source_filename") or "",
         "preview_paths": metadata.get("preview_paths") or [],
         "source_doc_id": metadata.get("source_doc_id") or getattr(evidence, "id", ""),
         "name": metadata.get("source_filename") or metadata.get("filename") or "",
     }
+
+
+def _has_precise_attachment_identity(probe: dict[str, Any]) -> bool:
+    return any(str(probe.get(key) or "") for key in ("attachment_id", "original_ref", "source_filename"))
+
+
+def _find_precise_manifest_entry(manifest: dict[str, Any], probe: dict[str, Any]) -> dict[str, Any] | None:
+    identity = {
+        "attachment_id": str(probe.get("attachment_id") or ""),
+        "original_ref": str(probe.get("original_ref") or ""),
+        "name": str(probe.get("source_filename") or ""),
+    }
+    if not any(identity.values()):
+        return None
+    matches = [
+        item
+        for item in manifest.get("attachments") or []
+        if isinstance(item, dict)
+        and all(not value or str(item.get(key) or "") == value for key, value in identity.items())
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _find_manifest_entry(manifest: dict[str, Any], probe: dict[str, Any]) -> dict[str, Any] | None:

@@ -39,6 +39,11 @@ class ExpectedSpec(BaseModel):
     reply_must_not_contain: list[str] = Field(default_factory=list)
     encoding_must_be_clean: bool = True
     requirements: dict[str, str] = Field(default_factory=dict)
+    proof_status: str = ""
+    proof_outcome: str = ""
+    proof_policy_version: str = ""
+    proof_requirement_id: str = "three_way_amount_match"
+    proof_obligation_ids: list[str] = Field(default_factory=list)
     must_have_risk_flags: list[str] = Field(default_factory=list)
     must_not_have_risk_flags: list[str] = Field(default_factory=list)
     must_have_evidence_types: list[str] = Field(default_factory=list)

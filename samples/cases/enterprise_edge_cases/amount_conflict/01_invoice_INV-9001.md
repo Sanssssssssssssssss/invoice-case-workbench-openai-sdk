@@ -8,6 +8,9 @@
 - Invoice date: 2026-05-02
 - Currency: CNY
 - Total amount: 12800.00
+- Amount basis: invoice_total
+- Tax basis: gross
+- Comparison coverage: full PO-9001 scope
 - Related purchase order: PO-9001
 - Payment terms: Net 30
 - Supplier bank account last four digits: 3344

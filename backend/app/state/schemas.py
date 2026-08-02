@@ -11,6 +11,8 @@ from app.domain.invoice_requirements import CORE_REQUIREMENTS, DEFAULT_REQUIREME
 
 CaseStatus = Literal["new", "collecting_materials", "ready_for_report", "report_generated"]
 RequirementStatus = Literal["missing", "submitted", "accepted", "weak", "rejected", "conflict", "satisfied"]
+ProofStatus = Literal["PROVED", "DISPROVED", "INCOMPLETE", "NOT_APPLICABLE"]
+JudgmentVerdict = Literal["SUPPORTED", "REFUTED", "UNKNOWN"]
 RequirementId = str
 FieldStatus = Literal["present", "missing", "conflict", "unclear"]
 ReviewMode = Literal["extract", "review", "repair"]
@@ -238,6 +240,115 @@ class EvidenceItem(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ClaimSource(BaseModel):
+    source_quote: str
+    source_locator: str
+
+
+class Claim(BaseModel):
+    id: str
+    subject: str
+    predicate: str
+    entity_key: str | None = None
+    value_type: str
+    typed_value: Any
+    unit: str | None = None
+    currency: str | None = None
+    basis: str | None = None
+    tax_basis: str | None = None
+    coverage: str | None = None
+    evidence_id: str
+    source_quote: str
+    source_locator: str
+    confidence: Credibility = "medium"
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    attribute_sources: dict[str, ClaimSource] = Field(default_factory=dict)
+
+
+class SemanticJudgment(BaseModel):
+    id: str
+    verdict: JudgmentVerdict
+    input_claim_ids: list[str] = Field(default_factory=list)
+    supporting_claim_ids: list[str] = Field(default_factory=list)
+    opposing_claim_ids: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    confidence: Credibility = "medium"
+    reason: str = ""
+    proposed_by_evidence_id: str = ""
+    valid: bool = True
+    validation_errors: list[str] = Field(default_factory=list)
+
+
+class CheckResult(BaseModel):
+    id: str
+    program_id: str = ""
+    requirement_id: str
+    status: ProofStatus
+    input_claim_ids: list[str] = Field(default_factory=list)
+    depends_on_check_ids: list[str] = Field(default_factory=list)
+    rule_id: str
+    reason: str
+    executor: Literal["llm", "deterministic"] = "deterministic"
+    operator: str = ""
+
+
+class VerificationActionHint(BaseModel):
+    id: str
+    kind: str
+    target: str
+    resolvability: Literal["low", "medium", "high"] = "high"
+    cost: Literal["low", "medium", "high"] = "low"
+
+
+class ProofObligation(BaseModel):
+    id: str
+    check_id: str
+    missing_premise: str
+    blocking: bool = True
+    decision_impact: Literal["low", "medium", "high"] = "high"
+    uncertainty: Literal["low", "medium", "high"] = "high"
+    candidate_actions: list[VerificationActionHint] = Field(default_factory=list)
+    priority_shadow: float = 0.0
+
+
+class DecisionProof(BaseModel):
+    program_id: str = ""
+    requirement_id: str = ""
+    root_check_id: str = ""
+    outcome: Literal["EVIDENCE_SUFFICIENT_FOR_REPORT", "HOLD_FOR_EVIDENCE", "ABSTAIN_OR_ESCALATE"]
+    proof_status: ProofStatus
+    supporting_check_ids: list[str] = Field(default_factory=list)
+    failing_check_ids: list[str] = Field(default_factory=list)
+    incomplete_check_ids: list[str] = Field(default_factory=list)
+    obligation_ids: list[str] = Field(default_factory=list)
+    policy_version: str
+    compiler_version: str
+    evidence_snapshot_hash: str
+    stop_reason: str
+
+
+class CompiledProof(BaseModel):
+    claims: list[Claim] = Field(default_factory=list)
+    judgments: list[SemanticJudgment] = Field(default_factory=list)
+    checks: list[CheckResult] = Field(default_factory=list)
+    obligations: list[ProofObligation] = Field(default_factory=list)
+    decisions: list[DecisionProof] = Field(default_factory=list)
+    # Compatibility view for callers that still expect the original single-program shape.
+    decision: DecisionProof | None = None
+
+    def decision_for(self, requirement_id: str) -> DecisionProof | None:
+        return next((item for item in self.decisions if item.requirement_id == requirement_id), None)
+
+
+class VerificationRecord(BaseModel):
+    obligation_id: str
+    action_id: str
+    proof_hash_before: str
+    result: str = ""
+    new_admissible_claim: bool = False
+    retry_allowed: bool = True
+
+
 class CaseUpdates(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -297,6 +408,8 @@ class CaseState(BaseModel):
     next_questions: list[str] = Field(default_factory=list)
     next_action_hint: str = ""
     reply_brief: str = ""
+    compiled_proof: CompiledProof | None = None
+    verification_records: list[VerificationRecord] = Field(default_factory=list)
 
 
 class Attachment(BaseModel):

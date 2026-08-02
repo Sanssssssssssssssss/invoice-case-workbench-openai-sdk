@@ -499,10 +499,7 @@ class TurnRunner:
         if approved:
             return self._run_until_final(request, state)
         tool = _latest_approval_tool(state)
-        if tool:
-            self.harness.finalize_run(state, f"已取消执行 {tool}，未写入或渲染被拒绝的报告文件。")
-        else:
-            self.harness.finalize_run(state, "已取消执行该操作。")
+        self.harness.finalize_run(state, _approval_rejection_answer(tool))
         return self.trace_recorder.finalize_turn(state)
 
     async def _resume_runtime_policy_approval_streamed(
@@ -517,10 +514,7 @@ class TurnRunner:
             return await self._run_until_final_streamed(request, state)
         _ = reason
         tool = _latest_approval_tool(state)
-        if tool:
-            self.harness.finalize_run(state, f"已取消执行 {tool}，未写入或渲染被拒绝的报告文件。")
-        else:
-            self.harness.finalize_run(state, "已取消执行该操作。")
+        self.harness.finalize_run(state, _approval_rejection_answer(tool))
         return self.trace_recorder.finalize_turn(state)
 
     def resume_run(self, case_id: str, run_id: str) -> dict[str, Any]:
@@ -1972,122 +1966,98 @@ def _elapsed_ms(started: float) -> float:
 
 
 def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
-    evidence_text = _case_evidence_text(case_state)
-    risk_text = " ".join(str(item) for item in getattr(case_state, "risk_flags", []) or [])
-    combined = f"{evidence_text}\n{risk_text}"
-    profile = getattr(case_state, "case_profile", {}) or {}
-    profile = profile if isinstance(profile, dict) else {}
-    invoice_no = str(profile.get("invoice_number") or "") or _first_match(combined, r"\bINV-[A-Z0-9-]+\b")
-    supplier = str(profile.get("supplier") or "") or _labeled_value(
-        combined,
-        (
-            "Supplier legal name",
-            "Search supplier",
-            "Supplier checked",
-            "Supplier",
-            "供应商",
-        ),
-    )
-    if not supplier:
-        supplier = _first_match(combined, r"\b[A-Z][A-Za-z0-9 .&-]{2,80}(?:Ltd\.|Limited|Inc\.|LLC|GmbH)\b")
-    supplier = _clean_supplier_name(supplier)
-    amount_value = str(profile.get("amount_total") or "")
-    currency = str(profile.get("currency") or "")
-    amount = _join_nonempty([amount_value, currency], " ") if amount_value else ""
-    if not amount:
-        amount = _first_match(
-            combined,
-            r"(?:CNY|USD|EUR|GBP|RMB)\s*[\d,]+(?:\.\d{2})?|[\d,]+(?:\.\d{2})?\s*(?:CNY|USD|EUR|GBP|RMB)",
-        )
-    payment_doc = _first_match(combined, r"\bPAY-[A-Z0-9-]+\b")
-    clearing_doc = _first_match(combined, r"\bCLR-[A-Z0-9-]+\b")
+    _ = state
+    proof = getattr(case_state, "compiled_proof", None)
+    decisions = list(getattr(proof, "decisions", []) or [])
     conflict_ids = _requirement_ids(case_state, "conflict")
     missing_ids = _requirement_ids(case_state, "missing")
     weak_ids = _requirement_ids(case_state, "weak")
     satisfied_ids = _requirement_ids(case_state, "satisfied") + _requirement_ids(case_state, "accepted")
-    risk_lower = risk_text.lower()
-    duplicate_risk = bool(
-        payment_doc
-        or clearing_doc
-        or "duplicate_payment_screen" in conflict_ids
-        or "duplicate_payment_risk" in risk_lower
-        or "重复付款风险" in risk_text
-    )
-    duplicate_checked = bool(
-        "duplicate_payment_screen" in set(satisfied_ids + weak_ids + conflict_ids)
-        or "duplicate_payment_check" in combined
-        or "重复付款" in combined
-    )
+    status = str(getattr(case_state, "status", "") or "")
 
-    lines: list[str] = []
-    if duplicate_risk:
-        lines.append("本轮本地材料审查已经记录到案卷，重点结论：重复付款检查命中风险。")
-    elif duplicate_checked:
-        lines.append("本轮本地材料审查已经记录到案卷，重点结论：当前材料未显示重复付款命中。")
+    if decisions:
+        lines = ["本轮材料审查已经记录到案卷，以下状态来自 canonical compiled proof。"]
+        for decision in decisions:
+            subject = (
+                str(getattr(decision, "requirement_id", "") or "")
+                or str(getattr(decision, "program_id", "") or "")
+                or str(getattr(decision, "root_check_id", "") or "")
+                or "unnamed_decision"
+            )
+            lines.append(
+                f"- {subject}={getattr(decision, 'proof_status', '') or '-'}；"
+                f"outcome={getattr(decision, 'outcome', '') or '-'}。"
+            )
+
+        blocking = [
+            item
+            for item in getattr(proof, "obligations", []) or []
+            if bool(getattr(item, "blocking", False))
+        ]
+        if blocking:
+            lines.append("- Blocking proof obligations：")
+            for obligation in blocking:
+                identity = str(getattr(obligation, "id", "") or getattr(obligation, "check_id", "") or "unnamed_obligation")
+                premise = _safe_text(str(getattr(obligation, "missing_premise", "") or "未说明缺失前提"), max_chars=260)
+                lines.append(f"  - {identity}：{premise}")
+        else:
+            lines.append("- Blocking proof obligations：无。")
     else:
-        lines.append("本轮本地材料审查已经记录到案卷，下面是当前案卷状态。")
-    facts = _join_nonempty(
-        [
-            f"发票 {invoice_no}" if invoice_no else "",
-            f"供应商 {supplier}" if supplier else "",
-            f"金额 {amount}" if amount else "",
-        ],
-        "；",
-    )
-    if facts:
-        lines.append(f"- 识别到的核心对象：{facts}。")
-    duplicate_facts = _join_nonempty(
-        [
-            f"历史付款记录 {payment_doc}" if payment_doc else "",
-            f"清账凭证 {clearing_doc}" if clearing_doc else "",
-        ],
-        "；",
-    )
-    if duplicate_facts:
-        lines.append(f"- 重复付款线索：{duplicate_facts}。")
+        lines = ["本轮本地材料审查已经记录到案卷，下面是当前案卷状态。"]
+
     lines.append(
         "- 当前案卷状态："
-        f"status={getattr(case_state, 'status', '') or '-'}；"
+        f"status={status or '-'}；"
         f"evidence={len(getattr(case_state, 'evidence_items', []) or [])}；"
         f"satisfied={_csv(satisfied_ids)}；"
         f"conflict={_csv(conflict_ids)}；"
         f"missing={_csv(missing_ids)}；"
         f"weak={_csv(weak_ids)}。"
     )
-    if "vendor_identity" in conflict_ids and any(term in risk_lower for term in ("bank_change", "vendor_master_approval", "银行变更")):
-        lines.append("- 冲突解释：供应商名称等身份字段已匹配；当前冲突指银行账户变更缺少供应商主数据审批依据。")
     risks = [str(item).strip() for item in getattr(case_state, "risk_flags", []) or [] if str(item).strip()]
     if risks:
         lines.append(f"- 风险标记：{_safe_text(risks[0], max_chars=260)}")
     questions = [str(item).strip() for item in getattr(case_state, "next_questions", []) or [] if str(item).strip()]
     if questions:
         lines.append(f"- 待核对问题：{_safe_text(questions[0], max_chars=260)}")
-    elif duplicate_risk:
-        lines.append("- 待核对问题：核对历史付款记录、清账凭证与当前发票的清账关系、金额和供应商是否对应。")
-    if duplicate_risk:
-        lines.append("结论：在上述冲突解释清楚前，duplicate_payment_screen 保持 conflict；不要把该项写成 satisfied。")
-    elif str(getattr(case_state, "status", "") or "") == "ready_for_report" and not missing_ids and not weak_ids and not conflict_ids:
+
+    if decisions:
+        outcomes = {str(getattr(item, "outcome", "") or "") for item in decisions}
+        decision_requirements = {
+            str(getattr(item, "requirement_id", "") or "")
+            for item in decisions
+            if str(getattr(item, "requirement_id", "") or "")
+        }
+        ordinary_blockers = {
+            "missing": [item for item in missing_ids if item not in decision_requirements],
+            "weak": [item for item in weak_ids if item not in decision_requirements],
+            "conflict": [item for item in conflict_ids if item not in decision_requirements],
+        }
+        if (
+            outcomes == {"EVIDENCE_SUFFICIENT_FOR_REPORT"}
+            and status == "ready_for_report"
+            and not any(ordinary_blockers.values())
+        ):
+            lines.append("结论：所有 canonical decisions 均为 EVIDENCE_SUFFICIENT_FOR_REPORT，且案卷已 ready_for_report；可进入报告。")
+        elif "ABSTAIN_OR_ESCALATE" in outcomes:
+            lines.append("结论：至少一个 canonical decision 为 ABSTAIN_OR_ESCALATE；应升级处理。")
+        elif "HOLD_FOR_EVIDENCE" in outcomes:
+            lines.append("结论：至少一个 canonical decision 为 HOLD_FOR_EVIDENCE；应先处理 blocking proof obligations。")
+        elif any(ordinary_blockers.values()):
+            lines.append(
+                "结论：canonical decisions 已可报告，但仍有非编译 requirements 未完成："
+                f"missing={_csv(ordinary_blockers['missing'])}；"
+                f"weak={_csv(ordinary_blockers['weak'])}；"
+                f"conflict={_csv(ordinary_blockers['conflict'])}。"
+            )
+        else:
+            lines.append(f"结论：canonical decisions 已可报告，但 case_state={status or '-'}，尚未 ready_for_report。")
+        lines.append("PROVED、DISPROVED 与 INCOMPLETE 表示证据证明状态，不代表业务批准或拒绝。")
+    elif status == "ready_for_report" and not missing_ids and not weak_ids and not conflict_ids:
         lines.append("结论：case_state=ready_for_report；可继续生成本地报告草稿。")
     else:
         lines.append("结论：请按当前 missing、weak、conflict 项继续补料或复核；不要把 weak 项写成 satisfied。")
     return "\n".join(lines)
-
-
-def _case_evidence_text(case_state: Any) -> str:
-    rows: list[str] = []
-    for item in list(getattr(case_state, "evidence_items", []) or [])[:20]:
-        if not item:
-            continue
-        parts = [
-            getattr(item, "summary", ""),
-            getattr(item, "content", ""),
-            getattr(item, "reviewer_notes", ""),
-            json.dumps(getattr(item, "metadata", {}) or {}, ensure_ascii=False, default=str),
-            json.dumps([getattr(support, "requirement", "") for support in getattr(item, "supports", []) or []], ensure_ascii=False),
-            json.dumps(getattr(item, "conflicts", []) or [], ensure_ascii=False, default=str),
-        ]
-        rows.append(" ".join(str(part) for part in parts if part))
-    return "\n".join(rows)
 
 
 def _requirement_ids(case_state: Any, status: str) -> list[str]:
@@ -2096,49 +2066,6 @@ def _requirement_ids(case_state: Any, status: str) -> list[str]:
         for item in getattr(case_state, "requirements", []) or []
         if str(getattr(item, "status", "") or "") == status and str(getattr(item, "id", "") or "")
     ][:12]
-
-
-def _first_match(text: str, pattern: str) -> str:
-    match = re.search(pattern, str(text or ""), flags=re.I)
-    return match.group(0).strip() if match else ""
-
-
-def _labeled_value(text: str, labels: tuple[str, ...]) -> str:
-    for label in labels:
-        match = re.search(
-            rf"{re.escape(label)}\s*:\s*([^\n\r|;]+?)(?:\s+-\s+|;|,\s*(?:Amount|Date|Result|Supplier ID|Invoice ID|Buyer|PO|GRN)\s*:|$)",
-            str(text or ""),
-            flags=re.I,
-        )
-        if match:
-            value = match.group(1).strip(" ;")
-            if value:
-                return value
-    return ""
-
-
-def _clean_supplier_name(value: str) -> str:
-    text = " ".join(str(value or "").split())
-    if not text:
-        return ""
-    company = re.search(r"\b[A-Z][A-Za-z0-9 .&'-]{2,100}?(?:Ltd\.|Limited|Inc\.|LLC|GmbH)(?=$|[\s,;\"'\\}\]])", text)
-    if company:
-        return company.group(0).strip(" ,;\"'\\")
-    text = re.split(
-        r"\s*(?:;|,\s*\"?(?:Amount|Date|Result|Supplier ID|Invoice ID|Buyer|PO|GRN|status|source_quote|source_locator|locator|crop_path|confidence|field|value)\"?\s*:)",
-        text,
-        maxsplit=1,
-        flags=re.I,
-    )[0]
-    text = re.split(r"\s+运行时", text, maxsplit=1)[0]
-    text = text.strip(" ,;\"'\\")
-    if re.search(r"\bLtd$", text):
-        text += "."
-    return text
-
-
-def _join_nonempty(values: list[str], separator: str) -> str:
-    return separator.join(value for value in values if value)
 
 
 def _csv(values: list[str]) -> str:
@@ -2220,6 +2147,14 @@ def _latest_approval_tool(state: HarnessRunState) -> str:
             if text.startswith("tool="):
                 return text.split("=", 1)[1]
     return ""
+
+
+def _approval_rejection_answer(tool: str) -> str:
+    if tool == "render_pdf":
+        return "已取消执行 render_pdf；Markdown 报告已写入，PDF 未生成。"
+    if tool == "write_case_file":
+        return "已取消执行 write_case_file；报告文件未写入。"
+    return f"已取消执行 {tool}。" if tool else "已取消执行该操作。"
 
 
 def _mark_latest_model_call_recovered(

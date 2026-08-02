@@ -1042,6 +1042,26 @@ def _case_brief(case_state: Any) -> str:
         f"{item.id}:{item.status}({len(item.evidence_ids)})"
         for item in getattr(case_state, "requirements", []) or []
     ]
+    proof = getattr(case_state, "compiled_proof", None)
+    proof_brief = ""
+    if proof:
+        obligations = sorted(proof.obligations, key=lambda item: (-item.priority_shadow, item.id))
+        obligation_rows: list[str] = []
+        for item in (row for row in obligations if row.blocking):
+            action = item.candidate_actions[0] if item.candidate_actions else None
+            obligation_rows.append(
+                f"{item.id}[premise={item.missing_premise};action={action.kind if action else 'ask_user'};"
+                f"resolvability={action.resolvability if action else 'unknown'};cost={action.cost if action else 'unknown'};priority={item.priority_shadow:g}]"
+            )
+        obligation_brief = ", ".join(obligation_rows[:3])
+        decision_brief = ", ".join(
+            f"{item.requirement_id}={item.proof_status}/{item.outcome}"
+            for item in proof.decisions
+        )
+        proof_brief = (
+            f"proof_decisions={decision_brief}; "
+            f"blocking_obligations={obligation_brief}; "
+        )
     return (
         f"case_id={case_state.case_id}; status={case_state.status}; "
         f"profile={_brief_text(getattr(case_state, 'case_profile', {}) or {}, 180)}; "
@@ -1052,6 +1072,7 @@ def _case_brief(case_state: Any) -> str:
         f"conflict={', '.join(getattr(case_state, 'conflict_materials', []) or [])}; "
         f"satisfied={', '.join(getattr(case_state, 'satisfied_materials', []) or [])}; "
         f"risk_count={len(case_state.risk_flags)}; "
+        f"{proof_brief}"
         f"next_action_hint={getattr(case_state, 'next_action_hint', '') or ''}"
     )
 

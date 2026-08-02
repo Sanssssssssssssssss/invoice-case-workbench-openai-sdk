@@ -6,5 +6,6 @@ Buyer: Northstar Components
 Invoice Date: 2026-05-25
 Amount Total: 12800.00 CNY
 PO: PO-7001
+Payable status: invoice INV-7001 remains payable.
 
 This invoice has a similar supplier and amount to historical payment PAY-2026-4421.

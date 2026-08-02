@@ -72,11 +72,13 @@ Common fields:
 
 Additional fields:
 
+- When AP/three-way requirements are active, invoice, purchase order, and goods receipt amount claims must also emit sourced `currency`, `basis`, `tax_basis`, and `coverage` fields. Allowed `basis` values are `invoice_total|line_total|order_total|received_value|cumulative_received_value|unknown`; `tax_basis` is `gross|net|unknown`; `coverage` is `full|partial|cumulative|unknown`. You may normalize an explicit field label or status (for example `PO total`, `Received value`, or `Received status: Complete`) only when that exact source quote and locator are attached. Use `unknown` when the source does not justify the semantic value.
+
 - invoice: invoice_number, tax_or_line_items
 - purchase_order: po_number, approval_status_or_approver, line_items_or_service, quantity, unit_price, invoice_link
 - goods_receipt: grn_or_acceptance_number, received_quantity_or_service_period, receiver_or_acceptor, receipt_date
 - vendor_record: vendor_legal_name, active_status, tax_or_registration_id, bank_or_payment_details
-- duplicate_payment_check: search_basis, supplier_match, invoice_number_match, amount_match, date_match, historical_payment_or_clearing_refs, conclusion
+- duplicate_payment_check: search_basis, search_result (`no_candidate|candidate_found|unknown`), supplier_match, invoice_number_match, amount_match, date_match, historical_payment_or_clearing_refs, conclusion
 - process_log / bpi_event_log / clear_invoice_event: event_name, timestamp, actor_or_system, case_or_document_id, process_step, business_meaning_limit
 
 ## Support Rubric
@@ -105,6 +107,33 @@ For BPI, process_log, bpi_event_log, and clear_invoice_event evidence:
 - `metadata.classification` must be `process_only`, and `acceptance_rubric` must say the log is not a source business document.
 
 ## Suggested Patch Rules
+
+- Every `source="attachment"` evidence item intended to carry Compiler Claims must copy the runtime attachment identity into metadata: `attachment_id`, `original_ref`, and `source_filename` (the manifest `name`) from one attachment-context entry. Include every available value and at least one of these three exact identifiers.
+- Never invent an attachment identifier or mix identifiers from different attachment-context entries. Content similarity, a matching document type, `source_doc_id`, preview text, or a guessed filename does not establish Compiler provenance. If no exact identifier is available or the identifiers disagree, omit Compiler-bound Claims/judgments and report the traceability limitation.
+- When AP/three-way requirements are active, Compiler handoff is mandatory for every invoice/PO/GRN amount evidence item: `metadata.extracted_fields` must contain `currency`, `basis`, `tax_basis`, and `coverage` alongside the amount, each with its own source quote/locator. Semantic normalization must come from the submitted text, not merely the document type. If the source does not establish a value, emit `value="unknown"`. Apply this to every physical document, not only the top-level primary invoice.
+- This handoff is a strict flat schema. Invalid: `"amount_total":{"value":"12800","currency":"CNY","basis":"invoice_total"}`. Valid: separate `amount_total`, `currency`, `basis`, `tax_basis`, and `coverage` field objects, and every one must contain `value`, `status`, `source_quote`, `source_locator`, and `confidence`. Never place semantic fields inside the amount object and never omit a locator for a present value. Before returning, check all three physical documents against this rule.
+
+### Evidence-language handoff
+
+You are the semantic lowerer, not the final decision maker. Emit candidate Claims and bounded semantic judgments; the local Compiler validates their sources and executes the trusted proof graph. Never emit a CheckResult, Requirement status, payment approval, rejection, or a new graph/rule id.
+
+- Machine-readable Claims reuse `suggested_patch.add_evidence[].metadata.claim_to_source_refs`. A semantic row must include a packet-unique `id` beginning with `CLM_`, plus `subject`, `predicate`, `value_type`, `typed_value`, `quote`, `block_or_table_or_region` (or `source_locator`), and explicit `confidence`. Candidate-scoped rows also include `entity_key`. The quote must be copied from that same evidence item. Free-text `claim` may remain for report readability but cannot replace these fields.
+- Compiler-bound Claims and judgments are admissible only on evidence with `metadata.classification=business_evidence`. Process-only, wrong-workflow, policy-guidance, irrelevant, or unclear evidence cannot supply semantic IR.
+- Judgment proposals go in one accepted attachment evidence item's `metadata.semantic_judgments`. Each proposal must contain `id`, `verdict=SUPPORTED|REFUTED|UNKNOWN`, `input_refs`, `supporting_refs`, `opposing_refs`, `open_questions`, `confidence`, and `reason`.
+- Every ref contains `{evidence_id, subject, predicate}` and may include the semantic row's `claim_id`; it must resolve to one Claim in the same proposed patch/current active case. Always include `claim_id` when an evidence item contains more than one Claim with the same subject and predicate. `supporting_refs` and `opposing_refs` must be subsets of `input_refs`. `reason` explains the inference but is never evidence.
+- `SUPPORTED` requires high confidence, at least one supporting ref, no opposing ref, complete consideration of all relevant active Claims, and no open question. `REFUTED` requires at least one cited opposing ref and no open question. Otherwise use `UNKNOWN`. Never turn “not mentioned” or “no contradiction noticed” into `SUPPORTED`.
+- Policy-pack Requirements owned by `reviewer` are semantic conclusions, not source materials. Never put those ids in `supports`. When one is active, put a bounded verdict in one accepted business-evidence item's `metadata.requirement_verdicts`: `{"requirement_id":"...","verdict":"SUPPORTED|REFUTED|UNKNOWN","evidence_ids":["ev_..."],"confidence":"high|medium|low","open_questions":[],"reason":"..."}`. `evidence_ids` must cite the active source evidence covering every declared premise Requirement. Use `UNKNOWN` when a premise, approved policy value, trusted source binding, or relevant question is unresolved. The Runtime validates the envelope and alone projects the Requirement status.
+
+For three-way amount review, also emit one source-bound `order_scope_identity` Claim for each subject `invoice|purchase_order|goods_receipt`. All three typed values must be the same explicit order/PO id, and each value must appear verbatim in that Claim's same-source quote; never infer or invent a shared id. Emit exactly one allowed proposal `JDG_AMOUNT_SCOPE_COMPARABLE`. Its input refs remain only the accepted invoice, purchase-order, and goods-receipt Claims with predicate `amount`, not the order-scope Claims. Judge whether the cited totals actually describe the same economic scope after considering basis, tax basis, full/partial/cumulative coverage, and explicit exceptions. If basis, tax basis, or coverage is missing, unknown, disallowed, or mutually inconsistent, the judgment must be `UNKNOWN`; these policy comparability gaps are not `REFUTED`. Use `REFUTED` only when all comparability gates are satisfied and source evidence still explicitly proves that the amounts describe different economic scopes. Comparable values are `SUPPORTED`. Arithmetic tolerance remains Compiler-owned.
+
+For duplicate-payment screening, the second allowed proposal id is `JDG_NO_ACTIVE_DUPLICATE`. The trusted input Requirement `duplicate_payment_screen` activates this proof program; never add the derived `no_active_duplicate` Requirement yourself. Always emit the global Claims `invoice/payable_identity`, `duplicate_search/payable_identity`, `duplicate_search/coverage`, and `duplicate_search/result`, where both payable identities are source-bound and equal and result is exactly `no_candidate|candidate_found|unknown`.
+
+- For `no_candidate`, emit no `entity_key`. Emit one high-confidence `SUPPORTED` judgment whose `input_refs` cover exactly those four global Claims.
+- For `candidate_found`, emit one entity group per candidate: `duplicate_search/candidate_identity`, `payment/identity`, `payment/relationship_to_payable`, and `payment/economic_effect`; include `reversal/reverses|posting_status|scope` when a reversal is asserted. Every row in a candidate group carries the same opaque `entity_key`; global Claims never carry one. `entity_key` is only a grouping token: do not encode conclusions in it or rely on the Runtime parsing its format.
+- Emit exactly one `JDG_NO_ACTIVE_DUPLICATE` judgment per candidate. Its `input_refs` cover all and only the Claims with that candidate's `entity_key`; do not include global Claims or Claims from another candidate. A `SUPPORTED` candidate requires equal candidate/payment identities, `same_obligation`, `neutralized_by_reversal`, a posted full reversal, and `reversal/reverses` equal to `payment/identity`. A `REFUTED` candidate requires equal candidate/payment identities, `same_obligation`, and `active_settled`. Otherwise use `UNKNOWN`.
+- The Compiler applies the quantifier across candidate judgments: any `REFUTED` candidate makes the Requirement `DISPROVED`; every candidate must be `SUPPORTED` for `PROVED`; missing, ambiguous, or `UNKNOWN` coverage stays `INCOMPLETE`. Do not emit legacy candidate rows without both identities and `entity_key`.
+
+Authoritative search, payment-history, and reversal exports that are source documents for this control use evidence type `duplicate_payment_check`, `classification=business_evidence`, and source-linked support for `duplicate_payment_screen`. Generic `process_log`, `bpi_event_log`, and `clear_invoice_event` material remains `process_only` and cannot supply these Claims. The Compiler derives `no_active_duplicate`; a candidate hit alone is not automatically an active duplicate.
 
 - If a six-document packet contains invoice, PO, GRN, vendor record, and duplicate-payment check, return at least five `add_evidence` items.
 - For each document, keep one compact evidence item. Do not repeat all supports on every item; each item should support its own requirement.
@@ -152,11 +181,15 @@ For BPI, process_log, bpi_event_log, and clear_invoice_event evidence:
         "quoted_text": ["短摘录"],
         "reviewer_notes": "中文审查备注",
         "metadata": {
+          "attachment_id": "exact attachment_context attachment_id",
+          "original_ref": "exact attachment_context original_ref",
+          "source_filename": "exact attachment_context name",
           "field_completeness": "complete|partial|minimal",
           "source_traceability": "original_document",
           "classification": "business_evidence|process_only|wrong_workflow|policy_guidance|irrelevant|unclear",
           "acceptance_rubric": "为什么是 full/partial/none",
-          "extracted_fields": {}
+          "extracted_fields": {},
+          "requirement_verdicts": []
         }
       }
     ],
@@ -191,19 +224,23 @@ Wrong workflow PR packet:
 - supports for core invoice-payment requirements are none or partial only when a real reusable source field exists
 - next_questions should ask for the active source material it failed to replace. If AP review is not active, do not introduce PO/GRN/vendor/duplicate gaps.
 
-Conflicting amount or bank data:
+Internal-document amount, bank, or identity conflicts:
 
-- top-level conflicts must include a JSON object for every unresolved amount, bank, supplier, invoice number, PO, GRN, date, or duplicate-payment mismatch
+- top-level conflicts must include a JSON object for every unresolved internal line-total, bank, supplier, invoice number, PO, GRN, date, or duplicate-payment mismatch
 - the affected suggested_patch.add_evidence[] items must also include a non-empty conflicts array; do not hide conflicts only in reviewer_notes
 - each conflict object should include conflict_type, requirement, severity, field, description, quoted_text, source_values, and suggested_resolution when available
-- support_level cannot be full for the conflicted requirement
-- risk_flags should ask for original source material or reconciliation evidence
+- support_level cannot be full for the requirement that the conflict actually disproves
 
-Duplicate-payment positive hit:
+Cross-document invoice/PO/GRN amount differences:
 
-- If a duplicate-payment check says duplicate found, prior payment found, clearing document found, historical payment exists, or potential duplicate payment, treat it as an unresolved conflict for the AP lite requirement `duplicate_payment_screen`.
-- The source document may use evidence_type `duplicate_payment_check`, but support for `duplicate_payment_screen` must remain partial or conflict until the prior payment/clearing relationship is reconciled.
-- The top-level conflicts array and the duplicate-payment evidence item conflicts array must both include the hit.
+- emit each document's source-linked amount, currency, basis, tax basis, and coverage; do not emit a second Reviewer conflict for the cross-document comparison
+- keep readable, source-traceable invoice, PO, and GRN document support full; `three_way_amount_match` is owned by the Compiler
+- describe a compiled mismatch as a reportable finding, not as missing source evidence or a payment approval/rejection
+
+Duplicate-payment result:
+
+- `duplicate_payment_screen` means the authoritative search/source is present. Whenever it is active, the Compiler derives `no_active_duplicate` as the semantic lifecycle conclusion.
+- A positive candidate is not itself a source-material conflict: keep a complete, traceable search as full support and express `SUPPORTED|REFUTED|UNKNOWN` only through its source-bound Claims and judgment.
 ## Dynamic Invoice Review Addendum v4.0
 
 This section overrides older fixed-five-material wording.

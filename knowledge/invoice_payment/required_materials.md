@@ -62,6 +62,7 @@ This file tells materials_advisor what to ask for. It is RAG guidance only and n
 - evidence_boundary:
   - Invoice text that merely mentions PO/GRN/vendor ids is indirect and cannot satisfy those source-document requirements.
   - RAG/policy can explain why these materials matter, but it cannot replace the submitted material.
+  - The five source documents and `three_way_amount_match` are different requirements. A complete source document remains satisfied when its amount field is missing; the amount check is then `INCOMPLETE` and produces a proof obligation.
 - Chinese retrieval keywords: AP 付款审查, 发票付款审查, 三单匹配, 采购订单, PO, GRN, 收货单, 服务验收, 供应商身份, 供应商主数据, 重复付款筛查, 付款控制
 
 ## Direct Checklist: AP Payment Review Materials

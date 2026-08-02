@@ -1,17 +1,50 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from app.config import get_settings
 from app.harness import HarnessRuntime
 from app.llm import ModelCallRecord
+from app.runtime.patch_normalizer import PatchNormalizer
 from app.runtime.policy_gate import _report_requested as _policy_report_requested
 from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, SdkManagerRunner, TurnRunner, _report_requested_message, _runtime_final_answer
+from app.state.attachment_manifest import load_attachment_manifest, save_attachment_manifest
 from app.state.case_store import CaseStore
-from app.state.schemas import AgentTurnRequest, Attachment, CaseState, EvidenceItem, Requirement
+from app.state.schemas import AgentTurnRequest, Attachment, CaseState, CompiledProof, DecisionProof, EvidenceItem, ProofObligation, Requirement
+
+
+def test_patch_normalizer_preserves_runtime_attachment_identity() -> None:
+    reviewer = {
+        "suggested_patch": {
+            "add_evidence": [{"metadata": {
+                "attachment_id": "att_invoice",
+                "original_ref": "attachments/originals/invoice.md",
+                "source_filename": "invoice.md",
+                "claim_to_source_refs": [{
+                    "id": "CLM_PAYMENT_ID",
+                    "subject": "payment",
+                    "predicate": "identity",
+                    "entity_key": "candidate:1",
+                    "typed_value": "PAY-1",
+                    "quote": "Payment PAY-1",
+                    "confidence": "high",
+                }],
+            }}]
+        }
+    }
+    patch = {"case_updates": {"add_evidence": [{"metadata": {}}]}}
+
+    normalized = PatchNormalizer().preserve_reviewer_quote_fields(patch, reviewer)
+
+    assert normalized["case_updates"]["add_evidence"][0]["metadata"] == reviewer["suggested_patch"]["add_evidence"][0]["metadata"]
+    compact = PatchNormalizer().compact_for_write(normalized)
+    assert compact["case_updates"]["add_evidence"][0]["metadata"]["claim_to_source_refs"][0]["entity_key"] == "candidate:1"
 
 
 class ScriptedManagerRunner:
@@ -87,61 +120,231 @@ def _runtime(tmp_path, monkeypatch, manager: ScriptedManagerRunner) -> AgentRunt
 
 
 def _seed_ready_case(store: CaseStore, case_id: str) -> None:
-    store.save(
-        CaseState(
-            case_id=case_id,
-            status="ready_for_report",
-            requirements=[
-                Requirement(id="invoice", status="satisfied", evidence_ids=["ev_001"], kind="document"),
-                Requirement(id="purchase_order", status="satisfied", evidence_ids=["ev_002"], kind="document"),
-                Requirement(
-                    id="goods_receipt_or_service_acceptance",
-                    status="satisfied",
-                    evidence_ids=["ev_003"],
-                    kind="document",
-                ),
-                Requirement(id="vendor_identity", status="satisfied", evidence_ids=["ev_004"], kind="document"),
-                Requirement(id="duplicate_payment_screen", status="satisfied", evidence_ids=["ev_005"], kind="document"),
-            ],
-            evidence_items=[
-                EvidenceItem(
-                    id="ev_001",
-                    type="invoice",
-                    summary="Invoice INV-5001 amount 12800.00 CNY.",
-                    review_result={"should_accept": True},
-                    supports=[{"requirement": "invoice", "support_level": "full"}],
-                ),
-                EvidenceItem(
-                    id="ev_002",
-                    type="purchase_order",
-                    summary="PO-5001 matches supplier and amount.",
-                    review_result={"should_accept": True},
-                    supports=[{"requirement": "purchase_order", "support_level": "full"}],
-                ),
-                EvidenceItem(
-                    id="ev_003",
-                    type="goods_receipt",
-                    summary="GRN-5001 received 16 of 16 units.",
-                    review_result={"should_accept": True},
-                    supports=[{"requirement": "goods_receipt_or_service_acceptance", "support_level": "full"}],
-                ),
-                EvidenceItem(
-                    id="ev_004",
-                    type="vendor_record",
-                    summary="Vendor is active and bank tail matches.",
-                    review_result={"should_accept": True},
-                    supports=[{"requirement": "vendor_identity", "support_level": "full"}],
-                ),
-                EvidenceItem(
-                    id="ev_005",
-                    type="duplicate_payment_check",
-                    summary="No duplicate payment found.",
-                    review_result={"should_accept": True},
-                    supports=[{"requirement": "duplicate_payment_screen", "support_level": "full"}],
-                ),
-            ],
-        )
-    )
+    amount_refs = [
+        {"evidence_id": "ev_001", "subject": "invoice", "predicate": "amount"},
+        {"evidence_id": "ev_002", "subject": "purchase_order", "predicate": "amount"},
+        {"evidence_id": "ev_003", "subject": "goods_receipt", "predicate": "amount"},
+    ]
+    duplicate_refs = [
+        {"evidence_id": "ev_001", "claim_id": "CLM_INVOICE_PAYABLE_IDENTITY", "subject": "invoice", "predicate": "payable_identity"},
+        {"evidence_id": "ev_005", "claim_id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY", "subject": "duplicate_search", "predicate": "payable_identity"},
+        {"evidence_id": "ev_005", "claim_id": "CLM_DUPLICATE_SEARCH_COVERAGE", "subject": "duplicate_search", "predicate": "coverage"},
+        {"evidence_id": "ev_005", "claim_id": "CLM_DUPLICATE_SEARCH_RESULT", "subject": "duplicate_search", "predicate": "result"},
+    ]
+    evidence_items = [
+        EvidenceItem(
+            id="ev_001",
+            type="invoice",
+            source="attachment",
+            summary="Invoice INV-5001 amount 12800.00 CNY.",
+            review_result={"should_accept": True},
+            supports=[{"requirement": "invoice", "support_level": "full"}],
+            metadata={
+                "classification": "business_evidence",
+                "original_ref": "attachments/originals/ev_001.md",
+                "extracted_fields": {
+                    "amount_total": {"value": "12800.00", "source_quote": "Total 12800.00 CNY", "source_locator": "invoice total", "confidence": "high"},
+                    "basis": {"value": "invoice_total", "source_quote": "Invoice total", "source_locator": "invoice total", "confidence": "high"},
+                    "tax_basis": {"value": "gross", "source_quote": "Gross total", "source_locator": "invoice total", "confidence": "high"},
+                    "coverage": {"value": "full", "source_quote": "Invoice total", "source_locator": "invoice total", "confidence": "high"},
+                },
+                "claim_to_source_refs": [
+                    {
+                        "id": "CLM_INVOICE_PAYABLE_IDENTITY",
+                        "subject": "invoice",
+                        "predicate": "payable_identity",
+                        "value_type": "string",
+                        "typed_value": "payable:INV-5001",
+                        "quote": "Invoice INV-5001 remains payable",
+                        "block_or_table_or_region": "invoice header",
+                        "confidence": "high",
+                    },
+                    {
+                        "id": "CLM_INVOICE_ORDER_SCOPE",
+                        "subject": "invoice",
+                        "predicate": "order_scope_identity",
+                        "value_type": "string",
+                        "typed_value": "PO-5001",
+                        "quote": "Order scope PO-5001",
+                        "block_or_table_or_region": "invoice order scope",
+                        "confidence": "high",
+                    },
+                ],
+                "semantic_judgments": [{
+                    "id": "JDG_AMOUNT_SCOPE_COMPARABLE",
+                    "verdict": "SUPPORTED",
+                    "input_refs": amount_refs,
+                    "supporting_refs": amount_refs,
+                    "opposing_refs": [],
+                    "open_questions": [],
+                    "confidence": "high",
+                    "reason": "The three totals describe the same gross full scope.",
+                }],
+            },
+        ),
+        EvidenceItem(
+            id="ev_002",
+            type="purchase_order",
+            source="attachment",
+            summary="PO-5001 matches supplier and amount.",
+            review_result={"should_accept": True},
+            supports=[{"requirement": "purchase_order", "support_level": "full"}],
+            metadata={
+                "classification": "business_evidence",
+                "original_ref": "attachments/originals/ev_002.md",
+                "extracted_fields": {
+                    "amount_total": {"value": "12800.00", "source_quote": "Total 12800.00 CNY", "source_locator": "PO total", "confidence": "high"},
+                    "basis": {"value": "order_total", "source_quote": "PO total", "source_locator": "PO total", "confidence": "high"},
+                    "tax_basis": {"value": "gross", "source_quote": "Gross total", "source_locator": "PO total", "confidence": "high"},
+                    "coverage": {"value": "full", "source_quote": "PO total", "source_locator": "PO total", "confidence": "high"},
+                },
+                "claim_to_source_refs": [{
+                    "id": "CLM_PO_ORDER_SCOPE",
+                    "subject": "purchase_order",
+                    "predicate": "order_scope_identity",
+                    "value_type": "string",
+                    "typed_value": "PO-5001",
+                    "quote": "Order scope PO-5001",
+                    "block_or_table_or_region": "PO order scope",
+                    "confidence": "high",
+                }],
+            },
+        ),
+        EvidenceItem(
+            id="ev_003",
+            type="goods_receipt",
+            source="attachment",
+            summary="GRN-5001 received 16 of 16 units.",
+            review_result={"should_accept": True},
+            supports=[{"requirement": "goods_receipt_or_service_acceptance", "support_level": "full"}],
+            metadata={
+                "classification": "business_evidence",
+                "original_ref": "attachments/originals/ev_003.md",
+                "extracted_fields": {
+                    "received_value": {"value": "12800.00", "source_quote": "Received 12800.00 CNY", "source_locator": "GRN value", "confidence": "high"},
+                    "basis": {"value": "received_value", "source_quote": "Received value", "source_locator": "GRN value", "confidence": "high"},
+                    "tax_basis": {"value": "gross", "source_quote": "Gross received value", "source_locator": "GRN value", "confidence": "high"},
+                    "coverage": {"value": "full", "source_quote": "Received complete", "source_locator": "GRN status", "confidence": "high"},
+                },
+                "claim_to_source_refs": [{
+                    "id": "CLM_GRN_ORDER_SCOPE",
+                    "subject": "goods_receipt",
+                    "predicate": "order_scope_identity",
+                    "value_type": "string",
+                    "typed_value": "PO-5001",
+                    "quote": "Order scope PO-5001",
+                    "block_or_table_or_region": "GRN order scope",
+                    "confidence": "high",
+                }],
+            },
+        ),
+        EvidenceItem(
+            id="ev_004",
+            type="vendor_record",
+            source="attachment",
+            summary="Vendor is active and bank tail matches.",
+            review_result={"should_accept": True},
+            supports=[{"requirement": "vendor_identity", "support_level": "full"}],
+            metadata={"classification": "business_evidence", "original_ref": "attachments/originals/ev_004.md"},
+        ),
+        EvidenceItem(
+            id="ev_005",
+            type="duplicate_payment_check",
+            source="attachment",
+            summary="No duplicate payment found.",
+            review_result={"should_accept": True},
+            supports=[{"requirement": "duplicate_payment_screen", "support_level": "full"}],
+            metadata={
+                "classification": "business_evidence",
+                "original_ref": "attachments/originals/ev_005.md",
+                "claim_to_source_refs": [
+                    {
+                        "id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY",
+                        "subject": "duplicate_search",
+                        "predicate": "payable_identity",
+                        "value_type": "string",
+                        "typed_value": "payable:INV-5001",
+                        "quote": "Search payable identity is INV-5001",
+                        "block_or_table_or_region": "search scope",
+                        "confidence": "high",
+                    },
+                    {
+                        "id": "CLM_DUPLICATE_SEARCH_COVERAGE",
+                        "subject": "duplicate_search",
+                        "predicate": "coverage",
+                        "value_type": "enum",
+                        "typed_value": "complete",
+                        "quote": "Search covers posted and cleared payments",
+                        "block_or_table_or_region": "search scope",
+                        "confidence": "high",
+                    },
+                    {
+                        "id": "CLM_DUPLICATE_SEARCH_RESULT",
+                        "subject": "duplicate_search",
+                        "predicate": "result",
+                        "value_type": "enum",
+                        "typed_value": "no_candidate",
+                        "quote": "Search found no candidate payment",
+                        "block_or_table_or_region": "search result",
+                        "confidence": "high",
+                    },
+                ],
+                "semantic_judgments": [{
+                    "id": "JDG_NO_ACTIVE_DUPLICATE",
+                    "verdict": "SUPPORTED",
+                    "input_refs": duplicate_refs,
+                    "supporting_refs": duplicate_refs,
+                    "opposing_refs": [],
+                    "open_questions": [],
+                    "confidence": "high",
+                    "reason": "The complete search found no candidate payment.",
+                }],
+            },
+        ),
+    ]
+    source_texts = {
+        "ev_001": "Invoice INV-5001 remains payable\nOrder scope PO-5001\nTotal 12800.00 CNY\nInvoice total\nGross total",
+        "ev_002": "Order scope PO-5001\nTotal 12800.00 CNY\nPO total\nGross total",
+        "ev_003": "Order scope PO-5001\nReceived 12800.00 CNY\nReceived value\nGross received value\nReceived complete",
+        "ev_004": "Vendor is active and bank tail matches.",
+        "ev_005": "Search payable identity is INV-5001\nSearch covers posted and cleared payments\nSearch found no candidate payment",
+    }
+    attachments = []
+    for item in evidence_items:
+        original_ref = item.metadata["original_ref"]
+        path = store.resolve_case_path(case_id, original_ref)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source_texts[item.id], encoding="utf-8")
+        attachments.append({
+            "attachment_id": f"att_{item.id}",
+            "name": f"{item.id}.md",
+            "original_ref": original_ref,
+            "status": "active",
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "evidence_ids": [item.id],
+        })
+    save_attachment_manifest(store, case_id, {"attachments": attachments})
+    store.save(CaseState(
+        case_id=case_id,
+        status="ready_for_report",
+        requirements=[
+            Requirement(id="invoice", status="satisfied", evidence_ids=["ev_001"], kind="document"),
+            Requirement(id="purchase_order", status="satisfied", evidence_ids=["ev_002"], kind="document"),
+            Requirement(id="goods_receipt_or_service_acceptance", status="satisfied", evidence_ids=["ev_003"], kind="document"),
+            Requirement(id="vendor_identity", status="satisfied", evidence_ids=["ev_004"], kind="document"),
+            Requirement(id="duplicate_payment_screen", status="satisfied", evidence_ids=["ev_005"], kind="document"),
+        ],
+        evidence_items=evidence_items,
+    ))
+
+
+def _update_seeded_source(store: CaseStore, case_id: str, evidence_id: str, text: str) -> None:
+    manifest = load_attachment_manifest(store, case_id)
+    entry = next(item for item in manifest["attachments"] if evidence_id in item.get("evidence_ids", []))
+    path = store.resolve_case_path(case_id, entry["original_ref"])
+    path.write_text(text, encoding="utf-8")
+    entry["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    save_attachment_manifest(store, case_id, manifest)
 
 
 def _fake_report_writer(role: str, role_input: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
@@ -402,6 +605,11 @@ def test_evidence_reviewer_timeout_recovers_text_direct_batch(tmp_path, monkeypa
     assert role_result["suggested_patch"]["add_evidence"]
     assert len(role_result["suggested_patch"]["add_evidence"]) == 2
     assert "PAY-2026-4431" in json.dumps(role_result, ensure_ascii=False)
+    duplicate_item = next(item for item in role_result["suggested_patch"]["add_evidence"] if item["type"] == "duplicate_payment_check")
+    duplicate_support = next(item for item in duplicate_item["supports"] if item["requirement"] == "duplicate_payment_screen")
+    assert duplicate_support["support_level"] == "full"
+    assert duplicate_item["conflicts"] == []
+    assert role_result["conflicts"] == []
     assert state.role_calls[-1]["capability"]["runtime_recovery"] == "text_direct_review_after_specialist_timeout"
     assert runner.llm.calls[-1].error == ""
     assert runner.llm.calls[-1].recovered_by == "text_direct_review_after_specialist_timeout"
@@ -525,7 +733,8 @@ def test_case_patch_writer_reduces_review_without_llm_call(tmp_path, monkeypatch
     assert state.role_calls[-1]["capability"]["runtime"] == "deterministic_reducer"
     assert not any(call.role == "case_patch_writer" for call in runner.llm.calls)
     assert len(case_state.evidence_items) == 1
-    assert "duplicate_payment_screen" in case_state.conflict_materials
+    assert "duplicate_payment_screen" not in case_state.conflict_materials
+    assert case_state.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
     assert "PAY-2026-4431" in json.dumps(case_state.model_dump(), ensure_ascii=False)
 
 
@@ -553,7 +762,7 @@ def test_manager_final_with_boundary_note_is_not_rewritten(tmp_path, monkeypatch
     assert "final_answer_guard_rewrite" not in events
 
 
-def test_manager_missing_duplicate_history_claim_uses_case_state_recovery(tmp_path, monkeypatch) -> None:
+def test_manager_unsupported_claim_uses_general_case_state_recovery(tmp_path, monkeypatch) -> None:
     manager = ScriptedManagerRunner(
         [{"action": "final_answer", "final_answer": "重复付款筛查证据缺失：未提供历史付款记录比对。"}]
     )
@@ -585,8 +794,8 @@ def test_manager_missing_duplicate_history_claim_uses_case_state_recovery(tmp_pa
 
     response = runtime.run_turn(AgentTurnRequest(case_id="case_duplicate_history_guard", message="总结重复付款审查结果"))
 
-    assert "重复付款检查命中风险" in response.reply
-    assert "历史付款记录 PAY-543-HIST" in response.reply
+    assert "status=collecting_materials" in response.reply
+    assert "conflict=duplicate_payment_screen" in response.reply
     assert "未提供历史付款记录" not in response.reply
     events = runtime.runner.store.resolve_case_path(
         "case_duplicate_history_guard", f"traces/{response.trace['run_id']}/events.jsonl"
@@ -594,7 +803,7 @@ def test_manager_missing_duplicate_history_claim_uses_case_state_recovery(tmp_pa
     assert "final_answer_guard_rewrite" in events
 
 
-def test_runtime_final_answer_does_not_infer_duplicate_hit_from_screen_name(tmp_path) -> None:
+def test_runtime_final_answer_without_canonical_proof_uses_general_case_status(tmp_path) -> None:
     store = CaseStore(tmp_path / "cases")
     state = HarnessRuntime(store).begin_run("case_runtime_final_clean", "review", run_id="run_runtime_final_clean")
     case_state = CaseState(
@@ -628,14 +837,14 @@ def test_runtime_final_answer_does_not_infer_duplicate_hit_from_screen_name(tmp_
 
     answer = _runtime_final_answer(case_state, state)
 
-    assert "当前材料未显示重复付款命中" in answer
-    assert "重复付款检查命中风险" not in answer
-    assert "Orion Parts Co., Ltd." in answer
-    assert "Supplier ID" not in answer
-    assert "Result: No duplicates" not in answer
+    assert "下面是当前案卷状态" in answer
+    assert "status=collecting_materials" in answer
+    assert "weak=duplicate_payment_screen" in answer
+    assert "Orion Parts Co., Ltd." not in answer
+    assert "重复付款检查" not in answer
 
 
-def test_runtime_final_answer_explains_bank_change_conflict(tmp_path) -> None:
+def test_runtime_final_answer_without_canonical_proof_does_not_expand_domain_risk(tmp_path) -> None:
     store = CaseStore(tmp_path / "cases")
     state = HarnessRuntime(store).begin_run("case_bank_change", "review", run_id="run_bank_change")
     case_state = CaseState(
@@ -647,10 +856,132 @@ def test_runtime_final_answer_explains_bank_change_conflict(tmp_path) -> None:
 
     answer = _runtime_final_answer(case_state, state)
 
-    assert "供应商名称等身份字段已匹配" in answer
-    assert "银行账户变更缺少供应商主数据审批依据" in answer
-    case_state.risk_flags = ["bank_account_mismatch_invoice_vs_vendor"]
-    assert "银行账户变更缺少供应商主数据审批依据" not in _runtime_final_answer(case_state, state)
+    assert "bank_change_request_without_vendor_master_approval" in answer
+    assert "供应商名称等身份字段已匹配" not in answer
+    assert "银行账户变更缺少供应商主数据审批依据" not in answer
+
+
+def test_runtime_final_answer_treats_disproved_proof_as_reportable(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    _seed_ready_case(store, "case_reportable_amount_finding")
+    case_state = store.load("case_reportable_amount_finding")
+    amount = case_state.evidence_items[0].metadata["extracted_fields"]["amount_total"]
+    amount.update({"value": "14000.00", "source_quote": "Total 14000.00 CNY"})
+    _update_seeded_source(
+        store,
+        case_state.case_id,
+        "ev_001",
+        "Invoice INV-5001 remains payable\nOrder scope PO-5001\nTotal 14000.00 CNY\nInvoice total\nGross total",
+    )
+    store.save(case_state)
+    case_state = store.load(case_state.case_id)
+    state = HarnessRuntime(store).begin_run(case_state.case_id, "审核", run_id="run_reportable_amount")
+
+    answer = _runtime_final_answer(case_state, state)
+
+    assert "three_way_amount_match=DISPROVED" in answer
+    assert "outcome=EVIDENCE_SUFFICIENT_FOR_REPORT" in answer
+    assert "可进入报告" in answer
+    assert "继续补料或复核" not in answer
+
+
+@pytest.mark.parametrize(
+    ("proof_status", "outcome", "expected_conclusion"),
+    [
+        ("PROVED", "EVIDENCE_SUFFICIENT_FOR_REPORT", "可进入报告"),
+        ("DISPROVED", "EVIDENCE_SUFFICIENT_FOR_REPORT", "可进入报告"),
+        ("INCOMPLETE", "HOLD_FOR_EVIDENCE", "应先处理 blocking proof obligations"),
+        ("INCOMPLETE", "ABSTAIN_OR_ESCALATE", "应升级处理"),
+    ],
+)
+def test_runtime_final_answer_renders_any_semantic_decision_generically(
+    tmp_path,
+    proof_status: str,
+    outcome: str,
+    expected_conclusion: str,
+) -> None:
+    store = CaseStore(tmp_path)
+    state = HarnessRuntime(store).begin_run("case_semantic_decision", "审核", run_id="run_semantic_decision")
+    obligation = ProofObligation(
+        id="OBL_SEMANTIC_POLICY_ALIGNMENT",
+        check_id="CHK_SEMANTIC_POLICY_ALIGNMENT",
+        missing_premise="需要权威来源确认自定义语义前提",
+        blocking=True,
+    )
+    decision = DecisionProof(
+        program_id="semantic_policy_program",
+        requirement_id="semantic_policy_alignment",
+        root_check_id="FINAL_SEMANTIC_POLICY_ALIGNMENT",
+        outcome=outcome,
+        proof_status=proof_status,
+        obligation_ids=[obligation.id] if proof_status == "INCOMPLETE" else [],
+        policy_version="test",
+        compiler_version="test",
+        evidence_snapshot_hash="test",
+        stop_reason="test decision",
+    )
+    case_state = CaseState(
+        case_id=state.case_id,
+        status="ready_for_report",
+        requirements=[Requirement(id="semantic_policy_alignment", status="satisfied")],
+        evidence_items=[EvidenceItem(id="ev_semantic", type="unknown", summary="PAY-771 and CLR-771 are irrelevant lexical noise.")],
+        risk_flags=["duplicate_payment_risk lexical noise"],
+        compiled_proof=CompiledProof(
+            obligations=[obligation] if proof_status == "INCOMPLETE" else [],
+            decisions=[decision],
+            decision=decision,
+        ),
+    )
+
+    answer = _runtime_final_answer(case_state, state)
+
+    assert f"semantic_policy_alignment={proof_status}" in answer
+    assert f"outcome={outcome}" in answer
+    assert expected_conclusion in answer
+    assert "PAY-771" not in answer
+    assert "CLR-771" not in answer
+    assert "重复付款" not in answer
+    if proof_status == "INCOMPLETE":
+        assert "OBL_SEMANTIC_POLICY_ALIGNMENT" in answer
+        assert "需要权威来源确认自定义语义前提" in answer
+    else:
+        assert "Blocking proof obligations：无" in answer
+
+
+def test_runtime_final_answer_keeps_uncompiled_requirement_blockers(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    state = HarnessRuntime(store).begin_run("case_mixed_requirements", "审核", run_id="run_mixed_requirements")
+    decision = DecisionProof(
+        program_id="semantic_policy_program",
+        requirement_id="semantic_policy_alignment",
+        root_check_id="FINAL_SEMANTIC_POLICY_ALIGNMENT",
+        outcome="EVIDENCE_SUFFICIENT_FOR_REPORT",
+        proof_status="PROVED",
+        policy_version="test",
+        compiler_version="test",
+        evidence_snapshot_hash="test",
+        stop_reason="proved",
+    )
+    case_state = CaseState(
+        case_id=state.case_id,
+        status="collecting_materials",
+        requirements=[
+            Requirement(id="semantic_policy_alignment", status="satisfied"),
+            Requirement(id="uncompiled_supporting_record", status="missing"),
+        ],
+        risk_flags=["manual_follow_up_required"],
+        next_questions=["请补充非编译支持记录。"],
+        compiled_proof=CompiledProof(decisions=[decision], decision=decision),
+    )
+
+    answer = _runtime_final_answer(case_state, state)
+
+    assert "semantic_policy_alignment=PROVED" in answer
+    assert "missing=uncompiled_supporting_record" in answer
+    assert "manual_follow_up_required" in answer
+    assert "请补充非编译支持记录" in answer
+    assert "仍有非编译 requirements 未完成" in answer
+    assert "可进入报告" not in answer
 
 
 def test_evidence_reviewer_mode_mismatch_becomes_policy_feedback(tmp_path, monkeypatch) -> None:
@@ -771,6 +1102,51 @@ def test_report_request_runs_file_and_pdf_approval_pipeline(tmp_path, monkeypatc
     assert any(event["kind"] == "approval" and event["name"] == "approved" for event in final.trace["observations"])
     final_trace = json.loads((tmp_path / "cases" / "case_report_approval" / "traces" / f"{response.trace['run_id']}.json").read_text(encoding="utf-8"))
     assert final_trace["interrupts"] == []
+
+
+def test_disproved_amount_proof_is_written_as_a_report_finding(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    case_id = "case_disproved_amount_report"
+    _seed_ready_case(runtime.runner.store, case_id)
+    case_state = runtime.runner.store.load(case_id)
+    case_state.evidence_items[0].metadata["extracted_fields"]["amount_total"].update(
+        {"value": "14000.00", "source_quote": "Total 14000.00 CNY"}
+    )
+    _update_seeded_source(
+        runtime.runner.store,
+        case_id,
+        "ev_001",
+        "Invoice INV-5001 remains payable\nOrder scope PO-5001\nTotal 14000.00 CNY\nInvoice total\nGross total",
+    )
+    runtime.runner.store.save(case_state)
+
+    compiled = runtime.runner.store.load(case_id)
+    assert compiled.status == "ready_for_report"
+    assert compiled.compiled_proof.decision.proof_status == "DISPROVED"
+
+    def report_finding(role: str, role_input: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        proof = role_input["case_state"]["compiled_proof"]
+        assert proof["decision"]["proof_status"] == "DISPROVED"
+        assert proof["decision"]["outcome"] == "EVIDENCE_SUFFICIENT_FOR_REPORT"
+        assert "CHK_AMOUNT_WITHIN_TOLERANCE" in proof["decision"]["failing_check_ids"]
+        return {
+            "title": "INV-5001 三单金额检查报告",
+            "markdown": (
+                "# INV-5001 三单金额检查报告\n\n"
+                "结论：DISPROVED；发票 14000.00 CNY 与 PO/GRN 12800.00 CNY 超出 Aurora 2% 容差。\n\n"
+                "来源：invoice total、PO total、GRN value。此为可报告发现，不代表付款批准或拒绝。\n"
+            ),
+        }
+
+    monkeypatch.setattr(runtime.runner.roles, "call", report_finding)
+    response = runtime.run_turn(AgentTurnRequest(case_id=case_id, message="生成三单金额审查报告并渲染 PDF"))
+    assert response.trace["status"] == "waiting_approval"
+    written = runtime.resume_approval(case_id, response.trace["run_id"], approved=True, reason="write report")
+    report = next((tmp_path / "cases" / case_id / "reports").glob("*.md")).read_text(encoding="utf-8")
+    assert "DISPROVED" in report and "2%" in report
+    assert "缺少材料" not in report and "不代表付款批准" in report
+    assert written.trace["interrupts"][0]["tool"] == "render_pdf"
+    runtime.resume_approval(case_id, written.trace["run_id"], approved=False, reason="markdown acceptance only")
 
 
 def test_report_completion_wins_over_step_limit_after_pdf_render(tmp_path, monkeypatch) -> None:

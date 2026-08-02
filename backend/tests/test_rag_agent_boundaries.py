@@ -9,6 +9,7 @@ from app.tools.rag_guidance import _review_guidance_query, advisor_guidance, rev
 
 
 def test_evidence_reviewer_uses_rag_profiles_as_guidance_only() -> None:
+    assert EVIDENCE_REVIEWER_PROMPT.count("version: global_policy_v1.2") == 1
     assert "RAG/profile snippets are review guidance, never submitted case evidence" in EVIDENCE_REVIEWER_PROMPT
     assert "Use them to compare required fields, visual/layout clues" in EVIDENCE_REVIEWER_PROMPT
     assert "Do not mark a requirement satisfied because RAG says the template requires it" in EVIDENCE_REVIEWER_PROMPT
@@ -24,7 +25,11 @@ def test_evidence_reviewer_uses_rag_profiles_as_guidance_only() -> None:
     assert "next_questions should ask for PO, GRN" not in EVIDENCE_REVIEWER_PROMPT
     assert "source-traceable invoice file and missing required invoice fields" in EVIDENCE_REVIEWER_PROMPT
     assert "do not ask for PO, GRN/service acceptance, vendor identity/master, or duplicate-payment screening unless those AP requirements are already active" in EVIDENCE_REVIEWER_PROMPT
-    assert "treat it as an unresolved conflict for the AP lite requirement `duplicate_payment_screen`" in EVIDENCE_REVIEWER_PROMPT
+    assert "`duplicate_payment_screen` means the authoritative search/source is present" in EVIDENCE_REVIEWER_PROMPT
+    assert "the Compiler derives `no_active_duplicate` as the semantic lifecycle conclusion" in EVIDENCE_REVIEWER_PROMPT
+    assert "A positive candidate is not itself a source-material conflict" in EVIDENCE_REVIEWER_PROMPT
+    assert "metadata.requirement_verdicts" in EVIDENCE_REVIEWER_PROMPT
+    assert "semantic conclusions, not source materials" in EVIDENCE_REVIEWER_PROMPT
     assert "do not put missing/weak optional fields such as signature" in EVIDENCE_REVIEWER_PROMPT
     assert "optional quality enhancements unless there is a real conflict" in EVIDENCE_REVIEWER_PROMPT
     assert "do not add \"if you need AP review...\" expansion prompts" in EVIDENCE_REVIEWER_PROMPT
@@ -47,6 +52,10 @@ def test_evidence_reviewer_uses_rag_profiles_as_guidance_only() -> None:
     assert "same_vendor_reference" in EVIDENCE_REVIEWER_PROMPT
     assert "Template matching is a consistency signal" in EVIDENCE_REVIEWER_PROMPT
     assert "cannot prove supplier existence" in EVIDENCE_REVIEWER_PROMPT
+    assert "the judgment must be `UNKNOWN`" in EVIDENCE_REVIEWER_PROMPT
+    assert "these policy comparability gaps are not `REFUTED`" in EVIDENCE_REVIEWER_PROMPT
+    assert "A complete, source-traceable duplicate-payment search stays `duplicate_payment_screen=full`" in EVIDENCE_REVIEWER_PROMPT
+    assert "Duplicate-payment positive hit or historical clearing/payment reference: support_level=`partial`" not in EVIDENCE_REVIEWER_PROMPT
 
 
 def test_report_writer_uses_visual_check_as_quality_only() -> None:
@@ -140,6 +149,75 @@ def test_evidence_reviewer_signature_template_query_loads_local_profiles() -> No
     assert "case_05_flipkart_ws_retail_invoice_bill" in query
     assert "case_06_sap_dox_invoice_duplicate" in query
     assert "consistency signal" in query
+
+
+def test_evidence_reviewer_query_uses_actual_semantic_fields_without_universal_control_noise() -> None:
+    query = _review_guidance_query(
+        "Review this invoice, PO and GRN amount scope",
+        attachment_context=[],
+        attachment_manifest={},
+        extraction_result={
+            "source_docs": [
+                {
+                    "doc_type": "goods_receipt",
+                    "field_inventory": [
+                        {"field": "coverage", "value": "partial", "status": "present"},
+                        {"field": "tax_basis", "value": "net", "status": "present"},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert "ap_three_way_matching" in query
+    assert "coverage partial present" in query
+    assert "tax_basis net present" in query
+    assert "segregation of duties payment release vendor master non-PO" not in query
+
+
+def test_evidence_reviewer_query_keeps_semantic_fields_with_large_attachment_context() -> None:
+    query = _review_guidance_query(
+        "审查发票三单金额匹配",
+        attachment_context=[{"name": f"invoice_{index}.pdf", "summary": "source document " * 80} for index in range(6)],
+        attachment_manifest={"attachments": [{"name": f"manifest_{index}.pdf", "summary": "manifest evidence " * 80} for index in range(6)]},
+        extraction_result={
+            "source_docs": [
+                {
+                    "doc_type": "goods_receipt",
+                    "field_inventory": [
+                        {"field": "coverage", "value": "partial", "status": "present"},
+                        {"field": "tax_basis", "value": "net", "status": "present"},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert "coverage partial present" in query
+    assert "tax_basis net present" in query
+
+
+def test_chinese_three_way_amount_query_does_not_route_to_template_profiles() -> None:
+    query = _review_guidance_query(
+        "发票三单金额匹配怎么审？",
+        attachment_context=[],
+        attachment_manifest={},
+        extraction_result={},
+    )
+
+    assert "ap_three_way_matching" in query
+    assert "case_01_mouadhamri" not in query
+
+
+def test_clear_invoice_query_routes_to_process_boundary_profile() -> None:
+    query = _review_guidance_query(
+        "Clear Invoice 流程日志是否说明已经可以付款？",
+        attachment_context=[],
+        attachment_manifest={},
+        extraction_result={},
+    )
+
+    assert "workflow_boundary_process_evidence" in query
 
 
 def test_advisor_guidance_provider_retrieves_rag_guidance(monkeypatch) -> None:

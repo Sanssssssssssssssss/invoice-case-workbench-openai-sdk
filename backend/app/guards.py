@@ -179,6 +179,27 @@ def _complete_case_state_errors(case_state: Any) -> list[str]:
         for item in evidence_items
         for support in list(getattr(item, "supports", []) or [])
     }
+    compiled_proof = getattr(case_state, "compiled_proof", None)
+    evidence_ids = {str(getattr(item, "id", "") or "") for item in evidence_items}
+    sourced_claim_ids = {
+        str(getattr(claim, "id", "") or "")
+        for claim in list(getattr(compiled_proof, "claims", []) or [])
+        if str(getattr(claim, "evidence_id", "") or "") in evidence_ids
+        and bool(getattr(claim, "source_quote", ""))
+        and bool(getattr(claim, "source_locator", ""))
+    }
+    roots = {
+        (str(getattr(decision, "program_id", "") or ""), str(getattr(decision, "root_check_id", "") or ""))
+        for decision in list(getattr(compiled_proof, "decisions", []) or [])
+    }
+    supported_requirements.update(
+        str(getattr(check, "requirement_id", "") or "")
+        for check in list(getattr(compiled_proof, "checks", []) or [])
+        if (str(getattr(check, "program_id", "") or ""), str(getattr(check, "id", "") or "")) in roots
+        and str(getattr(check, "status", "")) == "PROVED"
+        and bool(getattr(check, "input_claim_ids", []))
+        and set(getattr(check, "input_claim_ids", [])) <= sourced_claim_ids
+    )
     missing_support = sorted(set(blocking_ids) - supported_requirements)
     if missing_support:
         errors.append(f"complete claim missing evidence support for requirements: {missing_support}")

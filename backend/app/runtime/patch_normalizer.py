@@ -47,11 +47,15 @@ def preserve_reviewer_quote_fields(patch: dict[str, Any], reviewer_result: dict[
             if not isinstance(target_metadata, dict):
                 continue
             for metadata_key in (
+                "attachment_id",
+                "original_ref",
+                "source_filename",
                 "visual_check",
                 "field_review_matrix",
                 "page_review",
                 "evidence_chain",
                 "claim_to_source_refs",
+                "semantic_judgments",
                 "block_crops",
                 "profile_comparison",
                 "self_check",
@@ -200,7 +204,15 @@ def _compact_crop_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def _compact_claim_row(row: dict[str, Any]) -> dict[str, Any]:
     keep = {
+        "id",
         "claim",
+        "subject",
+        "predicate",
+        "entity_key",
+        "value_type",
+        "typed_value",
+        "source_quote",
+        "source_locator",
         "field",
         "value",
         "support_level",

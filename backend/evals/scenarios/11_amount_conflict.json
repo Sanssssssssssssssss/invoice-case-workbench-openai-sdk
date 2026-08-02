@@ -22,21 +22,14 @@
       "final_answer"
     ],
     "min_evidence": 5,
-    "case_status_not": "ready_for_report",
+    "case_status": "ready_for_report",
     "requirement_statuses": {
-      "invoice": [
-        "weak",
-        "conflict",
-        "satisfied"
-      ],
-      "purchase_order": [
-        "weak",
-        "conflict"
-      ],
+      "invoice": "satisfied",
+      "purchase_order": "satisfied",
       "goods_receipt_or_service_acceptance": "satisfied",
       "vendor_identity": "satisfied",
       "duplicate_payment_screen": "satisfied",
-      "amount_total": "conflict"
+      "three_way_amount_match": "conflict"
     },
     "risk_contains_any": [
       "金额",
@@ -56,8 +49,9 @@
       "CNY"
     ],
     "reply_not_contains": [
-      "五项必备材料均已满足",
-      "证据链完整",
+      "金额匹配通过",
+      "可直接付款",
+      "付款已批准",
       "1,600",
       "1600"
     ],
