@@ -5,6 +5,7 @@ from app.agents.registry import RoleRegistry
 from app.agents.thinking import manager_tool_loop_thinking_type, role_thinking_type
 from app.config import Settings
 from app.llm import LlmClient, _model_extra_body
+from app.runtime.agents_sdk import _use_responses_api
 
 
 def test_kimi_agents_sdk_settings_keep_thinking_toggle() -> None:
@@ -22,6 +23,12 @@ def test_non_kimi_agents_sdk_settings_use_plain_model_temperature() -> None:
 
     assert client._temperature("gpt-4.1-mini") == 0.2  # noqa: SLF001
     assert _model_extra_body("gpt-4.1-mini", "enabled") is None
+
+
+def test_deepseek_v4_uses_the_official_responses_contract() -> None:
+    assert _use_responses_api("deepseek", "https://api.deepseek.com") is True
+    assert _model_extra_body("deepseek-v4-flash", "disabled") == {"reasoning": {"effort": "none"}}
+    assert _model_extra_body("deepseek-v4-flash", "enabled") == {"reasoning": {"effort": "high"}}
 
 
 def test_thinking_scope_is_limited_to_planner_and_evidence_review_mode() -> None:

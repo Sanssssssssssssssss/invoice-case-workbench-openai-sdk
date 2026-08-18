@@ -147,7 +147,7 @@ Scenario checks cover:
 - Encoding cleanliness: benchmark outputs must not contain `???`, replacement characters, `undefined`, `not valid JSON`, streaming failure text, or generic manager failure text.
 - Budgets for model calls, tool calls, role calls, tokens, and wall time.
 
-`semantic_duplicate_reversal_001` is the evidence-language Compiler acceptance case. It seeds the stable `duplicate_payment_screen` input Requirement, requires a source-bound `candidate_found` lifecycle IR and validated LLM judgment, and expects the Compiler to derive `no_active_duplicate=PROVED` consistently across canonical proof, Requirement projection, and the final reply.
+`semantic_duplicate_reversal_001` is the evidence-language Compiler acceptance case. It seeds the stable `duplicate_payment_screen` input Requirement and requires a source-bound `candidate_found` lifecycle IR plus a validated LLM judgment. The formal Aurora demo Pack intentionally leaves `duplicate_search_window` unconfigured, so the canonical result remains `INCOMPLETE`; the configured-policy offline fixture covers the positive `PROVED` lifecycle branch.
 
 ## Adding A Scenario
 

@@ -155,23 +155,12 @@ def test_reviewer_conclusion_cannot_be_satisfied_by_plain_evidence_support(tmp_p
     )
 
     inferred_requirements = {item.id: item for item in inferred.requirements}
-    assert inferred_requirements["vendor_bank_account_authorized"].required is False
-    assert inferred_requirements["vendor_bank_account_authorized"].status == "weak"
-    assert inferred_requirements["vendor_identity"].required is False
-    assert inferred_requirements["vendor_bank_change_record"].required is False
+    assert "vendor_bank_account_authorized" not in inferred_requirements
+    assert inferred_requirements == {}
     assert "vendor_bank_account_authorized" not in inferred.satisfied_materials
 
     reloaded_requirements = {item.id: item for item in store.load("case_reviewer_owned_conclusion").requirements}
-    assert reloaded_requirements["vendor_bank_account_authorized"].required is False
-    refreshed = store.apply_patch(
-        "case_reviewer_owned_conclusion",
-        {"patch_type": "update_case", "case_updates": {"reply_brief": "unrelated refresh"}},
-    )
-    assert all(
-        not item.required
-        for item in refreshed.requirements
-        if item.id in {"vendor_bank_account_authorized", "vendor_identity", "vendor_bank_change_record"}
-    )
+    assert "vendor_bank_account_authorized" not in reloaded_requirements
 
     activated = store.apply_patch(
         "case_reviewer_owned_conclusion",
@@ -182,7 +171,7 @@ def test_reviewer_conclusion_cannot_be_satisfied_by_plain_evidence_support(tmp_p
     )
     activated_requirements = {item.id: item for item in activated.requirements}
     assert activated_requirements["vendor_bank_account_authorized"].required is True
-    assert activated_requirements["vendor_bank_account_authorized"].status == "weak"
+    assert activated_requirements["vendor_bank_account_authorized"].status == "missing"
     assert activated_requirements["vendor_identity"].required is True
     assert activated_requirements["vendor_bank_change_record"].required is True
 
@@ -190,13 +179,13 @@ def test_reviewer_conclusion_cannot_be_satisfied_by_plain_evidence_support(tmp_p
 @pytest.mark.parametrize(
     ("verdict", "evidence_ids", "open_questions", "expected_status"),
     [
-        ("SUPPORTED", ["ev_vendor", "ev_bank"], [], "satisfied"),
-        ("REFUTED", ["ev_vendor", "ev_bank"], [], "conflict"),
+        ("SUPPORTED", ["ev_vendor", "ev_bank"], [], "weak"),
+        ("REFUTED", ["ev_vendor", "ev_bank"], [], "weak"),
         ("SUPPORTED", "ev_vendor", [], "weak"),
         ("SUPPORTED", ["ev_vendor", "ev_bank"], {}, "weak"),
     ],
 )
-def test_trusted_reviewer_verdict_projects_semantic_conclusion(
+def test_legacy_reviewer_verdict_without_claim_refs_stays_incomplete(
     tmp_path, verdict, evidence_ids, open_questions, expected_status
 ) -> None:
     store = CaseStore(tmp_path)
@@ -257,8 +246,9 @@ def test_trusted_reviewer_verdict_projects_semantic_conclusion(
 
     requirement = next(item for item in updated.requirements if item.id == "vendor_bank_account_authorized")
     assert requirement.status == expected_status
-    assert requirement.evidence_ids == (["ev_vendor", "ev_bank"] if expected_status != "weak" else [])
-    assert updated.status == ("ready_for_report" if expected_status != "weak" else "collecting_materials")
+    assert requirement.evidence_ids == ["ev_vendor", "ev_bank"]
+    assert updated.compiled_proof.decision_for("vendor_bank_account_authorized").proof_status == "INCOMPLETE"
+    assert updated.status == "collecting_materials"
 
 
 def test_reviewer_verdict_requires_trusted_full_support_for_each_premise(tmp_path) -> None:
@@ -391,3 +381,35 @@ def test_legacy_requirement_ids_still_activate_compiler_programs(tmp_path) -> No
     assert state.compiled_proof is not None
     assert state.compiled_proof.decision_for("three_way_amount_match") is not None
     assert state.compiled_proof.decision_for("no_active_duplicate") is not None
+
+
+def test_legacy_case_load_canonicalizes_requirement_and_support_aliases(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    root = store.ensure_case_dirs("case_legacy_aliases")
+    (root / "case_state.json").write_text(
+        json.dumps({
+            "case_id": "case_legacy_aliases",
+            "requirements": [
+                {"id": "goods_receipt"},
+                {"id": "vendor_record"},
+                {"id": "duplicate_payment_check"},
+            ],
+            "evidence_items": [{
+                "id": "ev_legacy",
+                "type": "goods_receipt",
+                "source": "user_message",
+                "review_result": {"should_accept": True},
+                "supports": [{"requirement": "goods_receipt", "support_level": "full"}],
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    state = store.load("case_legacy_aliases")
+
+    assert {item.id for item in state.requirements} == {
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity",
+        "duplicate_payment_screen",
+    }
+    assert state.evidence_items[0].supports[0].requirement == "goods_receipt_or_service_acceptance"

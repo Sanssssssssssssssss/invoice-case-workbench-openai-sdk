@@ -27,6 +27,13 @@ REQUIRED_SCENARIOS = {
     "reject_pdf_approval_001",
 }
 GOLDEN_SCENARIOS_ROOT = REPO_ROOT / "golden_cases" / "session_invoice_cases_v1"
+LIVE_ACCEPTANCE_ROOT = REPO_ROOT / "benchmarks" / "invoice_tau" / "live_acceptance"
+LIVE_ACCEPTANCE_SCENARIOS = {
+    "amount_conflict_live_canary",
+    "partial_receipt_live_canary",
+    "duplicate_reversal_live_canary",
+    "vendor_identity_active_live_canary",
+}
 REQUIRED_GOLDEN_SCENARIOS = {
     "golden_case_01_clean_jpg",
     "golden_case_02_amount_conflict",
@@ -79,6 +86,15 @@ def test_invoice_taubench_profiles_expand_expected_scenarios() -> None:
 def test_invoice_taubench_attachment_references_exist() -> None:
     for path in discover_scenarios():
         scenario, _expected, scenario_dir = load_scenario(path)
+        for turn in scenario.user_script:
+            assert len(_attachments_for_turn(turn, scenario_dir)) == len(turn.attach)
+
+
+def test_live_acceptance_scenarios_and_attachments_load() -> None:
+    loaded = [load_scenario(path) for path in discover_scenarios(root=LIVE_ACCEPTANCE_ROOT)]
+
+    assert {scenario.id for scenario, _expected, _scenario_dir in loaded} == LIVE_ACCEPTANCE_SCENARIOS
+    for scenario, _expected, scenario_dir in loaded:
         for turn in scenario.user_script:
             assert len(_attachments_for_turn(turn, scenario_dir)) == len(turn.attach)
 
@@ -200,6 +216,51 @@ def test_invoice_taubench_does_not_fallback_when_target_proof_is_missing() -> No
     checks = {check.name: check for check in verify_run(result, expected, SCENARIOS_ROOT)}
 
     assert not checks["proof_status"].passed
+
+
+def test_invoice_taubench_can_assert_internal_proof_checks() -> None:
+    result = ScenarioRunResult(
+        scenario_id="proof_checks",
+        case_state={"compiled_proof": {"checks": [{"id": "CHK_TOLERANCE", "status": "DISPROVED"}]}},
+    )
+    expected = ExpectedSpec(proof_checks={"CHK_TOLERANCE": "DISPROVED", "CHK_SCOPE": "PROVED"})
+
+    checks = {check.name: check for check in verify_run(result, expected, SCENARIOS_ROOT)}
+
+    assert checks["proof_check:CHK_TOLERANCE"].passed
+    assert not checks["proof_check:CHK_SCOPE"].passed
+
+
+def test_invoice_taubench_proof_details_are_scoped_to_target_view() -> None:
+    result = ScenarioRunResult(
+        scenario_id="proof_view_scope",
+        case_state={
+            "compiled_proof": {
+                "decisions": [
+                    {
+                        "requirement_id": "target",
+                        "program_id": "target-view",
+                        "proof_status": "INCOMPLETE",
+                        "obligation_ids": [],
+                    }
+                ],
+                "checks": [
+                    {"id": "CHK_SCOPE", "program_id": "foreign-view", "status": "PROVED"}
+                ],
+                "obligations": [{"id": "OBL_FOREIGN"}],
+            }
+        },
+    )
+    expected = ExpectedSpec(
+        proof_requirement_id="target",
+        proof_checks={"CHK_SCOPE": "PROVED"},
+        proof_obligation_ids=["OBL_FOREIGN"],
+    )
+
+    checks = {check.name: check for check in verify_run(result, expected, SCENARIOS_ROOT)}
+
+    assert not checks["proof_check:CHK_SCOPE"].passed
+    assert not checks["proof_obligation:OBL_FOREIGN"].passed
 
 
 def test_invoice_taubench_risk_flag_aliases_accept_live_variants() -> None:

@@ -7,7 +7,19 @@
     {
       "message": "请审查这组付款生命周期材料，判断历史付款是否仍构成有效重复付款。只做材料审核，不生成报告。",
       "attach": ["invoice.md", "duplicate_search.md", "payment_history.md", "reversal_record.md"],
-      "manager_decisions": []
+      "manager_decisions": [
+        {
+          "action": "delegate_agent",
+          "target": "evidence_reviewer",
+          "input": {
+            "mode": "review",
+            "active_requirement_ids": ["invoice", "duplicate_payment_screen"]
+          }
+        },
+        {"action": "delegate_agent", "target": "case_patch_writer", "input": {}},
+        {"action": "write_case_patch", "input": {}},
+        {"action": "final_answer", "final_answer": "HOLD_FOR_EVIDENCE: Blocking proof obligations remain unresolved."}
+      ]
     }
   ],
   "scripted_roles": {
@@ -38,20 +50,15 @@
             "content": "The current payable obligation is invoice INV-7701.",
             "review_result": {"should_accept": true},
             "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "The current payable obligation is invoice INV-7701."}],
-            "metadata": {
-              "classification": "business_evidence",
-              "source_filename": "invoice.md",
-              "claim_to_source_refs": [{
-                "id": "CLM_PAYABLE_KEY",
-                "subject": "invoice",
-                "predicate": "payable_identity",
-                "value_type": "string",
-                "typed_value": "payable:INV-7701",
-                "quote": "The current payable obligation is invoice INV-7701.",
-                "block_or_table_or_region": "invoice.md:3",
-                "confidence": "high"
-              }]
-            }
+            "metadata": {"classification": "business_evidence", "source_filename": "invoice.md"},
+            "semantic_claims": [{
+              "handle": "invoice_payable_identity",
+              "hole_id": "hole:b3c083e649e64baa",
+              "typed_value": "INV-7701",
+              "source_quote": "The current payable obligation is invoice INV-7701.",
+              "source_locator": "invoice.md:3",
+              "confidence": "high"
+            }]
           },
           {
             "id": "ev_search",
@@ -62,53 +69,13 @@
             "content": "The search covers all posted and cleared payment records. PAY-771 is a candidate match for invoice INV-7701.",
             "review_result": {"should_accept": true},
             "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "The search covers all posted and cleared payment records."}],
-            "metadata": {
-              "classification": "business_evidence",
-              "source_filename": "duplicate_search.md",
-              "claim_to_source_refs": [
-                {
-                  "id": "CLM_SEARCH_PAYABLE_IDENTITY",
-                  "subject": "duplicate_search",
-                  "predicate": "payable_identity",
-                  "value_type": "string",
-                  "typed_value": "payable:INV-7701",
-                  "quote": "PAY-771 is a candidate match for invoice INV-7701.",
-                  "block_or_table_or_region": "duplicate_search.md:3",
-                  "confidence": "high"
-                },
-                {
-                  "id": "CLM_SEARCH_SCOPE",
-                  "subject": "duplicate_search",
-                  "predicate": "coverage",
-                  "value_type": "enum",
-                  "typed_value": "complete",
-                  "quote": "The search covers all posted and cleared payment records.",
-                  "block_or_table_or_region": "duplicate_search.md:3",
-                  "confidence": "high"
-                },
-                {
-                  "id": "CLM_SEARCH_RESULT",
-                  "subject": "duplicate_search",
-                  "predicate": "result",
-                  "value_type": "enum",
-                  "typed_value": "candidate_found",
-                  "quote": "PAY-771 is a candidate match for invoice INV-7701.",
-                  "block_or_table_or_region": "duplicate_search.md:3",
-                  "confidence": "high"
-                },
-                {
-                  "id": "CLM_CANDIDATE_IDENTITY",
-                  "subject": "duplicate_search",
-                  "predicate": "candidate_identity",
-                  "entity_key": "candidate:1",
-                  "value_type": "string",
-                  "typed_value": "payment:PAY-771",
-                  "quote": "PAY-771 is a candidate match for invoice INV-7701.",
-                  "block_or_table_or_region": "duplicate_search.md:3",
-                  "confidence": "high"
-                }
-              ]
-            }
+            "metadata": {"classification": "business_evidence", "source_filename": "duplicate_search.md"},
+            "semantic_claims": [
+              {"handle": "search_payable_identity", "hole_id": "hole:872fc0890e51c61a", "typed_value": "INV-7701", "source_quote": "PAY-771 is a candidate match for invoice INV-7701.", "source_locator": "duplicate_search.md:3", "confidence": "high"},
+              {"handle": "search_coverage", "hole_id": "hole:13a060880802d5eb", "typed_value": "complete", "source_quote": "The search covers all posted and cleared payment records.", "source_locator": "duplicate_search.md:3", "confidence": "high"},
+              {"handle": "search_result", "hole_id": "hole:493f199983d67be6", "typed_value": "candidate_found", "source_quote": "PAY-771 is a candidate match for invoice INV-7701.", "source_locator": "duplicate_search.md:3", "confidence": "high"},
+              {"handle": "candidate_identity", "hole_id": "hole:97420b616c18e079", "typed_value": "PAY-771", "source_quote": "PAY-771 is a candidate match for invoice INV-7701.", "source_locator": "duplicate_search.md:3", "confidence": "high", "entity_handle": "candidate:1"}
+            ]
           },
           {
             "id": "ev_history",
@@ -119,45 +86,12 @@
             "content": "The earlier payment was fully cancelled and the invoice balance was restored to open.",
             "review_result": {"should_accept": true},
             "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "PAY-771 relates to invoice INV-7701."}],
-            "metadata": {
-              "classification": "business_evidence",
-              "source_filename": "payment_history.md",
-              "claim_to_source_refs": [
-                {
-                  "id": "CLM_PAYMENT_IDENTITY",
-                  "subject": "payment",
-                  "predicate": "identity",
-                  "entity_key": "candidate:1",
-                  "value_type": "string",
-                  "typed_value": "payment:PAY-771",
-                  "quote": "PAY-771 relates to invoice INV-7701.",
-                  "block_or_table_or_region": "payment_history.md:3",
-                  "confidence": "high"
-                },
-                {
-                  "id": "CLM_CANDIDATE_RELATION",
-                  "subject": "payment",
-                  "predicate": "relationship_to_payable",
-                  "entity_key": "candidate:1",
-                  "value_type": "enum",
-                  "typed_value": "same_obligation",
-                  "quote": "PAY-771 relates to invoice INV-7701.",
-                  "block_or_table_or_region": "payment_history.md:3",
-                  "confidence": "high"
-                },
-                {
-                  "id": "CLM_PAYMENT_EFFECT",
-                  "subject": "payment",
-                  "predicate": "economic_effect",
-                  "entity_key": "candidate:1",
-                  "value_type": "enum",
-                  "typed_value": "neutralized_by_reversal",
-                  "quote": "The earlier payment was fully cancelled and the invoice balance was restored to open.",
-                  "block_or_table_or_region": "payment_history.md:3",
-                  "confidence": "high"
-                }
-              ]
-            }
+            "metadata": {"classification": "business_evidence", "source_filename": "payment_history.md"},
+            "semantic_claims": [
+              {"handle": "payment_identity", "hole_id": "hole:d765b6378679e233", "typed_value": "PAY-771", "source_quote": "PAY-771 relates to invoice INV-7701.", "source_locator": "payment_history.md:3", "confidence": "high", "entity_handle": "candidate:1"},
+              {"handle": "payment_relationship", "hole_id": "hole:ff23b67113176a9b", "typed_value": "same_obligation", "source_quote": "PAY-771 relates to invoice INV-7701.", "source_locator": "payment_history.md:3", "confidence": "high", "entity_handle": "candidate:1"},
+              {"handle": "payment_effect", "hole_id": "hole:0c8086d8335d4a2d", "typed_value": "neutralized_by_reversal", "source_quote": "The earlier payment was fully cancelled and the invoice balance was restored to open.", "source_locator": "payment_history.md:3", "confidence": "high", "entity_handle": "candidate:1"}
+            ]
           },
           {
             "id": "ev_reversal",
@@ -168,41 +102,23 @@
             "content": "RV-771 is posted and fully reverses PAY-771.",
             "review_result": {"should_accept": true},
             "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "RV-771 is posted and fully reverses PAY-771."}],
-            "metadata": {
-              "classification": "business_evidence",
-              "source_filename": "reversal_record.md",
-              "claim_to_source_refs": [
-                {"id": "CLM_REVERSAL_TARGET", "subject": "reversal", "predicate": "reverses", "entity_key": "candidate:1", "value_type": "string", "typed_value": "payment:PAY-771", "quote": "RV-771 is posted and fully reverses PAY-771.", "block_or_table_or_region": "reversal_record.md:3", "confidence": "high"},
-                {"id": "CLM_REVERSAL_STATUS", "subject": "reversal", "predicate": "posting_status", "entity_key": "candidate:1", "value_type": "enum", "typed_value": "posted", "quote": "RV-771 is posted and fully reverses PAY-771.", "block_or_table_or_region": "reversal_record.md:3", "confidence": "high"},
-                {"id": "CLM_REVERSAL_SCOPE", "subject": "reversal", "predicate": "scope", "entity_key": "candidate:1", "value_type": "enum", "typed_value": "full", "quote": "RV-771 is posted and fully reverses PAY-771.", "block_or_table_or_region": "reversal_record.md:3", "confidence": "high"}
-              ],
-              "semantic_judgments": [{
-                "id": "JDG_NO_ACTIVE_DUPLICATE",
-                "verdict": "SUPPORTED",
-                "input_refs": [
-                  {"evidence_id": "ev_search", "claim_id": "CLM_CANDIDATE_IDENTITY", "subject": "duplicate_search", "predicate": "candidate_identity"},
-                  {"evidence_id": "ev_history", "claim_id": "CLM_PAYMENT_IDENTITY", "subject": "payment", "predicate": "identity"},
-                  {"evidence_id": "ev_history", "claim_id": "CLM_CANDIDATE_RELATION", "subject": "payment", "predicate": "relationship_to_payable"},
-                  {"evidence_id": "ev_history", "claim_id": "CLM_PAYMENT_EFFECT", "subject": "payment", "predicate": "economic_effect"},
-                  {"evidence_id": "ev_reversal", "claim_id": "CLM_REVERSAL_TARGET", "subject": "reversal", "predicate": "reverses"},
-                  {"evidence_id": "ev_reversal", "claim_id": "CLM_REVERSAL_STATUS", "subject": "reversal", "predicate": "posting_status"},
-                  {"evidence_id": "ev_reversal", "claim_id": "CLM_REVERSAL_SCOPE", "subject": "reversal", "predicate": "scope"}
-                ],
-                "supporting_refs": [
-                  {"evidence_id": "ev_search", "claim_id": "CLM_CANDIDATE_IDENTITY", "subject": "duplicate_search", "predicate": "candidate_identity"},
-                  {"evidence_id": "ev_history", "claim_id": "CLM_PAYMENT_IDENTITY", "subject": "payment", "predicate": "identity"},
-                  {"evidence_id": "ev_history", "claim_id": "CLM_CANDIDATE_RELATION", "subject": "payment", "predicate": "relationship_to_payable"},
-                  {"evidence_id": "ev_history", "claim_id": "CLM_PAYMENT_EFFECT", "subject": "payment", "predicate": "economic_effect"},
-                  {"evidence_id": "ev_reversal", "claim_id": "CLM_REVERSAL_TARGET", "subject": "reversal", "predicate": "reverses"},
-                  {"evidence_id": "ev_reversal", "claim_id": "CLM_REVERSAL_STATUS", "subject": "reversal", "predicate": "posting_status"},
-                  {"evidence_id": "ev_reversal", "claim_id": "CLM_REVERSAL_SCOPE", "subject": "reversal", "predicate": "scope"}
-                ],
-                "opposing_refs": [],
-                "open_questions": [],
-                "confidence": "high",
-                "reason": "The candidate payment is tied to the same payable, but a posted full reversal leaves no active economic effect."
-              }]
-            }
+            "metadata": {"classification": "business_evidence", "source_filename": "reversal_record.md"},
+            "semantic_claims": [
+              {"handle": "reversal_target", "hole_id": "hole:f6a8f7d5f3bd60ac", "typed_value": "PAY-771", "source_quote": "RV-771 is posted and fully reverses PAY-771.", "source_locator": "reversal_record.md:3", "confidence": "high", "entity_handle": "candidate:1"},
+              {"handle": "reversal_status", "hole_id": "hole:f78ffde676ad68c6", "typed_value": "posted", "source_quote": "RV-771 is posted and fully reverses PAY-771.", "source_locator": "reversal_record.md:3", "confidence": "high", "entity_handle": "candidate:1"},
+              {"handle": "reversal_scope", "hole_id": "hole:801883292997f848", "typed_value": "full", "source_quote": "RV-771 is posted and fully reverses PAY-771.", "source_locator": "reversal_record.md:3", "confidence": "high", "entity_handle": "candidate:1"}
+            ],
+            "semantic_proposals": [{
+              "handle": "no_active_duplicate_proposal",
+              "hole_id": "hole:43df83f63fdb8f34",
+              "verdict": "SUPPORTED",
+              "input_handles": ["invoice_payable_identity", "search_payable_identity", "search_coverage", "search_result", "candidate_identity", "payment_identity", "payment_relationship", "payment_effect", "reversal_target", "reversal_status", "reversal_scope"],
+              "supporting_handles": ["invoice_payable_identity", "search_payable_identity", "search_coverage", "search_result", "candidate_identity", "payment_identity", "payment_relationship", "payment_effect", "reversal_target", "reversal_status", "reversal_scope"],
+              "entity_handle": "candidate:1",
+              "open_questions": [],
+              "confidence": "high",
+              "reason": "The candidate payment is tied to the same payable, but a posted full reversal leaves no active economic effect."
+            }]
           }
         ],
         "risk_flags": [],

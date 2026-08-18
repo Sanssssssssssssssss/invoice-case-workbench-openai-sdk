@@ -151,6 +151,21 @@ def test_prompt_cache_settings_only_for_openai_responses() -> None:
     assert prompt_cache_model_settings_kwargs(moonshot_settings, packet) == {}
 
 
+def test_reviewer_contract_context_is_a_known_dynamic_partition() -> None:
+    partitioned = partition_context_payload(
+        {
+            "active_requirement_contracts": [{"contract_id": "CTR_1"}],
+            "typed_holes": [{"id": "HOL_1"}, {"id": "HOL_2"}],
+            "mode": "review",
+        },
+        strict=True,
+    )
+
+    assert partitioned.dynamic_context["active_requirement_contracts"][0]["contract_id"] == "CTR_1"
+    assert [item["id"] for item in partitioned.dynamic_context["typed_holes"]] == ["HOL_1", "HOL_2"]
+    assert partitioned.volatile_tail == {"mode": "review"}
+
+
 def test_usage_cached_tokens_flow_into_partition_metadata() -> None:
     class Usage:
         def model_dump(self) -> dict[str, Any]:

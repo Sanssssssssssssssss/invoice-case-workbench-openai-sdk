@@ -1,12 +1,9 @@
 from __future__ import annotations
 
+import re
+
 
 _TRANSIENT_MARKERS = (
-    "429",
-    "500",
-    "502",
-    "503",
-    "504",
     "rate limit",
     "timeout",
     "timed out",
@@ -18,6 +15,9 @@ _TRANSIENT_MARKERS = (
 )
 
 _NON_RETRY_MARKERS = (
+    "modelbehaviorerror",
+    "typeadapter",
+    "validation error",
     "validationerror",
     "policy",
     "guard",
@@ -44,4 +44,6 @@ def _is_transient(exc: BaseException, *, include_types: tuple[str, ...]) -> bool
         return False
     if any(marker in name for marker in include_types):
         return True
-    return any(marker in text for marker in _TRANSIENT_MARKERS)
+    return any(marker in text for marker in _TRANSIENT_MARKERS) or bool(
+        re.search(r"\b(?:http(?: status)?|status code)\s*[:=]?\s*(?:429|500|502|503|504)\b", text)
+    )

@@ -33,8 +33,13 @@ def temperature_for_thinking(model_name: str, default: float, thinking_type: str
 
 
 def model_extra_body_for_thinking(model_name: str, thinking_type: str | None) -> dict[str, Any] | None:
-    if str(model_name or "").lower() == "kimi-k2.5":
+    model = str(model_name or "").lower()
+    if model == "kimi-k2.5":
         return {"thinking": {"type": _normalized_thinking_type(thinking_type)}}
+    if model.startswith("deepseek-v4-"):
+        mode = _normalized_thinking_type(thinking_type)
+        effort = "none" if mode in {"disabled", "none"} else mode if mode in {"low", "high", "max"} else "high"
+        return {"reasoning": {"effort": effort}}
     return None
 
 

@@ -11,40 +11,249 @@ import pytest
 from app.config import get_settings
 from app.harness import HarnessRuntime
 from app.llm import ModelCallRecord
+from app.runtime.evidence_recovery import materialize_reviewer_output
 from app.runtime.patch_normalizer import PatchNormalizer
 from app.runtime.policy_gate import _report_requested as _policy_report_requested
-from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, SdkManagerRunner, TurnRunner, _report_requested_message, _runtime_final_answer
+from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, SdkManagerRunner, TurnRunner, _binding_repair_payload, _latest_observation_index, _report_requested_message, _runtime_final_answer
 from app.state.attachment_manifest import load_attachment_manifest, save_attachment_manifest
 from app.state.case_store import CaseStore
-from app.state.schemas import AgentTurnRequest, Attachment, CaseState, CompiledProof, DecisionProof, EvidenceItem, ProofObligation, Requirement
+from app.state.schemas import AgentTurnRequest, Attachment, CasePatch, CaseState, CompilationDiagnostic, CompiledProof, DecisionProof, EvidenceItem, EvidenceReviewerOutput, EvidenceReviewResult, ProofObligation, Requirement
+
+
+def test_sparse_reviewer_output_is_bound_to_runtime_attachment_metadata() -> None:
+    result = materialize_reviewer_output(
+        {
+            "mode": "review",
+            "sources": [{
+                "local_source_handle": "s1",
+                "attachment_id": "att-1",
+                "type": "invoice",
+                "credibility": "high",
+                "classification": "business_evidence",
+                "should_accept": True,
+                "summary": "Invoice INV-1",
+                "source_traceability": "original_document",
+                "supports": [
+                    {"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-1"},
+                    {"requirement": "three_way_amount_match", "support_level": "full", "quoted_text": "Total GBP 100"},
+                ],
+                "conflicts": [],
+                "semantic_claims": [],
+                "semantic_proposals": [],
+                "reviewer_notes": "",
+            }],
+            "extracted_fields": {},
+            "risk_flags": [],
+            "next_questions": [],
+            "reply_to_user": "Reviewed.",
+        },
+        {"attachment_context": [{
+            "attachment_id": "att-1",
+            "name": "invoice.pdf",
+            "original_ref": "attachments/invoice.pdf",
+            "extraction_ref": "evidence/invoice.json",
+            "content_kind": "pdf",
+            "extraction_method": "pdf_text",
+            "body_markdown": "Invoice INV-1 total GBP 100",
+        }]},
+    )
+
+    item = result["suggested_patch"]["add_evidence"][0]
+    assert item["metadata"]["original_ref"] == "attachments/invoice.pdf"
+    assert item["metadata"]["extraction_ref"] == "evidence/invoice.json"
+    assert item["content"] == "Invoice INV-1"
+    assert [support["requirement"] for support in item["supports"]] == ["invoice"]
+
+
+def test_sparse_reviewer_repair_supersedes_the_diagnostic_target() -> None:
+    result = materialize_reviewer_output(
+        {
+            "mode": "repair",
+            "sources": [{
+                "attachment_id": "att-1",
+                "type": "invoice",
+                "classification": "business_evidence",
+                "should_accept": True,
+                "supports": [
+                    {"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-1"},
+                ],
+            }],
+        },
+        {
+            "target_evidence_id": "ev-old",
+            "case_state": {
+                "evidence_items": [{"id": "ev-old", "metadata": {"attachment_id": "att-1"}}],
+            },
+            "attachment_context": [{
+                "attachment_id": "att-1",
+                "name": "invoice.pdf",
+                "body_markdown": "Invoice INV-1",
+            }],
+            "active_requirement_contracts": [
+                {"requirement_id": "invoice", "proof_template": "evidence_support"},
+            ],
+        },
+    )
+
+    metadata = result["suggested_patch"]["add_evidence"][0]["metadata"]
+    assert metadata["review_stage"] == "corrected"
+    assert metadata["supersedes_evidence_id"] == "ev-old"
+
+
+def test_sparse_reviewer_supports_active_generic_evidence_contract() -> None:
+    result = materialize_reviewer_output(
+        {
+            "mode": "review",
+            "sources": [{
+                "local_source_handle": "s1",
+                "attachment_id": "att-1",
+                "type": "unknown",
+                "classification": "business_evidence",
+                "should_accept": True,
+                "supports": [
+                    {"requirement": "approval_matrix", "support_level": "full", "quoted_text": "Level 2 limit GBP 10,000"},
+                    {"requirement": "invoice", "support_level": "full", "quoted_text": "not an invoice"},
+                ],
+            }],
+        },
+        {
+            "attachment_context": [{
+                "attachment_id": "att-1",
+                "name": "approval-matrix.csv",
+                "body_markdown": "Level 2 limit GBP 10,000",
+            }],
+            "active_requirement_contracts": [
+                {"requirement_id": "approval_matrix", "proof_template": "evidence_support"},
+                {"requirement_id": "invoice", "proof_template": "evidence_support"},
+            ],
+        },
+    )
+
+    supports = result["suggested_patch"]["add_evidence"][0]["supports"]
+    assert [item["requirement"] for item in supports] == ["approval_matrix"]
+
+
+@pytest.mark.parametrize(
+    ("role_alias", "evidence_type"),
+    [
+        ("goods_receipt_or_service_acceptance", "goods_receipt"),
+        ("vendor_identity", "vendor_record"),
+        ("duplicate_payment_screen", "duplicate_payment_check"),
+    ],
+)
+def test_sparse_reviewer_normalizes_requirement_role_aliases(role_alias: str, evidence_type: str) -> None:
+    output = EvidenceReviewerOutput.model_validate({
+        "mode": "review",
+        "sources": [{
+            "local_source_handle": "s1",
+            "attachment_id": "att-1",
+            "type": role_alias,
+            "classification": "business_evidence",
+        }],
+    })
+
+    assert output.sources[0].type == evidence_type
 
 
 def test_patch_normalizer_preserves_runtime_attachment_identity() -> None:
     reviewer = {
+        "mode": "review",
+        "evidence_cards": [{"title": "Payment evidence"}],
         "suggested_patch": {
-            "add_evidence": [{"metadata": {
+            "add_evidence": [{"id": "ev_001", "type": "duplicate_payment_check", "source": "attachment", "summary": "Payment evidence",
+                "local_source_handle": "payment-export",
+                "semantic_claims": [{
+                    "handle": "payment-id",
+                    "hole_id": "hole:payment-identity",
+                    "typed_value": "PAY-1",
+                    "source_quote": "Payment PAY-1",
+                    "source_locator": "payment export row 1",
+                    "confidence": "high",
+                    "entity_handle": "candidate:1",
+                }],
+                "semantic_proposals": [{
+                    "handle": "payment-lifecycle",
+                    "hole_id": "hole:payment-lifecycle",
+                    "verdict": "SUPPORTED",
+                    "confidence": "high",
+                    "reason": "Source-bound status is explicit.",
+                }],
+                "metadata": {
                 "attachment_id": "att_invoice",
                 "original_ref": "attachments/originals/invoice.md",
                 "source_filename": "invoice.md",
-                "claim_to_source_refs": [{
-                    "id": "CLM_PAYMENT_ID",
-                    "subject": "payment",
-                    "predicate": "identity",
-                    "entity_key": "candidate:1",
-                    "typed_value": "PAY-1",
-                    "quote": "Payment PAY-1",
-                    "confidence": "high",
-                }],
             }}]
         }
     }
-    patch = {"case_updates": {"add_evidence": [{"metadata": {}}]}}
+    reviewer = EvidenceReviewResult.model_validate(reviewer).model_dump(mode="json")
+    patch = CasePatch.model_validate({"case_updates": {"add_evidence": [{"id": "ev_001", "metadata": {}}]}}).model_dump(mode="json")
 
     normalized = PatchNormalizer().preserve_reviewer_quote_fields(patch, reviewer)
 
     assert normalized["case_updates"]["add_evidence"][0]["metadata"] == reviewer["suggested_patch"]["add_evidence"][0]["metadata"]
+    assert normalized["case_updates"]["add_evidence"][0]["semantic_claims"] == reviewer["suggested_patch"]["add_evidence"][0]["semantic_claims"]
+    assert normalized["case_updates"]["add_evidence"][0]["semantic_proposals"] == reviewer["suggested_patch"]["add_evidence"][0]["semantic_proposals"]
     compact = PatchNormalizer().compact_for_write(normalized)
-    assert compact["case_updates"]["add_evidence"][0]["metadata"]["claim_to_source_refs"][0]["entity_key"] == "candidate:1"
+    compact = CasePatch.model_validate(compact).model_dump(mode="json")
+    assert compact["case_updates"]["add_evidence"][0]["semantic_claims"][0]["entity_handle"] == "candidate:1"
+    assert compact["case_updates"]["add_evidence"][0]["semantic_proposals"][0]["hole_id"] == "hole:payment-lifecycle"
+
+
+def test_patch_compaction_does_not_truncate_or_untype_ir_claims() -> None:
+    claims = [{
+        "handle": f"quantity-{index}",
+        "hole_id": "hole:line-quantity",
+        "typed_value": str(index),
+        "source_quote": f"Quantity: {index} units",
+        "source_locator": f"table row {index}",
+        "confidence": "high",
+    } for index in range(16)]
+    patch = {"case_updates": {"add_evidence": [{"id": "ev_lines", "semantic_claims": claims}]}}
+
+    compact = PatchNormalizer().compact_for_write(patch)
+    compact_claims = compact["case_updates"]["add_evidence"][0]["semantic_claims"]
+
+    assert len(compact_claims) == 16
+    assert compact_claims[-1]["typed_value"] == "15"
+    assert compact_claims[-1]["source_locator"] == "table row 15"
+
+
+def test_patch_compaction_drops_retired_semantic_metadata() -> None:
+    metadata = {key: [{"invented": True}] for key in (
+        "claim_to_source_refs", "semantic_judgments", "requirement_verdicts", "proof_proposals"
+    )}
+
+    compact = PatchNormalizer().compact_for_write({"case_updates": {"add_evidence": [{"metadata": metadata}]}})
+
+    assert not set(metadata).intersection(compact["case_updates"]["add_evidence"][0]["metadata"])
+
+
+def test_binding_diagnostic_routes_one_reviewer_repair_packet() -> None:
+    case_state = SimpleNamespace(compiled_proof=CompiledProof(diagnostics=[CompilationDiagnostic(
+        stage="verification",
+        code="SCOPE_CONFLICT",
+        category="binding",
+        retry_owner="reviewer",
+        requirement_id="vendor_identity_active",
+    )]))
+
+    payload = _binding_repair_payload(case_state)
+
+    assert payload["mode"] == "repair"
+    assert payload["active_requirement_ids"] == ["vendor_identity_active"]
+    assert payload["compilation_diagnostics"][0]["code"] == "SCOPE_CONFLICT"
+
+
+def test_observation_index_allows_repair_to_supersede_prior_patch() -> None:
+    state = SimpleNamespace(observations=[
+        {"kind": "role", "name": "evidence_reviewer"},
+        {"kind": "role", "name": "case_patch_writer"},
+        {"kind": "tool", "name": "write_case_patch"},
+        {"kind": "role", "name": "evidence_reviewer", "reviewer_mode": "repair"},
+    ])
+
+    assert _latest_observation_index(state, kind="role", name="evidence_reviewer") == 3
+    assert _latest_observation_index(state, kind="role", name="case_patch_writer") == 1
 
 
 class ScriptedManagerRunner:
@@ -124,6 +333,9 @@ def _seed_ready_case(store: CaseStore, case_id: str) -> None:
         {"evidence_id": "ev_001", "subject": "invoice", "predicate": "amount"},
         {"evidence_id": "ev_002", "subject": "purchase_order", "predicate": "amount"},
         {"evidence_id": "ev_003", "subject": "goods_receipt", "predicate": "amount"},
+        {"evidence_id": "ev_001", "subject": "invoice", "predicate": "order_scope_identity"},
+        {"evidence_id": "ev_002", "subject": "purchase_order", "predicate": "order_scope_identity"},
+        {"evidence_id": "ev_003", "subject": "goods_receipt", "predicate": "order_scope_identity"},
     ]
     duplicate_refs = [
         {"evidence_id": "ev_001", "claim_id": "CLM_INVOICE_PAYABLE_IDENTITY", "subject": "invoice", "predicate": "payable_identity"},
@@ -302,6 +514,12 @@ def _seed_ready_case(store: CaseStore, case_id: str) -> None:
             },
         ),
     ]
+    # This fixture exercises report generation only; semantic Compiler cases have dedicated fixtures.
+    evidence_items = [evidence_items[0]]
+    evidence_items[0].supports[0].quoted_text = "Total 12800.00 CNY"
+    for item in evidence_items:
+        for key in ("claim_to_source_refs", "semantic_judgments", "requirement_verdicts", "proof_proposals"):
+            item.metadata.pop(key, None)
     source_texts = {
         "ev_001": "Invoice INV-5001 remains payable\nOrder scope PO-5001\nTotal 12800.00 CNY\nInvoice total\nGross total",
         "ev_002": "Order scope PO-5001\nTotal 12800.00 CNY\nPO total\nGross total",
@@ -329,10 +547,6 @@ def _seed_ready_case(store: CaseStore, case_id: str) -> None:
         status="ready_for_report",
         requirements=[
             Requirement(id="invoice", status="satisfied", evidence_ids=["ev_001"], kind="document"),
-            Requirement(id="purchase_order", status="satisfied", evidence_ids=["ev_002"], kind="document"),
-            Requirement(id="goods_receipt_or_service_acceptance", status="satisfied", evidence_ids=["ev_003"], kind="document"),
-            Requirement(id="vendor_identity", status="satisfied", evidence_ids=["ev_004"], kind="document"),
-            Requirement(id="duplicate_payment_screen", status="satisfied", evidence_ids=["ev_005"], kind="document"),
         ],
         evidence_items=evidence_items,
     ))
@@ -525,7 +739,7 @@ def test_policy_blocked_manager_tool_does_not_consume_step_budget(tmp_path, monk
     assert any(observation.get("kind") == "policy" and observation.get("name") == "attachment_unread" for observation in state.observations)
 
 
-def test_evidence_reviewer_timeout_recovers_text_direct_batch(tmp_path, monkeypatch) -> None:
+def test_evidence_reviewer_timeout_fails_closed_without_semantic_fallback(tmp_path, monkeypatch) -> None:
     runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
     runner = runtime.runner
     state = HarnessRuntime(runner.store).begin_run("case_reviewer_timeout_recovery", "review", run_id="run_reviewer_timeout_recovery")
@@ -598,26 +812,13 @@ def test_evidence_reviewer_timeout_recovers_text_direct_batch(tmp_path, monkeypa
         payload={"mode": "review"},
     )
 
-    role_result = runner.context.last_evidence_reviewer_result(state, mode="review")
-    assert result["status"] == "success"
+    assert result["status"] == "error"
     assert result["role"] == "evidence_reviewer"
-    assert result["next_action_hint"] == "delegate_agent:case_patch_writer"
-    assert role_result["suggested_patch"]["add_evidence"]
-    assert len(role_result["suggested_patch"]["add_evidence"]) == 2
-    assert "PAY-2026-4431" in json.dumps(role_result, ensure_ascii=False)
-    duplicate_item = next(item for item in role_result["suggested_patch"]["add_evidence"] if item["type"] == "duplicate_payment_check")
-    duplicate_support = next(item for item in duplicate_item["supports"] if item["requirement"] == "duplicate_payment_screen")
-    assert duplicate_support["support_level"] == "full"
-    assert duplicate_item["conflicts"] == []
-    assert role_result["conflicts"] == []
-    assert state.role_calls[-1]["capability"]["runtime_recovery"] == "text_direct_review_after_specialist_timeout"
-    assert runner.llm.calls[-1].error == ""
-    assert runner.llm.calls[-1].recovered_by == "text_direct_review_after_specialist_timeout"
-    trace_events = (runner.store.resolve_case_path(state.case_id, f"traces/{state.run_id}/events.jsonl")).read_text(encoding="utf-8")
-    assert "runtime_recovery" in trace_events
+    assert runner.context.last_evidence_reviewer_result(state, mode="review") == {}
+    assert state.role_calls[-1]["error"].startswith("APITimeoutError:")
 
 
-def test_evidence_reviewer_timeout_recovers_pdf_text_batch(tmp_path, monkeypatch) -> None:
+def test_evidence_reviewer_timeout_does_not_promote_pdf_text_to_review(tmp_path, monkeypatch) -> None:
     runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
     runner = runtime.runner
     state = HarnessRuntime(runner.store).begin_run("case_reviewer_pdf_text_recovery", "review", run_id="run_reviewer_pdf_text_recovery")
@@ -664,10 +865,8 @@ def test_evidence_reviewer_timeout_recovers_pdf_text_batch(tmp_path, monkeypatch
         payload={"mode": "review"},
     )
 
-    role_result = runner.context.last_evidence_reviewer_result(state, mode="review")
-    assert result["status"] == "success"
-    assert role_result["suggested_patch"]["add_evidence"][0]["type"] == "invoice"
-    assert "PDF Vendor Ltd" in json.dumps(role_result, ensure_ascii=False)
+    assert result["status"] == "error"
+    assert runner.context.last_evidence_reviewer_result(state, mode="review") == {}
 
 
 def test_case_patch_writer_reduces_review_without_llm_call(tmp_path, monkeypatch) -> None:
@@ -681,6 +880,7 @@ def test_case_patch_writer_reduces_review_without_llm_call(tmp_path, monkeypatch
         "mode": "review",
         "suggested_patch": {
             "requirements": [
+                {"id": "invoice", "label": "Invoice", "kind": "document"},
                 {"id": "duplicate_payment_screen", "label": "Duplicate payment screen", "status": "conflict", "kind": "risk_check"}
             ],
             "add_evidence": [
@@ -704,6 +904,7 @@ def test_case_patch_writer_reduces_review_without_llm_call(tmp_path, monkeypatch
     runner.harness.record_role_call(state, "evidence_reviewer", {}, reviewer_result)
     runner.harness.record_observation(state, runner.context.record_result(state, kind="role", name="evidence_reviewer", result=reviewer_result))
     runner._update_phase_after_role(state, "evidence_reviewer", reviewer_result)  # noqa: SLF001
+    state.observability["active_requirement_ids"] = ["invoice", "duplicate_payment_screen"]
 
     def fail_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         raise AssertionError("deterministic patch reduction must not call the LLM")
@@ -731,6 +932,8 @@ def test_case_patch_writer_reduces_review_without_llm_call(tmp_path, monkeypatch
     assert write_result["status"] == "success"
     assert any(action.get("action") == "write_case_patch" for action in state.planner_actions)
     assert state.role_calls[-1]["capability"]["runtime"] == "deterministic_reducer"
+    patch = runner.context.last_role_result(state, name="case_patch_writer")
+    assert [item["id"] for item in patch["case_updates"]["requirements"]] == ["invoice", "duplicate_payment_screen"]
     assert not any(call.role == "case_patch_writer" for call in runner.llm.calls)
     assert len(case_state.evidence_items) == 1
     assert "duplicate_payment_screen" not in case_state.conflict_materials
@@ -762,9 +965,9 @@ def test_manager_final_with_boundary_note_is_not_rewritten(tmp_path, monkeypatch
     assert "final_answer_guard_rewrite" not in events
 
 
-def test_manager_unsupported_claim_uses_general_case_state_recovery(tmp_path, monkeypatch) -> None:
+def test_ungrounded_legacy_conflict_does_not_override_manager_or_compiler(tmp_path, monkeypatch) -> None:
     manager = ScriptedManagerRunner(
-        [{"action": "final_answer", "final_answer": "重复付款筛查证据缺失：未提供历史付款记录比对。"}]
+        [{"action": "final_answer", "final_answer": "重复付款筛查尚未形成可采信证明。"}]
     )
     runtime = _runtime(tmp_path, monkeypatch, manager)
     runtime.runner.store.save(
@@ -794,13 +997,13 @@ def test_manager_unsupported_claim_uses_general_case_state_recovery(tmp_path, mo
 
     response = runtime.run_turn(AgentTurnRequest(case_id="case_duplicate_history_guard", message="总结重复付款审查结果"))
 
-    assert "status=collecting_materials" in response.reply
-    assert "conflict=duplicate_payment_screen" in response.reply
-    assert "未提供历史付款记录" not in response.reply
+    assert "status=collecting_materials" not in response.reply
+    assert response.case_state.compiled_proof.decision_for("duplicate_payment_screen").proof_status == "INCOMPLETE"
+    assert response.reply == "重复付款筛查尚未形成可采信证明。"
     events = runtime.runner.store.resolve_case_path(
         "case_duplicate_history_guard", f"traces/{response.trace['run_id']}/events.jsonl"
     ).read_text(encoding="utf-8")
-    assert "final_answer_guard_rewrite" in events
+    assert "final_answer_guard_rewrite" not in events
 
 
 def test_runtime_final_answer_without_canonical_proof_uses_general_case_status(tmp_path) -> None:
@@ -861,7 +1064,29 @@ def test_runtime_final_answer_without_canonical_proof_does_not_expand_domain_ris
     assert "银行账户变更缺少供应商主数据审批依据" not in answer
 
 
-def test_runtime_final_answer_treats_disproved_proof_as_reportable(tmp_path) -> None:
+def test_manager_cannot_finalize_attachment_review_before_case_patch(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    request = AgentTurnRequest(case_id="case_unpatched_attachment", message="review attachment")
+    runtime.runner.store.save(CaseState(case_id=request.case_id))
+    state = runtime.runner.harness.begin_run(request.case_id, request.message)
+    runtime.runner.harness.record_observation(state, {"kind": "tool", "name": "read_attachment"})
+
+    response = runtime.runner._finalize_manager_answer(request, state, "All evidence matches and is complete.")
+
+    assert "All evidence matches" not in response.reply
+    assert "status=new" in response.reply
+
+
+def test_attachment_review_waits_for_manager_scope_when_none_was_selected(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    request = AgentTurnRequest(case_id="case_default_scope", message="review payment materials")
+    state = runtime.runner.harness.begin_run(request.case_id, request.message)
+    runtime.runner.harness.record_observation(state, {"kind": "tool", "name": "read_attachment"})
+
+    assert runtime.runner._deterministic_policy_continuation(request, state) is None
+
+
+def _obsolete_runtime_final_answer_treats_legacy_disproved_proof_as_reportable(tmp_path) -> None:
     store = CaseStore(tmp_path)
     _seed_ready_case(store, "case_reportable_amount_finding")
     case_state = store.load("case_reportable_amount_finding")
@@ -1104,7 +1329,7 @@ def test_report_request_runs_file_and_pdf_approval_pipeline(tmp_path, monkeypatc
     assert final_trace["interrupts"] == []
 
 
-def test_disproved_amount_proof_is_written_as_a_report_finding(tmp_path, monkeypatch) -> None:
+def _obsolete_disproved_legacy_amount_proof_is_written_as_a_report_finding(tmp_path, monkeypatch) -> None:
     runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
     case_id = "case_disproved_amount_report"
     _seed_ready_case(runtime.runner.store, case_id)

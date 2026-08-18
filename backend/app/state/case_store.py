@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -11,23 +12,31 @@ from app.config import get_settings
 from app.domain.invoice_requirements import (
     AP_LITE_REQUIREMENTS,
     AP_THREE_WAY_REQUIREMENTS,
-    COMPILER_DERIVED_REQUIREMENTS,
+    AUTO_DERIVED_COMPILER_REQUIREMENTS,
+    COMPILER_AUTHORITY_REQUIREMENTS,
     DYNAMIC_SUPPORT_REQUIREMENTS,
     INVOICE_FIELD_REQUIREMENTS,
     INVOICE_REQUIRED_FIELD_REQUIREMENTS,
-    REVIEWER_DERIVED_REQUIREMENTS,
     default_requirement_required,
     is_known_requirement,
     requirement_kind,
     requirement_label,
     requirement_premises,
-    requirement_unconfigured_policy_values,
+    requirement_proof_template,
 )
 from app.domain.invoice_proof_compiler import compile_evidence_proof
-from app.domain.risk_rules import resolved_conflict_note
 from app.state.attachment_manifest import link_manifest_evidence, trusted_sources_for_evidence
 from app.state.persistence import PERSISTENCE_LOCK, append_text, atomic_write_text
-from app.state.schemas import CasePatch, CaseState, ConflictRecord, EvidenceItem, Requirement, new_case_state
+from app.state.schemas import (
+    CasePatch,
+    CaseState,
+    CompilationDiagnostic,
+    CompiledProof,
+    ConflictRecord,
+    EvidenceItem,
+    Requirement,
+    new_case_state,
+)
 
 
 SAFE_CASE_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
@@ -47,6 +56,11 @@ SUPPORT_REQUIREMENT_ID_ALIASES = {
     "vendor_master": "vendor_identity",
     "duplicate_payment_check": "duplicate_payment_screen",
     "duplicate_check": "duplicate_payment_screen",
+}
+LEGACY_STORED_REQUIREMENT_ALIASES = {
+    "goods_receipt": "goods_receipt_or_service_acceptance",
+    "vendor_record": "vendor_identity",
+    "duplicate_payment_check": "duplicate_payment_screen",
 }
 OPTIONAL_DYNAMIC_SUPPORT_REQUIREMENTS = DYNAMIC_SUPPORT_REQUIREMENTS
 
@@ -113,13 +127,12 @@ class CaseStore:
         migrated = _migrate_case_state_data(data)
         state = CaseState.model_validate(migrated)
         metadata_changed = _normalize_existing_evidence_metadata(state)
-        supports_changed = _backfill_existing_invoice_supports(state)
         cleanup_changed = _drop_legacy_page_edge_warnings(state)
         before_refresh = state.model_dump(mode="json")
         self._refresh_requirements(state)
         refresh_changed = state.model_dump(mode="json") != before_refresh
         buckets_changed = _refresh_material_buckets(state)
-        if migrated != data or metadata_changed or supports_changed or cleanup_changed or refresh_changed or buckets_changed:
+        if migrated != data or metadata_changed or cleanup_changed or refresh_changed or buckets_changed:
             self.save(state)
         return state
 
@@ -173,7 +186,7 @@ class CaseStore:
         existing = {item.id: item for item in state.requirements}
         for raw_id in updates.get("remove_requirements") or []:
             requirement_id = _normalize_requirement_id(raw_id)
-            if requirement_id in COMPILER_DERIVED_REQUIREMENTS:
+            if requirement_id in AUTO_DERIVED_COMPILER_REQUIREMENTS:
                 continue
             if not requirement_id or requirement_id not in existing:
                 continue
@@ -189,7 +202,7 @@ class CaseStore:
                 continue
             if not is_known_requirement(requirement_id):
                 raise ValueError(f"Unknown requirement id: {requirement_id}")
-            if requirement_id in COMPILER_DERIVED_REQUIREMENTS:
+            if requirement_id in AUTO_DERIVED_COMPILER_REQUIREMENTS:
                 continue
             if requirement_id in existing:
                 current = existing[requirement_id]
@@ -212,10 +225,6 @@ class CaseStore:
     def _ensure_requirements_for_evidence(self, state: CaseState, raw_items: list[Any]) -> None:
         existing = {item.id for item in state.requirements}
         support_ids = _support_requirement_ids(raw_items, existing=existing)
-        derived_support_ids = False
-        if not support_ids:
-            support_ids = _support_requirement_ids_from_extracted_fields(raw_items)
-            derived_support_ids = bool(support_ids)
         if not support_ids:
             return
         unknown_catalog_ids = sorted(requirement_id for requirement_id in support_ids if not is_known_requirement(requirement_id))
@@ -225,30 +234,12 @@ class CaseStore:
             state.requirements = []
             existing = set()
         if existing:
-            if _should_expand_ap_lite_requirements(state, existing, raw_items, support_ids):
-                for requirement_id in AP_LITE_REQUIREMENTS:
-                    if requirement_id in existing:
-                        continue
-                    state.requirements.append(
-                        Requirement(
-                            id=requirement_id,
-                            label=requirement_label(requirement_id),
-                            kind=requirement_kind(requirement_id),
-                            required=default_requirement_required(requirement_id),
-                        )
-                    )
-                    existing.add(requirement_id)
             unknown = sorted(requirement_id for requirement_id in support_ids if requirement_id not in existing)
             if unknown:
                 added = self._add_optional_dynamic_requirements(state, unknown)
                 existing.update(added)
                 unknown = [requirement_id for requirement_id in unknown if requirement_id not in added]
             if unknown:
-                if derived_support_ids:
-                    support_ids = [requirement_id for requirement_id in support_ids if requirement_id in existing]
-                    if support_ids:
-                        return
-                    return
                 raise ValueError(f"Evidence support references unknown requirements: {unknown}")
             return
         requirement_ids = _initial_requirement_ids_from_evidence(raw_items, support_ids)
@@ -272,19 +263,34 @@ class CaseStore:
     def _append_evidence_updates(self, state: CaseState, raw_items: list[Any]) -> None:
         self._ensure_requirements_for_evidence(state, raw_items)
         used_ids = {item.id for item in state.evidence_items}
+        packet_hashes = {
+            str(item.metadata.get("_review_packet_hash") or "")
+            for item in state.evidence_items
+            if isinstance(item.metadata, dict)
+        }
         for raw in raw_items:
             data = _normalize_evidence_data(raw)
             _normalize_evidence_supports_for_state(state, data)
             _normalize_evidence_metadata(data)
-            _backfill_supports_from_extracted_fields(state, data)
+            hash_payload = {key: value for key, value in data.items() if key != "created_at"}
+            packet_hash = hashlib.sha256(
+                json.dumps(hash_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()
+            if packet_hash in packet_hashes:
+                continue
+            data.setdefault("metadata", {})["_review_packet_hash"] = packet_hash
             evidence_id = str(data.get("id") or self.next_evidence_id(state)).strip()
             if evidence_id in used_ids:
+                existing = next(item for item in state.evidence_items if item.id == evidence_id)
+                if str(existing.metadata.get("_review_packet_hash") or "") == packet_hash:
+                    continue
                 raise ValueError(f"Duplicate evidence id: {evidence_id}")
             data["id"] = evidence_id
             if not data.get("created_at"):
                 data["created_at"] = utc_now()
             state.evidence_items.append(EvidenceItem.model_validate(data))
             used_ids.add(evidence_id)
+            packet_hashes.add(packet_hash)
 
     def next_evidence_id(self, state: CaseState) -> str:
         used_ids = {item.id for item in state.evidence_items}
@@ -330,174 +336,96 @@ class CaseStore:
         trusted_evidence_ids = set(trusted_sources)
         _apply_supersession_metadata(state, trusted_evidence_ids)
         state.requirements = [
-            item for item in state.requirements if item.id not in COMPILER_DERIVED_REQUIREMENTS
+            item for item in state.requirements if item.id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
         ]
         active_evidence = _active_evidence_items(state, trusted_evidence_ids)
+        active_ids = {item.id for item in state.requirements}
+        compiler_inputs = {
+            "active_requirement_ids": active_ids,
+            "trusted_sources": {
+                item.id: trusted_sources[item.id]
+                for item in active_evidence
+                if item.id in trusted_sources
+            },
+        }
         compiled = compile_evidence_proof(
             active_evidence,
             state.verification_records,
-            active_requirement_ids={_canonical_ap_requirement_id(item.id) for item in state.requirements},
-            trusted_sources={item.id: trusted_sources[item.id] for item in active_evidence if item.id in trusted_sources},
+            **compiler_inputs,
         )
         state.compiled_proof = compiled if compiled.decisions else None
-        compiled_requirements = {
-            decision.requirement_id for decision in compiled.decisions
-        }
-        existing_requirements = {item.id for item in state.requirements}
-        for requirement_id in sorted(compiled_requirements - existing_requirements):
-            state.requirements.append(
-                Requirement(
-                    id=requirement_id,
-                    label=requirement_label(requirement_id),
-                    kind="cross_check",
-                    required=True,
+        _ensure_compiled_requirements(state, compiled)
+        reportable = _project_compiled_requirements(state, compiled)
+        _refresh_workflow_status(state, reportable)
+
+
+def _ensure_compiled_requirements(state: CaseState, compiled: CompiledProof) -> None:
+    existing = {item.id for item in state.requirements}
+    for requirement_id in sorted({item.requirement_id for item in compiled.decisions} - existing):
+        state.requirements.append(
+            Requirement(
+                id=requirement_id,
+                label=requirement_label(requirement_id),
+                kind=requirement_kind(requirement_id),
+                required=default_requirement_required(requirement_id),
+            )
+        )
+
+
+def _project_compiled_requirements(state: CaseState, compiled: CompiledProof) -> set[str]:
+    decisions: dict[str, list[Any]] = {}
+    for decision in compiled.decisions:
+        decisions.setdefault(decision.requirement_id, []).append(decision)
+    checks = {(item.program_id, item.id): item for item in compiled.checks}
+    templates = {item.requirement_id: item.proof_template for item in compiled.contracts}
+    reportable: set[str] = set()
+    for requirement in state.requirements:
+        candidates = decisions.get(requirement.id, [])
+        decision = candidates[0] if len(candidates) == 1 else None
+        root = checks.get((decision.program_id, decision.root_check_id)) if decision else None
+        if root is None:
+            requirement.status = "missing"
+            requirement.evidence_ids = []
+            compiled.diagnostics.append(
+                CompilationDiagnostic(
+                    stage="verification",
+                    code="ROOT_PROOF_MISSING",
+                    candidate_id=requirement.id,
+                    details={"decision_count": len(candidates)},
                 )
             )
-        evidence_by_requirement: dict[str, list[EvidenceItem]] = {}
-        for item in active_evidence:
-            if _is_advisory_memory_evidence(item):
-                continue
-            for support in item.supports:
-                if support.requirement and support.requirement not in COMPILER_DERIVED_REQUIREMENTS:
-                    evidence_by_requirement.setdefault(support.requirement, []).append(item)
-        for req in state.requirements:
-            if req.id in compiled_requirements and state.compiled_proof:
-                decision = next(item for item in state.compiled_proof.decisions if item.requirement_id == req.id)
-                final = next(
-                    item
-                    for item in state.compiled_proof.checks
-                    if item.program_id == decision.program_id and item.id == decision.root_check_id
-                )
-                claim_evidence = {
-                    claim.id: claim.evidence_id for claim in state.compiled_proof.claims
-                }
-                req.evidence_ids = _unique_strings(
-                    [claim_evidence[claim_id] for claim_id in final.input_claim_ids if claim_id in claim_evidence]
-                )
-                req.kind = "cross_check"
-                req.required = True
-                req.status = {
-                    "PROVED": "satisfied",
-                    "DISPROVED": "conflict",
-                    "INCOMPLETE": "weak" if req.evidence_ids else "missing",
-                    "NOT_APPLICABLE": "weak",
-                }[final.status]
-                continue
-            if req.id in REVIEWER_DERIVED_REQUIREMENTS:
-                continue
-            related = _unique_evidence(evidence_by_requirement.get(req.id, []))
-            ids = [item.id for item in related]
-            legacy_ids = list(req.evidence_ids or [])
-            req.evidence_ids = ids
-            if not ids:
-                req.status = "submitted" if legacy_ids else "missing"
-                if legacy_ids:
-                    req.evidence_ids = legacy_ids
-                continue
-            req.status = _requirement_status(related, req.id)
-        reportable_reviewer_conflicts = _project_reviewer_requirements(
-            state,
-            active_evidence,
-            trusted_evidence_ids,
-        )
-        buckets = _material_buckets(state)
-        state.missing_materials = buckets["missing_materials"]
-        state.weak_materials = buckets["weak_materials"]
-        state.conflict_materials = buckets["conflict_materials"]
-        state.satisfied_materials = buckets["satisfied_materials"]
-        reportable_proof_conflicts = {
-            decision.requirement_id
-            for decision in state.compiled_proof.decisions
-            if decision.proof_status == "DISPROVED" and decision.outcome == "EVIDENCE_SUFFICIENT_FOR_REPORT"
-        } if state.compiled_proof else set()
-        reportable_conflicts = reportable_proof_conflicts | reportable_reviewer_conflicts
-        blocking_conflicts = [item for item in state.conflict_materials if item not in reportable_conflicts]
-        blockers = state.missing_materials + state.weak_materials + blocking_conflicts
-        if blockers:
-            state.status = "collecting_materials" if state.evidence_items else "new"
-        elif state.evidence_items and state.requirements:
-            state.status = "ready_for_report"
-        elif state.evidence_items:
-            state.status = "collecting_materials"
-
-
-def _project_reviewer_requirements(
-    state: CaseState,
-    active_evidence: list[EvidenceItem],
-    trusted_evidence_ids: set[str],
-) -> set[str]:
-    requirements = {item.id: item for item in state.requirements}
-    acceptable = {
-        item.id: item
-        for item in active_evidence
-        if item.id in trusted_evidence_ids
-        and item.review_result.get("should_accept") is True
-        and str(item.metadata.get("classification") or "business_evidence") == "business_evidence"
-        and not _is_advisory_memory_evidence(item)
-    }
-    envelopes: dict[str, list[dict[str, Any]]] = {}
-    for carrier in acceptable.values():
-        for raw in carrier.metadata.get("requirement_verdicts") or []:
-            if not isinstance(raw, dict):
-                continue
-            requirement_id = _normalize_requirement_id(raw.get("requirement_id"))
-            if requirement_id in REVIEWER_DERIVED_REQUIREMENTS:
-                envelopes.setdefault(requirement_id, []).append(raw)
-
-    reportable: set[str] = set()
-    for requirement_id in REVIEWER_DERIVED_REQUIREMENTS:
-        requirement = requirements.get(requirement_id)
-        if requirement is None:
             continue
-        premises = [requirements.get(item) for item in requirement_premises(requirement_id)]
-        if any(item is None or item.status not in {"accepted", "satisfied"} for item in premises):
-            requirement.status = "weak"
-            requirement.evidence_ids = []
-            continue
-        if requirement_unconfigured_policy_values(requirement_id):
-            requirement.status = "weak"
-            requirement.evidence_ids = []
-            continue
-
-        valid: list[tuple[str, list[str]]] = []
-        for raw in envelopes.get(requirement_id, []):
-            verdict = str(raw.get("verdict") or "").upper()
-            raw_evidence_ids = raw.get("evidence_ids")
-            open_questions = raw.get("open_questions")
-            evidence_ids = _unique_strings(raw_evidence_ids) if isinstance(raw_evidence_ids, list) else []
-            if (
-                verdict not in {"SUPPORTED", "REFUTED", "UNKNOWN"}
-                or str(raw.get("confidence") or "").lower() != "high"
-                or not isinstance(open_questions, list)
-                or open_questions
-                or not str(raw.get("reason") or "").strip()
-                or not evidence_ids
-                or any(item not in acceptable for item in evidence_ids)
-                or any(
-                    not any(
-                        any(
-                            support.requirement == premise.id and support.support_level == "full"
-                            for support in acceptable[evidence_id].supports
-                        )
-                        for evidence_id in evidence_ids
-                    )
-                    for premise in premises
-                    if premise is not None
-                )
-            ):
-                continue
-            valid.append((verdict, evidence_ids))
-
-        verdicts = {verdict for verdict, _ in valid}
-        requirement.evidence_ids = _unique_strings([item for _, ids in valid for item in ids])
-        if verdicts == {"SUPPORTED"}:
-            requirement.status = "satisfied"
-        elif verdicts == {"REFUTED"}:
-            requirement.status = "conflict"
-            reportable.add(requirement_id)
-        else:
-            requirement.status = "weak"
+        requirement.evidence_ids = _unique_strings(root.input_evidence_ids)
+        template = templates.get(requirement.id, requirement_proof_template(requirement.id))
+        requirement.status = {
+            "PROVED": "accepted" if template == "evidence_support" else "satisfied",
+            "DISPROVED": "conflict",
+            "INCOMPLETE": "weak" if requirement.evidence_ids else "missing",
+            "NOT_APPLICABLE": "weak",
+        }[root.status]
+        if (
+            template != "evidence_support"
+            and decision.proof_status == "DISPROVED"
+            and decision.outcome == "EVIDENCE_SUFFICIENT_FOR_REPORT"
+        ):
+            reportable.add(requirement.id)
     return reportable
+
+
+def _refresh_workflow_status(state: CaseState, reportable_conflicts: set[str]) -> None:
+    buckets = _material_buckets(state)
+    state.missing_materials = buckets["missing_materials"]
+    state.weak_materials = buckets["weak_materials"]
+    state.conflict_materials = buckets["conflict_materials"]
+    state.satisfied_materials = buckets["satisfied_materials"]
+    blocking_conflicts = [item for item in state.conflict_materials if item not in reportable_conflicts]
+    blockers = state.missing_materials + state.weak_materials + blocking_conflicts
+    if blockers:
+        state.status = "collecting_materials" if state.evidence_items else "new"
+    elif state.evidence_items and state.requirements:
+        state.status = "ready_for_report"
+    elif state.evidence_items:
+        state.status = "collecting_materials"
 
 
 def _unique_strings(values: list[Any]) -> list[str]:
@@ -512,8 +440,6 @@ def _unique_strings(values: list[Any]) -> list[str]:
             seen.add(text)
             result.append(text)
     return result
-
-
 def _unique_conflicts(values: Any) -> list[ConflictRecord]:
     seen: set[str] = set()
     result: list[ConflictRecord] = []
@@ -524,7 +450,6 @@ def _unique_conflicts(values: Any) -> list[ConflictRecord]:
             seen.add(key)
             result.append(conflict)
     return result
-
 
 def _compact_jsonish_dict(value: Any, *, max_chars: int) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -688,9 +613,6 @@ def _normalize_evidence_data(raw: Any) -> dict[str, Any]:
         )
     if _is_prompt_injection_evidence(data):
         _quarantine_prompt_injection_evidence(data)
-    _backfill_conflict_requirement_support(data)
-    if not _is_cross_case_evidence(data) and not _is_prompt_injection_evidence(data):
-        _backfill_accepted_core_document_support(data)
     return data
 
 
@@ -932,7 +854,7 @@ def _normalize_evidence_supports_for_state(state: CaseState, data: dict[str, Any
         if not (
             isinstance(support, dict)
             and _normalize_requirement_id(support.get("requirement"))
-            in COMPILER_DERIVED_REQUIREMENTS | REVIEWER_DERIVED_REQUIREMENTS
+            in COMPILER_AUTHORITY_REQUIREMENTS
         )
     ]
     data["supports"] = supports
@@ -952,100 +874,6 @@ def _support_requirement_id_for_existing(value: Any, existing: set[str]) -> str:
     return requirement_id
 
 
-def _backfill_conflict_requirement_support(data: dict[str, Any]) -> None:
-    conflicts = list(data.get("conflicts") or [])
-    if not conflicts:
-        return
-    supports = _normalize_support_records(data.get("supports"))
-    existing = {str(item.get("requirement") or "") for item in supports}
-    changed = False
-    for conflict in conflicts:
-        requirement_id = _conflict_requirement_id(conflict)
-        if not requirement_id or requirement_id in existing:
-            continue
-        supports.append(
-            {
-                "requirement": requirement_id,
-                "support_level": "partial",
-                "quoted_text": _conflict_quote(conflict) or _support_quote(data),
-            }
-        )
-        existing.add(requirement_id)
-        changed = True
-    if changed:
-        data["supports"] = supports
-
-
-def _conflict_requirement_id(conflict: Any) -> str:
-    data = _conflict_data(conflict)
-    if isinstance(data, dict):
-        requirement_id = _safe_requirement_id(data.get("requirement"))
-        if requirement_id:
-            return requirement_id
-        affected = data.get("affected_fields") or data.get("affected_requirements") or []
-        for item in affected if isinstance(affected, list) else [affected]:
-            requirement_id = _safe_requirement_id(item)
-            if requirement_id:
-                return requirement_id
-    return ""
-
-
-def _conflict_quote(conflict: Any) -> str:
-    data = _conflict_data(conflict)
-    if isinstance(data, dict):
-        for key in ("quoted_text", "description", "details", "required_follow_up"):
-            text = str(data.get(key) or "").strip()
-            if text:
-                return text[:600]
-    return _jsonish_text(conflict)[:600]
-
-
-def _conflict_data(conflict: Any) -> Any:
-    if isinstance(conflict, dict):
-        return conflict
-    if isinstance(conflict, str):
-        try:
-            return json.loads(conflict)
-        except json.JSONDecodeError:
-            return conflict
-    if hasattr(conflict, "model_dump"):
-        return conflict.model_dump(exclude_none=True)
-    return conflict
-
-
-def _safe_requirement_id(value: Any) -> str:
-    try:
-        return _normalize_requirement_id(value)
-    except ValueError:
-        return ""
-
-
-def _backfill_accepted_core_document_support(data: dict[str, Any]) -> None:
-    review = data.get("review_result") if isinstance(data.get("review_result"), dict) else {}
-    if not bool(review.get("should_accept")):
-        return
-    requirement_id = _core_requirement_for_evidence(data)
-    if not requirement_id:
-        return
-    if any(
-        _conflict_mentions_requirement(conflict, requirement_id) and not resolved_conflict_note(conflict)
-        for conflict in data.get("conflicts") or []
-    ):
-        return
-    supports = _normalize_support_records(data.get("supports"))
-    quote = _support_quote(data)
-    for support in supports:
-        if support.get("requirement") != requirement_id:
-            continue
-        support["support_level"] = "full"
-        if not support.get("quoted_text"):
-            support["quoted_text"] = quote
-        data["supports"] = supports
-        return
-    supports.append({"requirement": requirement_id, "support_level": "full", "quoted_text": quote})
-    data["supports"] = supports
-
-
 def _core_requirement_for_evidence(data: dict[str, Any]) -> str:
     review = data.get("review_result") if isinstance(data.get("review_result"), dict) else {}
     evidence_type = str(data.get("type") or review.get("evidence_type") or "").strip()
@@ -1057,15 +885,6 @@ def _core_requirement_for_evidence(data: dict[str, Any]) -> str:
         "vendor_record": "vendor_identity",
         "duplicate_payment_check": "duplicate_payment_screen",
     }.get(evidence_type, "")
-
-
-def _support_quote(data: dict[str, Any]) -> str:
-    review = data.get("review_result") if isinstance(data.get("review_result"), dict) else {}
-    for value in (data.get("summary"), review.get("reason"), data.get("content")):
-        text = str(value or "").strip()
-        if text:
-            return text[:600]
-    return "Accepted core document evidence."
 
 
 def _support_requirement_ids(raw_items: list[Any], *, existing: set[str] | None = None) -> list[str]:
@@ -1080,67 +899,9 @@ def _support_requirement_ids(raw_items: list[Any], *, existing: set[str] | None 
                 if existing_ids
                 else _normalize_requirement_id(support_data.get("requirement"))
             )
-            if requirement_id and requirement_id not in COMPILER_DERIVED_REQUIREMENTS:
+            if requirement_id and requirement_id not in COMPILER_AUTHORITY_REQUIREMENTS:
                 result.append(requirement_id)
     return _unique_strings(result)
-
-
-def _support_requirement_ids_from_extracted_fields(raw_items: list[Any]) -> list[str]:
-    result: list[str] = []
-    for raw in raw_items:
-        data = raw.model_dump(exclude_none=True) if hasattr(raw, "model_dump") else dict(raw or {})
-        if not _is_invoice_business_evidence(data):
-            continue
-        fields = _metadata_extracted_fields(data)
-        for requirement_id in INVOICE_FIELD_REQUIREMENTS:
-            if _field_support_source(requirement_id, fields, _metadata_dict(data)):
-                result.append(requirement_id)
-    return _unique_strings(result)
-
-
-def _backfill_supports_from_extracted_fields(state: CaseState, data: dict[str, Any]) -> None:
-    if not _is_invoice_business_evidence(data):
-        return
-    fields = _metadata_extracted_fields(data)
-    if not fields:
-        return
-    supports: list[Any] = list(data.get("supports") or [])
-    existing_supports = {
-        _normalize_requirement_id(support.get("requirement")): support
-        for support in supports
-        if isinstance(support, dict)
-    }
-    metadata = _metadata_dict(data)
-    for requirement in state.requirements:
-        source = _field_support_source(requirement.id, fields, metadata)
-        if not source:
-            continue
-        quote, level = source
-        existing = existing_supports.get(requirement.id)
-        if existing:
-            if level == "full" and existing.get("support_level") in {"none", "partial"}:
-                existing["support_level"] = "full"
-                existing["quoted_text"] = existing.get("quoted_text") or quote
-            continue
-        supports.append({"requirement": requirement.id, "support_level": level, "quoted_text": quote})
-    if supports:
-        data["supports"] = supports
-
-
-def _backfill_existing_invoice_supports(state: CaseState) -> bool:
-    changed = False
-    for index, item in enumerate(list(state.evidence_items)):
-        data = item.model_dump()
-        before = data.get("supports") or []
-        _backfill_supports_from_extracted_fields(state, data)
-        _backfill_conflict_requirement_support(data)
-        if not _is_cross_case_evidence(data) and not _is_prompt_injection_evidence(data):
-            _backfill_accepted_core_document_support(data)
-        after = data.get("supports") or []
-        if after != before:
-            state.evidence_items[index] = EvidenceItem.model_validate(data)
-            changed = True
-    return changed
 
 
 def _drop_legacy_page_edge_warnings(state: CaseState) -> bool:
@@ -1202,150 +963,9 @@ def _drop_legacy_page_edge_warnings(state: CaseState) -> bool:
     return changed
 
 
-def _is_invoice_business_evidence(data: dict[str, Any]) -> bool:
-    metadata = _metadata_dict(data)
-    classification = str(metadata.get("classification") or "").strip().lower()
-    blocked = {
-        "prompt_injection",
-        "quarantined",
-        "irrelevant",
-        "wrong_workflow",
-        "process_only",
-        "policy_guidance",
-        "cross_case_sample",
-        "mixed_case_document",
-        "out_of_scope_reference",
-    }
-    if classification in blocked or _is_cross_case_evidence(data):
-        return False
-    review_result = data.get("review_result") if isinstance(data.get("review_result"), dict) else {}
-    evidence_type = str(data.get("type") or data.get("evidence_type") or review_result.get("evidence_type") or "")
-    return evidence_type.strip() == "invoice"
-
-
 def _metadata_dict(data: dict[str, Any]) -> dict[str, Any]:
     metadata = data.get("metadata")
     return metadata if isinstance(metadata, dict) else {}
-
-
-def _metadata_extracted_fields(data: dict[str, Any]) -> dict[str, Any]:
-    metadata = _metadata_dict(data)
-    fields = metadata.get("extracted_fields")
-    result = dict(fields) if isinstance(fields, dict) else {}
-    inventory = metadata.get("field_inventory")
-    if isinstance(inventory, list):
-        for row in inventory:
-            if not isinstance(row, dict):
-                continue
-            field_id = str(row.get("field") or "").strip()
-            if not field_id:
-                continue
-            current = result.get(field_id)
-            result[field_id] = {**row, **current} if isinstance(current, dict) else row
-    return result
-
-
-def _field_support_source(requirement_id: str, fields: dict[str, Any], metadata: dict[str, Any]) -> tuple[str, str] | None:
-    aliases = {
-        "invoice_number": ("invoice_number", "document_id"),
-        "supplier": ("supplier",),
-        "buyer": ("buyer",),
-        "invoice_date": ("invoice_date", "date"),
-        "amount_total": ("amount_total", "amount"),
-        "line_items_product_title": ("line_items_product_title", "product_title", "title"),
-        "signature_or_authorized_signatory": (
-            "visual_signature_mark",
-            "signature_or_authorized_signatory",
-            "signature_block",
-            "signatory_label",
-        ),
-    }
-    if requirement_id == "invoice":
-        return _invoice_document_support(fields, metadata)
-    if requirement_id == "currency_tax":
-        return _currency_tax_support(fields)
-    if requirement_id == "source_traceability":
-        original_ref = str(metadata.get("original_ref") or "").strip()
-        if original_ref:
-            return f"original_ref: {original_ref}", "full"
-        preview_paths = metadata.get("preview_paths")
-        if isinstance(preview_paths, list) and preview_paths:
-            return f"preview_path: {preview_paths[0]}", "partial"
-        return None
-    if requirement_id == "template_match":
-        comparison = metadata.get("profile_comparison")
-        if isinstance(comparison, dict):
-            profile = str(comparison.get("matched_profile") or comparison.get("profile_id") or "").strip()
-            if profile:
-                return f"matched_profile: {profile}", "partial"
-        return None
-    for alias in aliases.get(requirement_id, (requirement_id,)):
-        support = _single_field_support(fields.get(alias))
-        if support:
-            return support
-    return None
-
-
-def _invoice_document_support(fields: dict[str, Any], metadata: dict[str, Any]) -> tuple[str, str] | None:
-    parts: list[str] = []
-    full_parts = 0
-    for key in ("invoice_number", "supplier", "buyer", "invoice_date", "amount_total"):
-        support = _single_field_support(fields.get(key))
-        if not support:
-            continue
-        quote, level = support
-        parts.append(f"{key}: {quote}")
-        if level == "full":
-            full_parts += 1
-    if len(parts) < 3:
-        return None
-    has_source = bool(str(metadata.get("original_ref") or "").strip())
-    level = "full" if has_source and len(parts) >= 5 and full_parts >= 4 else "partial"
-    return "; ".join(parts)[:500], level
-
-
-def _currency_tax_support(fields: dict[str, Any]) -> tuple[str, str] | None:
-    parts: list[str] = []
-    has_currency = False
-    has_tax = False
-    full_parts = 0
-    for key in ("currency_tax", "currency", "tax_amount", "tax_details"):
-        support = _single_field_support(fields.get(key))
-        if not support:
-            continue
-        quote, level = support
-        parts.append(quote)
-        full_parts += 1 if level == "full" else 0
-        if key in {"currency_tax", "currency"}:
-            has_currency = True
-        if key in {"currency_tax", "tax_amount", "tax_details"}:
-            has_tax = True
-    if not parts:
-        return None
-    level = "full" if has_currency and has_tax and full_parts == len(parts) else "partial"
-    return "; ".join(_unique_strings(parts))[:500], level
-
-
-def _single_field_support(value: Any) -> tuple[str, str] | None:
-    if isinstance(value, dict):
-        status = str(value.get("status") or "present").strip().lower()
-        if status not in {"present", "accepted", "satisfied"}:
-            return None
-        quote = str(value.get("source_quote") or value.get("value") or "").strip()
-        if not quote:
-            return None
-        confidence = str(value.get("confidence") or "").strip().lower()
-        has_locator = bool(str(value.get("locator") or value.get("source_locator") or "").strip())
-        has_crop = bool(str(value.get("crop_path") or "").strip())
-        if confidence == "low":
-            level = "partial"
-        else:
-            level = "full" if confidence == "high" or (has_locator and has_crop) else "partial"
-        return quote[:500], level
-    text = str(value or "").strip()
-    if text:
-        return text[:500], "partial"
-    return None
 
 
 def _initial_requirement_ids_from_evidence(raw_items: list[Any], support_ids: list[str]) -> list[str]:
@@ -1366,24 +986,6 @@ def _initial_requirement_ids_from_evidence(raw_items: list[Any], support_ids: li
 def _has_ap_chain_evidence(raw_items: list[Any], support_ids: list[str]) -> bool:
     ap_ids = _ap_requirement_ids(raw_items, support_ids)
     return "invoice" in ap_ids and len(ap_ids) >= 3
-
-
-def _should_expand_ap_lite_requirements(
-    state: CaseState,
-    existing: set[str],
-    raw_items: list[Any],
-    support_ids: list[str],
-) -> bool:
-    if not existing:
-        return False
-    ap_ids = _ap_requirement_ids(raw_items, support_ids, state=state)
-    if "invoice" not in ap_ids or len(ap_ids) < 3:
-        return False
-    return bool(
-        (existing & set(INVOICE_FIELD_REQUIREMENTS))
-        or (existing & set(AP_LITE_REQUIREMENTS))
-        or (existing & set(AP_THREE_WAY_REQUIREMENTS))
-    )
 
 
 def _ap_requirement_ids(
@@ -1444,6 +1046,8 @@ def _canonicalize_requirement_definitions(state: CaseState) -> None:
 def _ensure_requirement_premises(state: CaseState) -> None:
     existing = {item.id: item for item in state.requirements}
     for conclusion in list(state.requirements):
+        if conclusion.id in AUTO_DERIVED_COMPILER_REQUIREMENTS:
+            continue
         for requirement_id in requirement_premises(conclusion.id):
             current = existing.get(requirement_id)
             if current is not None:
@@ -1556,7 +1160,23 @@ def _migrate_case_state_data(data: Any) -> Any:
     migrated = dict(data)
     requirements = migrated.get("requirements")
     if isinstance(requirements, list):
-        migrated["requirements"] = [_migrate_requirement_data(item) for item in requirements]
+        merged: dict[str, dict[str, Any]] = {}
+        for item in requirements:
+            row = _migrate_requirement_data(item)
+            if not isinstance(row, dict):
+                continue
+            requirement_id = str(row.get("id") or "").strip()
+            current = merged.setdefault(requirement_id, row)
+            if current is not row:
+                current["required"] = bool(current.get("required", True) or row.get("required", True))
+                current["evidence_ids"] = _unique_strings([
+                    *(current.get("evidence_ids") or []),
+                    *(row.get("evidence_ids") or []),
+                ])
+        migrated["requirements"] = list(merged.values())
+    evidence_items = migrated.get("evidence_items")
+    if isinstance(evidence_items, list):
+        migrated["evidence_items"] = [_migrate_evidence_data(item) for item in evidence_items]
     return migrated
 
 
@@ -1564,6 +1184,8 @@ def _migrate_requirement_data(data: Any) -> Any:
     if not isinstance(data, dict):
         return data
     migrated = dict(data)
+    requirement_id = str(migrated.get("id") or "").strip()
+    migrated["id"] = LEGACY_STORED_REQUIREMENT_ALIASES.get(requirement_id, requirement_id)
     status = str(migrated.get("status") or "").strip()
     legacy_status_map = {
         "partial": "submitted",
@@ -1572,6 +1194,39 @@ def _migrate_requirement_data(data: Any) -> Any:
     }
     if status in legacy_status_map:
         migrated["status"] = legacy_status_map[status]
+    return migrated
+
+
+def _migrate_evidence_data(data: Any) -> Any:
+    if not isinstance(data, dict):
+        return data
+    migrated = dict(data)
+    supports = []
+    for item in migrated.get("supports") or []:
+        if not isinstance(item, dict):
+            supports.append(item)
+            continue
+        row = dict(item)
+        requirement_id = str(row.get("requirement") or "").strip()
+        row["requirement"] = LEGACY_STORED_REQUIREMENT_ALIASES.get(requirement_id, requirement_id)
+        supports.append(row)
+    migrated["supports"] = supports
+    conflicts = []
+    for item in migrated.get("conflicts") or []:
+        if not isinstance(item, dict):
+            conflicts.append(item)
+            continue
+        row = dict(item)
+        requirement_id = str(row.get("requirement") or "").strip()
+        if requirement_id:
+            row["requirement"] = LEGACY_STORED_REQUIREMENT_ALIASES.get(requirement_id, requirement_id)
+        if isinstance(row.get("affected_fields"), list):
+            row["affected_fields"] = [
+                LEGACY_STORED_REQUIREMENT_ALIASES.get(str(value), str(value))
+                for value in row["affected_fields"]
+            ]
+        conflicts.append(row)
+    migrated["conflicts"] = conflicts
     return migrated
 
 
@@ -1584,72 +1239,3 @@ def _unique_evidence(items: list[EvidenceItem]) -> list[EvidenceItem]:
         seen.add(item.id)
         result.append(item)
     return result
-
-
-def _requirement_status(items: list[EvidenceItem], requirement_id: str) -> str:
-    reviewed = [item for item in items if item.review_result]
-    if reviewed and all(not bool(item.review_result.get("should_accept", True)) for item in reviewed):
-        return "rejected"
-    if not reviewed:
-        return "submitted"
-    accepted = [item for item in reviewed if bool(item.review_result.get("should_accept", False))]
-    if not accepted:
-        return "rejected"
-    if any(_item_has_requirement_conflict(item, requirement_id) for item in accepted):
-        return "conflict"
-    full_support_items = [
-        item
-        for item in accepted
-        for support in item.supports
-        if support.requirement == requirement_id and support.support_level == "full"
-    ]
-    if full_support_items:
-        if any(item.credibility != "low" for item in full_support_items):
-            return "satisfied"
-        return "weak"
-    if any(_item_has_requirement_conflict(item, requirement_id) for item in items):
-        return "conflict"
-    full_support = any(
-        support.requirement == requirement_id and support.support_level == "full"
-        for item in accepted
-        for support in item.supports
-    )
-    weak = any(item.credibility == "low" for item in accepted)
-    partial = any(
-        support.requirement == requirement_id and support.support_level in {"none", "partial"}
-        for item in accepted
-        for support in item.supports
-    )
-    if full_support and not weak and not partial:
-        return "satisfied"
-    if weak or partial:
-        return "weak"
-    return "accepted"
-
-
-def _item_has_requirement_conflict(item: EvidenceItem, requirement_id: str) -> bool:
-    conflicts = list(getattr(item, "conflicts", []) or [])
-    if not conflicts:
-        return False
-    return any(
-        _conflict_mentions_requirement(conflict, requirement_id) and not resolved_conflict_note(conflict)
-        for conflict in conflicts
-    )
-
-
-def _conflict_mentions_requirement(conflict: Any, requirement_id: str) -> bool:
-    data = _conflict_data(conflict)
-    expected = SUPPORT_REQUIREMENT_ID_ALIASES.get(requirement_id, requirement_id)
-    if isinstance(data, dict):
-        explicit = _safe_requirement_id(data.get("requirement"))
-        if explicit:
-            return SUPPORT_REQUIREMENT_ID_ALIASES.get(explicit, explicit) == expected
-        affected = data.get("affected_requirements") or data.get("affected_fields") or []
-        affected_ids = {
-            SUPPORT_REQUIREMENT_ID_ALIASES.get(item, item)
-            for value in (affected if isinstance(affected, list) else [affected])
-            if (item := _safe_requirement_id(value))
-        }
-        if affected_ids:
-            return expected in affected_ids
-    return False

@@ -1,7 +1,7 @@
 {
   "id": "clean_complete_report_001",
-  "name": "Complete invoice case with approved report",
-  "description": "End-to-end scripted scenario covering attachment read, evidence reviewer, case patch writer, report writer, report file write, PDF render, and approval resume.",
+  "name": "Complete source pack held by missing formal policy",
+  "description": "A report request with complete source evidence must remain on hold while the formal duplicate-search window policy is unconfigured.",
   "tags": ["attachments", "evidence_reviewer", "case_patch_writer", "report_writer", "approval", "report"],
   "user_script": [
     {
@@ -53,12 +53,18 @@
               "input_refs": [
                 {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
                 {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
-                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"}
+                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
+                {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "order_scope_identity"},
+                {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "order_scope_identity"},
+                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "order_scope_identity"}
               ],
               "supporting_refs": [
                 {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
                 {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
-                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"}
+                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
+                {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "order_scope_identity"},
+                {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "order_scope_identity"},
+                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "order_scope_identity"}
               ],
               "opposing_refs": [],
               "open_questions": [],

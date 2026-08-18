@@ -3,17 +3,29 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.domain.invoice_requirements import AP_LITE_REQUIREMENTS, requirement_label
+from app.domain.invoice_requirements import INVOICE_FIELD_REQUIREMENTS
 from app.state.schemas import EvidenceReviewResult
 
 
-TEXT_DIRECT_METHODS = {"text_direct", "markdown_direct", "csv_direct", "pdf_text"}
 EVIDENCE_REQUIREMENTS = {
-    "invoice": ("invoice",),
-    "purchase_order": ("purchase_order",),
-    "goods_receipt": ("goods_receipt", "goods_receipt_or_service_acceptance"),
-    "vendor_record": ("vendor_record", "vendor_identity"),
-    "duplicate_payment_check": ("duplicate_payment_check", "duplicate_payment_screen"),
+    "invoice": ("invoice", *INVOICE_FIELD_REQUIREMENTS),
+    "purchase_order": ("purchase_order", "po_number", "po_ref", "po_amount", "po_date"),
+    "goods_receipt": (
+        "goods_receipt",
+        "goods_receipt_or_service_acceptance",
+        "grn_number",
+        "received_quantity",
+        "inspection_status",
+    ),
+    "vendor_record": ("vendor_record", "vendor_identity", "vendor_status", "vendor_id", "bank_last_four"),
+    "duplicate_payment_check": (
+        "duplicate_payment_check",
+        "duplicate_payment_screen",
+        "duplicate_invoice_found",
+        "prior_payment_found",
+        "clearing_document",
+        "payment_reference",
+    ),
 }
 CANONICAL_REQUIREMENTS = {
     "goods_receipt": "goods_receipt_or_service_acceptance",
@@ -22,169 +34,168 @@ CANONICAL_REQUIREMENTS = {
 }
 
 
-def recover_text_direct_review(attachment_batch: dict[str, Any], *, error: Exception | None = None) -> dict[str, Any] | None:
-    attachments = _successful_text_attachments(attachment_batch)
-    if not attachments:
-        return None
+def materialize_reviewer_output(output: dict[str, Any], role_input: dict[str, Any]) -> dict[str, Any]:
+    """Bind sparse model output to Runtime-owned attachment and patch fields."""
+
+    if "suggested_patch" in output:  # compatibility for stored tests and old traces
+        return EvidenceReviewResult.model_validate(output).model_dump(mode="json")
+    mode = str(output.get("mode") or "review")
+    if mode == "extract":
+        return EvidenceReviewResult(
+            mode="extract",
+            extracted_fields=output.get("extracted_fields") or {},
+            reply_to_user=str(output.get("reply_to_user") or ""),
+        ).model_dump(mode="json")
+
+    attachments = {
+        str(item.get("attachment_id") or ""): item
+        for item in role_input.get("attachment_context") or []
+        if isinstance(item, dict) and item.get("attachment_id")
+    }
+    target_evidence_id, target_attachment_id = _repair_target(role_input) if mode == "repair" else ("", "")
+    repair_applied = False
     items: list[dict[str, Any]] = []
-    for attachment in attachments:
-        item = _evidence_item(attachment)
-        if item:
-            items.append(item)
-            continue
-        if _is_non_business_context_attachment(attachment):
-            continue
-        return None
-    if not items:
-        return None
-    duplicate = _duplicate_facts(attachments)
-    risk_flags = _risk_flags(duplicate)
-    for item in items:
-        if item["type"] == "duplicate_payment_check" and risk_flags:
-            item["reviewer_notes"] = _duplicate_finding_text(duplicate)
-            item["review_result"]["risk_flags"] = risk_flags
-            item["metadata"]["duplicate_payment_facts"] = duplicate
-    patch = {
-        "summary": _case_summary(items, duplicate),
-        "case_profile": _case_profile(items, duplicate),
-        "requirements": _requirements_for_items(items),
-        "add_evidence": items,
-        "risk_flags": risk_flags,
-        "next_questions": _next_questions(duplicate),
-        "next_action_hint": "final_answer",
-        "reply_brief": _reply_brief(duplicate),
-        "evidence_cards": [_evidence_card(item) for item in items],
-    }
-    result = {
-        "mode": "review",
-        "source_doc_id": "attachment_batch",
-        "evidence_type": "process_log",
-        "credibility": "high",
-        "extracted_fields": _merged_extracted_fields(items, duplicate),
-        "source_traceability": "system_export",
-        "support_level": "full",
-        "risk_flags": risk_flags,
-        "should_accept": True,
-        "reason": _reason(error),
-        "supports": _top_level_supports(items),
-        "conflicts": [],
-        "evidence_cards": patch["evidence_cards"],
-        "suggested_patch": patch,
-        "reply_to_user": _reply_brief(duplicate),
-    }
-    return EvidenceReviewResult.model_validate(result).model_dump(mode="json")
-
-
-def _successful_text_attachments(attachment_batch: dict[str, Any]) -> list[dict[str, Any]]:
-    if not isinstance(attachment_batch, dict):
-        return []
-    attachments = [item for item in attachment_batch.get("attachments") or [] if isinstance(item, dict)]
-    if not attachments:
-        return []
-    result: list[dict[str, Any]] = []
-    for item in attachments:
-        if item.get("status") != "success":
-            return []
-        content_kind = str(item.get("content_kind") or "").lower()
-        methods = {str(value or "").lower() for value in item.get("extraction_methods") or []}
-        method = str(item.get("extraction_method") or "").lower()
-        if content_kind != "text" and method not in TEXT_DIRECT_METHODS and not methods.intersection(TEXT_DIRECT_METHODS):
-            return []
-        if not str(item.get("body_markdown") or item.get("content") or "").strip():
-            return []
-        result.append(item)
-    return result
-
-
-def _evidence_item(item: dict[str, Any]) -> dict[str, Any]:
-    evidence_type = _evidence_type(item)
-    if evidence_type not in EVIDENCE_REQUIREMENTS:
-        return {}
-    text = _item_text(item)
-    extracted_fields = _extracted_fields(item, text)
-    supports = [
-        {
-            "requirement": requirement,
-            "support_level": "full",
-            "quoted_text": _quote_for_requirement(requirement, item, text),
+    seen: set[str] = set()
+    for source in output.get("sources") or []:
+        attachment_id = str(source.get("attachment_id") or "")
+        if not attachment_id or attachment_id in seen or attachment_id not in attachments:
+            raise ValueError(f"Reviewer source is not uniquely bound to attachment_context: {attachment_id or '(missing)'}")
+        seen.add(attachment_id)
+        attachment = attachments[attachment_id]
+        text = _item_text(attachment)
+        classification = str(source.get("classification") or "")
+        should_accept = bool(source.get("should_accept")) and classification == "business_evidence"
+        evidence_type = str(source.get("type") or "unknown")
+        direct_supports = _direct_supports(
+            evidence_type,
+            source.get("supports") or [],
+            role_input.get("active_requirement_contracts") or [],
+        )
+        quotes = _source_quotes({**source, "supports": direct_supports})
+        metadata = {
+            "classification": classification,
+            "attachment_id": attachment_id,
+            "original_ref": attachment.get("original_ref", ""),
+            "extraction_ref": attachment.get("extraction_ref", ""),
+            "source_filename": attachment.get("name", ""),
+            "content_kind": attachment.get("content_kind", ""),
+            "extraction_method": attachment.get("extraction_method", ""),
+            "extracted_fields": _extracted_fields(attachment, text),
         }
-        for requirement in EVIDENCE_REQUIREMENTS[evidence_type]
-    ]
-    return {
-        "type": evidence_type,
-        "reference": str(item.get("original_ref") or item.get("name") or ""),
-        "credibility": "high",
-        "summary": _summary_for_item(evidence_type, item, text),
-        "source": "attachment",
-        "content": _compact_text(text, 420),
-        "review_result": {
-            "mode": "review",
-            "should_accept": True,
-            "source_traceability": "system_export",
-            "runtime_recovery": "text_direct_review_after_specialist_timeout",
-        },
-        "supports": supports,
-        "conflicts": [],
-        "quoted_text": _quoted_text(item, text),
-        "reviewer_notes": "Recovered by runtime text-direct review after specialist timeout.",
-        "metadata": {
-            "attachment_id": item.get("attachment_id", ""),
-            "name": item.get("name", ""),
-            "original_ref": item.get("original_ref", ""),
-            "extraction_ref": item.get("extraction_ref", ""),
-            "content_kind": item.get("content_kind", ""),
-            "extraction_method": item.get("extraction_method", ""),
-            "runtime_recovery": "text_direct_review_after_specialist_timeout",
-            "review_stage": "reviewed",
-            "source_traceability": "system_export",
-            "requirement_aliases": list(EVIDENCE_REQUIREMENTS[evidence_type]),
-            "extracted_fields": extracted_fields,
-            "field_inventory": _compact_field_inventory(item.get("field_inventory")),
-            "quality_notes": list(item.get("quality_notes") or [])[:6],
-        },
+        if (
+            target_evidence_id
+            and not repair_applied
+            and (not target_attachment_id or target_attachment_id == attachment_id)
+        ):
+            metadata.update(
+                review_stage="corrected",
+                supersedes_evidence_id=target_evidence_id,
+            )
+            repair_applied = True
+        items.append(
+            {
+                "type": evidence_type,
+                "reference": str(attachment.get("original_ref") or attachment.get("name") or ""),
+                "credibility": source.get("credibility") or "medium",
+                "summary": _compact_text(source.get("summary") or text, 260),
+                "source": "attachment",
+                "content": _compact_text(" ".join(quotes) or text, 420),
+                "review_result": {
+                    "mode": mode,
+                    "should_accept": should_accept,
+                    "source_traceability": source.get("source_traceability") or "unclear",
+                },
+                "supports": direct_supports,
+                "conflicts": source.get("conflicts") or [],
+                "quoted_text": quotes,
+                "reviewer_notes": _compact_text(source.get("reviewer_notes") or "", 420),
+                "metadata": metadata,
+                "local_source_handle": source.get("local_source_handle") or f"s{len(items) + 1}",
+                "semantic_claims": source.get("semantic_claims") or [],
+                "semantic_proposals": source.get("semantic_proposals") or [],
+            }
+        )
+    patch = {
+        "add_evidence": items,
+        "risk_flags": list(output.get("risk_flags") or []),
+        "next_questions": list(output.get("next_questions") or []),
+        "reply_brief": str(output.get("reply_to_user") or ""),
     }
+    return EvidenceReviewResult(
+        mode=mode,
+        source_doc_id="attachment_batch",
+        evidence_type="unknown",
+        credibility="high" if items and all(item["credibility"] == "high" for item in items) else "medium",
+        source_traceability="unclear",
+        risk_flags=patch["risk_flags"],
+        should_accept=any(item["review_result"]["should_accept"] for item in items),
+        suggested_patch=patch,
+        reply_to_user=patch["reply_brief"],
+    ).model_dump(mode="json")
 
 
-def _evidence_type(item: dict[str, Any]) -> str:
-    text = _item_text(item)
-    match = re.search(r"Evidence\s+type:\s*([a-z_]+)", text, flags=re.I)
-    if match:
-        return _normalize_evidence_type(match.group(1))
-    name = str(item.get("name") or "").lower()
-    if "purchase_order" in name or "po-" in name:
-        return "purchase_order"
-    if "goods_receipt" in name or "grn-" in name:
-        return "goods_receipt"
-    if "vendor" in name:
-        return "vendor_record"
-    if "duplicate" in name:
-        return "duplicate_payment_check"
-    if "invoice" in name or "inv-" in name:
-        return "invoice"
-    return "unknown"
+def _repair_target(role_input: dict[str, Any]) -> tuple[str, str]:
+    evidence_id = str(role_input.get("target_evidence_id") or "").strip()
+    attachment_id = str(role_input.get("target_attachment_id") or "").strip()
+    rows = (role_input.get("case_state") or {}).get("evidence_items") or []
+    if evidence_id and not attachment_id:
+        matches = [
+            str((item.get("metadata") or {}).get("attachment_id") or "")
+            for item in rows
+            if isinstance(item, dict) and str(item.get("id") or "") == evidence_id
+        ]
+        attachment_id = matches[0] if len(matches) == 1 else ""
+    if attachment_id and not evidence_id:
+        matches = [
+            str(item.get("id") or "")
+            for item in rows
+            if isinstance(item, dict)
+            and str((item.get("metadata") or {}).get("attachment_id") or "") == attachment_id
+        ]
+        evidence_id = matches[0] if len(matches) == 1 else ""
+    return evidence_id, attachment_id
 
 
-def _is_non_business_context_attachment(item: dict[str, Any]) -> bool:
-    name = str(item.get("name") or "").strip().lower()
-    if name in {"readme.md", "readme.txt", "instructions.md", "notes.md"}:
-        return True
-    text = _item_text(item).lower()
-    if name.startswith("readme") and "expected high-level result" in text:
-        return True
-    if "sample" in text and "suggested desktop test" in text:
-        return True
-    return False
+def _source_quotes(source: dict[str, Any]) -> list[str]:
+    values = [
+        *(str(item.get("quoted_text") or "") for item in source.get("supports") or [] if isinstance(item, dict)),
+        *(str(item.get("source_quote") or "") for item in source.get("semantic_claims") or [] if isinstance(item, dict)),
+    ]
+    return [_compact_text(value, 360) for value in dict.fromkeys(values) if value.strip()]
 
 
-def _normalize_evidence_type(value: str) -> str:
-    value = str(value or "").strip().lower()
-    if value in {"goods_receipt_or_service_acceptance", "goods_receipt_note"}:
-        return "goods_receipt"
-    if value == "vendor_identity":
-        return "vendor_record"
-    if value == "duplicate_payment_screen":
-        return "duplicate_payment_check"
-    return value
+def _direct_supports(
+    evidence_type: str,
+    supports: list[dict[str, Any]],
+    active_contracts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    typed = {
+        CANONICAL_REQUIREMENTS.get(requirement, requirement)
+        for requirement in EVIDENCE_REQUIREMENTS.get(evidence_type, ())
+    }
+    active = {
+        str(item.get("requirement_id") or "")
+        for item in active_contracts
+        if isinstance(item, dict) and item.get("proof_template") == "evidence_support"
+    }
+    known_typed = {
+        CANONICAL_REQUIREMENTS.get(requirement, requirement)
+        for requirements in EVIDENCE_REQUIREMENTS.values()
+        for requirement in requirements
+    }
+    allowed = (active - known_typed) if evidence_type == "unknown" else typed
+    if active:
+        allowed &= active
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for support in supports:
+        raw_requirement = str(support.get("requirement") or "")
+        requirement = CANONICAL_REQUIREMENTS.get(raw_requirement, raw_requirement)
+        if requirement not in allowed or requirement in seen:
+            continue
+        seen.add(requirement)
+        result.append({**support, "requirement": requirement})
+    return result
 
 
 def _item_text(item: dict[str, Any]) -> str:
@@ -257,201 +268,6 @@ def _line_value(text: str, labels: tuple[str, ...]) -> str:
 def _currency(text: str) -> str:
     match = re.search(r"\b(CNY|USD|EUR|GBP|JPY|RMB)\b", text, flags=re.I)
     return match.group(1).upper() if match else ""
-
-
-def _duplicate_facts(attachments: list[dict[str, Any]]) -> dict[str, Any]:
-    text = " ".join(_item_text(item) for item in attachments)
-    prior_payment = _first(r"\bPAY-\d{4}-\d+\b", text)
-    clearing_doc = _first(r"\bCLR-\d{4}-\d+\b", text)
-    duplicate_yes = bool(re.search(r"Duplicate invoice found:\s*Yes|Prior payment found:\s*Yes|Potential duplicate", text, re.I))
-    if not duplicate_yes and not prior_payment and not clearing_doc:
-        return {}
-    return {
-        "duplicate_payment_found": duplicate_yes or bool(prior_payment),
-        "prior_payment_doc": prior_payment,
-        "clearing_doc": clearing_doc,
-        "source_quote": _duplicate_quote(text),
-    }
-
-
-def _first(pattern: str, text: str) -> str:
-    match = re.search(pattern, text, flags=re.I)
-    return match.group(0) if match else ""
-
-
-def _duplicate_quote(text: str) -> str:
-    match = re.search(r"Duplicate invoice found:[^.]+?(?:reconciled\.|$)", text, flags=re.I)
-    if match:
-        return _compact_text(match.group(0), 360)
-    return _compact_text(text, 360)
-
-
-def _risk_flags(duplicate: dict[str, Any]) -> list[str]:
-    if not duplicate:
-        return []
-    refs = " ".join(str(duplicate.get(key) or "") for key in ("prior_payment_doc", "clearing_doc")).strip()
-    return [f"duplicate_payment_risk: prior payment or clearing record found {refs}".strip()]
-
-
-def _duplicate_finding_text(duplicate: dict[str, Any]) -> str:
-    prior = duplicate.get("prior_payment_doc") or "prior payment"
-    clearing = duplicate.get("clearing_doc") or "clearing document"
-    return f"Duplicate-payment search source accepted; historical payment {prior} and clearing document {clearing} require lifecycle reconciliation."
-
-
-def _requirements_for_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    ids: list[str] = []
-    for item in items:
-        for support in item.get("supports") or []:
-            requirement = str(support.get("requirement") or "")
-            requirement = CANONICAL_REQUIREMENTS.get(requirement, requirement)
-            if requirement and requirement not in ids:
-                ids.append(requirement)
-    ordered = [item for item in AP_LITE_REQUIREMENTS if item in ids]
-    ordered.extend(item for item in ids if item not in ordered)
-    return [
-        {
-            "id": requirement_id,
-            "label": requirement_label(requirement_id),
-            "kind": _requirement_kind(requirement_id),
-            "required": True,
-        }
-        for requirement_id in ordered
-    ]
-
-
-def _requirement_kind(requirement_id: str) -> str:
-    if requirement_id in {"duplicate_payment_check", "duplicate_payment_screen"}:
-        return "risk_check"
-    return "document"
-
-
-def _top_level_supports(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    supports: list[dict[str, Any]] = []
-    for item in items:
-        supports.extend(item.get("supports") or [])
-    return supports[:12]
-
-
-def _merged_extracted_fields(items: list[dict[str, Any]], duplicate: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    merged: dict[str, dict[str, Any]] = {}
-    for item in items:
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        fields = metadata.get("extracted_fields") if isinstance(metadata.get("extracted_fields"), dict) else {}
-        for key, value in fields.items():
-            merged.setdefault(key, value)
-    if duplicate.get("prior_payment_doc"):
-        merged["prior_payment_doc"] = _field(duplicate["prior_payment_doc"], str(duplicate.get("source_quote") or ""), "duplicate_payment_check", "high")
-    if duplicate.get("clearing_doc"):
-        merged["clearing_doc"] = _field(duplicate["clearing_doc"], str(duplicate.get("source_quote") or ""), "duplicate_payment_check", "high")
-    return merged
-
-
-def _case_summary(items: list[dict[str, Any]], duplicate: dict[str, Any]) -> str:
-    invoice = _find_field(items, "invoice_number")
-    supplier = _find_field(items, "supplier")
-    amount = _find_field(items, "amount_total")
-    parts = ["Text-direct evidence reviewed"]
-    if invoice:
-        parts.append(f"invoice {invoice}")
-    if supplier:
-        parts.append(f"supplier {supplier}")
-    if amount:
-        parts.append(f"amount {amount}")
-    if duplicate:
-        parts.append("duplicate payment risk found")
-    return "; ".join(parts)
-
-
-def _case_profile(items: list[dict[str, Any]], duplicate: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "invoice_number": _find_field(items, "invoice_number"),
-        "supplier": _find_field(items, "supplier"),
-        "amount_total": _find_field(items, "amount_total"),
-        "po_ref": _find_field(items, "po_ref"),
-        "grn_ref": _find_field(items, "grn_ref"),
-        "duplicate_payment": duplicate,
-        "runtime_recovery": "text_direct_review_after_specialist_timeout",
-    }
-
-
-def _find_field(items: list[dict[str, Any]], field: str) -> Any:
-    for item in items:
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        fields = metadata.get("extracted_fields") if isinstance(metadata.get("extracted_fields"), dict) else {}
-        if field in fields:
-            return fields[field].get("value")
-    return ""
-
-
-def _next_questions(duplicate: dict[str, Any]) -> list[str]:
-    if not duplicate:
-        return []
-    return ["Please reconcile the historical payment and clearing document before treating the invoice as clear."]
-
-
-def _reply_brief(duplicate: dict[str, Any]) -> str:
-    if not duplicate:
-        return "Materials were reviewed from text-direct attachments and saved to the case state."
-    prior = duplicate.get("prior_payment_doc") or "a prior payment document"
-    clearing = duplicate.get("clearing_doc") or "a clearing document"
-    return f"Duplicate payment risk found: historical payment {prior} and clearing document {clearing} require reconciliation."
-
-
-def _reason(error: Exception | None) -> str:
-    if not error:
-        return "Runtime text-direct recovery produced a schema-valid review."
-    return f"Runtime text-direct recovery produced a schema-valid review after {type(error).__name__}: {error}"
-
-
-def _summary_for_item(evidence_type: str, item: dict[str, Any], text: str) -> str:
-    name = str(item.get("name") or evidence_type)
-    return f"{evidence_type} evidence from {name}: {_compact_text(text, 220)}"
-
-
-def _quote_for_requirement(requirement: str, item: dict[str, Any], text: str) -> str:
-    if requirement in {"duplicate_payment_check", "duplicate_payment_screen"}:
-        duplicate = _duplicate_facts([item])
-        if duplicate.get("source_quote"):
-            return str(duplicate["source_quote"])
-    return _compact_text(text, 260)
-
-
-def _quoted_text(item: dict[str, Any], text: str) -> list[str]:
-    quotes = [_compact_text(text, 360)]
-    duplicate = _duplicate_facts([item])
-    if duplicate.get("source_quote"):
-        quotes.append(str(duplicate["source_quote"]))
-    return [quote for quote in dict.fromkeys(quotes) if quote]
-
-
-def _evidence_card(item: dict[str, Any]) -> dict[str, Any]:
-    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-    return {
-        "title": f"{item.get('type')} - {metadata.get('name') or item.get('reference') or 'attachment'}",
-        "doc_type": item.get("type"),
-        "extracted_summary": item.get("summary", ""),
-        "supports": [support.get("requirement") for support in item.get("supports") or [] if isinstance(support, dict)],
-        "conflicts": list(item.get("conflicts") or [])[:4],
-        "source_ref": metadata.get("original_ref", ""),
-        "visual_summary": "text-direct source; no preview crop required",
-    }
-
-
-def _compact_field_inventory(value: Any) -> list[dict[str, Any]]:
-    rows = value if isinstance(value, list) else []
-    result: list[dict[str, Any]] = []
-    for row in rows[:12]:
-        if not isinstance(row, dict):
-            continue
-        result.append(
-            {
-                key: _compact_text(row.get(key), 180)
-                for key in ("field", "value", "status", "source_quote", "locator", "confidence", "preview_path")
-                if row.get(key) not in (None, "", [], {})
-            }
-        )
-    return result
 
 
 def _compact_text(value: Any, limit: int) -> str:

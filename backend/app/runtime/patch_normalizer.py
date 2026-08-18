@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 
@@ -39,6 +40,9 @@ def preserve_reviewer_quote_fields(patch: dict[str, Any], reviewer_result: dict[
                 continue
             if "quoted_text" in source:
                 target["quoted_text"] = source.get("quoted_text") or []
+            for key in ("local_source_handle", "semantic_claims", "semantic_proposals"):
+                if source.get(key) not in (None, "", [], {}) and target.get(key) in (None, "", [], {}):
+                    target[key] = deepcopy(source[key])
             for target_support, source_support in zip(target.get("supports") or [], source.get("supports") or []):
                 if isinstance(target_support, dict) and isinstance(source_support, dict) and "quoted_text" in source_support:
                     target_support["quoted_text"] = source_support.get("quoted_text") or ""
@@ -54,8 +58,6 @@ def preserve_reviewer_quote_fields(patch: dict[str, Any], reviewer_result: dict[
                 "field_review_matrix",
                 "page_review",
                 "evidence_chain",
-                "claim_to_source_refs",
-                "semantic_judgments",
                 "block_crops",
                 "profile_comparison",
                 "self_check",
@@ -102,6 +104,8 @@ def compact_case_patch_for_write(patch: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_evidence_metadata(metadata: dict[str, Any]) -> None:
+    for key in ("claim_to_source_refs", "semantic_judgments", "requirement_verdicts", "proof_proposals"):
+        metadata.pop(key, None)
     field_inventory = metadata.get("field_inventory")
     if isinstance(field_inventory, list):
         compact_fields = [_compact_field_row(row) for row in field_inventory if isinstance(row, dict)]
@@ -123,7 +127,7 @@ def _compact_evidence_metadata(metadata: dict[str, Any]) -> None:
             if len(selected) >= 16:
                 break
         metadata["block_crops"] = selected
-    for key, limit in (("evidence_chain", 14), ("claim_to_source_refs", 14), ("field_review_matrix", 12)):
+    for key, limit in (("evidence_chain", 14), ("field_review_matrix", 12)):
         rows = metadata.get(key)
         if isinstance(rows, list):
             metadata[key] = [_compact_claim_row(row) for row in rows[:limit] if isinstance(row, dict)]
@@ -211,6 +215,13 @@ def _compact_claim_row(row: dict[str, Any]) -> dict[str, Any]:
         "entity_key",
         "value_type",
         "typed_value",
+        "unit",
+        "currency",
+        "basis",
+        "tax_basis",
+        "coverage",
+        "attributes",
+        "attribute_sources",
         "source_quote",
         "source_locator",
         "field",

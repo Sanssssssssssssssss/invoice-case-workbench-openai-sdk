@@ -60,6 +60,9 @@ DYNAMIC_CONTEXT_KEYS = (
     "case_state",
     "evidence",
     "conversation_summary",
+    "active_requirement_contracts",
+    "active_requirement_ids",
+    "typed_holes",
 )
 VOLATILE_TAIL_KEYS = (
     "current_goal",

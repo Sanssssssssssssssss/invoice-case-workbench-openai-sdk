@@ -1,0 +1,20 @@
+{
+  "id": "amount_conflict_live_canary",
+  "name": "Comparable three-way amount conflict",
+  "description": "The source packet is complete and comparable, but the invoice exceeds PO and GRN values beyond policy tolerance.",
+  "tags": ["attachments", "live_acceptance", "shared_ir", "reconciliation"],
+  "initial_case_state": {
+    "requirements": [
+      {"id": "invoice"},
+      {"id": "purchase_order"},
+      {"id": "goods_receipt_or_service_acceptance"}
+    ]
+  },
+  "user_script": [
+    {
+      "message": "只审查这些附件，案件 Requirement 范围已经固定。请一次批量调用 Evidence Reviewer，写回案件状态；不要扩展 Requirement，不要调用 Advisor，不要生成报告。",
+      "attach": ["invoice.md", "po.md", "grn.md"]
+    }
+  ],
+  "budgets": {"max_model_calls": 5, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 700000}
+}

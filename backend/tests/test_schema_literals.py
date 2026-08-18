@@ -3,7 +3,26 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.state.schemas import CasePatch, EvidenceReviewResult
+from app.domain.risk_rules import resolved_conflict_note
+from app.state.schemas import CasePatch, EvidenceReviewerOutput, EvidenceReviewResult
+
+
+def test_sparse_reviewer_rejects_bare_semantic_handles() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceReviewerOutput.model_validate(
+            {
+                "sources": [
+                    {
+                        "local_source_handle": "s1",
+                        "attachment_id": "att-1",
+                        "type": "invoice",
+                        "classification": "business_evidence",
+                        "semantic_claims": ["c1"],
+                        "semantic_proposals": ["p1"],
+                    }
+                ]
+            }
+        )
 
 
 def test_evidence_review_rejects_unknown_enum_values() -> None:
@@ -42,6 +61,23 @@ def test_evidence_review_normalizes_common_multi_document_shapes(evidence_type: 
     assert result.conflicts[0].source_values == {"vendor_record": "9012", "email_request": "7788"}
 
 
+def test_evidence_review_normalizes_declared_conflict_value_shapes() -> None:
+    result = EvidenceReviewResult.model_validate(
+        {
+            "conflicts": [{
+                "details": {"invoice": "10500", "purchase_order": "10000"},
+                "quoted_text": ["Invoice total 10500", "PO total 10000"],
+                "conflict_with": ["purchase_order", "goods_receipt"],
+            }]
+        }
+    )
+
+    conflict = result.conflicts[0]
+    assert conflict.details == '{"invoice":"10500","purchase_order":"10000"}'
+    assert conflict.quoted_text == "Invoice total 10500\nPO total 10000"
+    assert conflict.conflict_with == "purchase_order, goods_receipt"
+
+
 def test_evidence_review_accepts_nested_conflict_resolution_status() -> None:
     result = EvidenceReviewResult.model_validate(
         {
@@ -62,6 +98,11 @@ def test_evidence_review_accepts_nested_conflict_resolution_status() -> None:
     )
 
     assert result.suggested_patch.add_evidence[0].conflicts[0].resolution_status == "pending_correction"
+
+
+def test_conflict_resolution_requires_structured_status() -> None:
+    assert not resolved_conflict_note("Conflict clarified; use the PDF original.")
+    assert resolved_conflict_note({"resolution_status": "resolved", "description": "OCR corrected"})
 
 
 def test_case_patch_rejects_unknown_patch_type() -> None:

@@ -39,7 +39,7 @@ You are part of a local invoice evidence workbench that helps collect materials,
 ## Source And Status Discipline
 
 - Low-credibility or user-statement-only material cannot produce full support.
-- Requirement status and missing materials are refreshed by deterministic CaseStore rules from evidence supports and credibility. LLM roles may suggest evidence and notes, but must not invent final case status.
+- Requirement status and missing materials are projected by CaseStore from Compiler-owned `DecisionProof` results. LLM roles may propose source-grounded Claims and semantic judgments, but must not invent final case status.
 - Session summaries and artifact summaries are memory compression only. They do not establish final business facts and must not direct the next planner action.
 
 ## Output Discipline

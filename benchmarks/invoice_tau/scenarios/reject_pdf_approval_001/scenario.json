@@ -9,13 +9,13 @@
     "status": "ready_for_report",
     "summary": "The vendor review evidence is sufficient for a local report draft.",
     "requirements": [
-      {"id": "vendor_identity", "label": "Vendor identity", "kind": "document", "required": true, "status": "satisfied", "evidence_ids": ["ev_vendor"]}
+      {"id": "vendor_identity", "label": "Vendor identity", "kind": "document", "required": true, "status": "accepted", "evidence_ids": ["ev_vendor"]}
     ],
     "evidence_items": [{
       "id": "ev_vendor",
       "type": "vendor_record",
       "credibility": "high",
-      "source": "attachment",
+      "source": "user_message",
       "summary": "Vendor master is active and the submitted identity matches.",
       "content": "Vendor master status: active. Identity match: confirmed.",
       "review_result": {"should_accept": true},

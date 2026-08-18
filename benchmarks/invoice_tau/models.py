@@ -43,6 +43,7 @@ class ExpectedSpec(BaseModel):
     proof_outcome: str = ""
     proof_policy_version: str = ""
     proof_requirement_id: str = "three_way_amount_match"
+    proof_checks: dict[str, str] = Field(default_factory=dict)
     proof_obligation_ids: list[str] = Field(default_factory=list)
     must_have_risk_flags: list[str] = Field(default_factory=list)
     must_not_have_risk_flags: list[str] = Field(default_factory=list)

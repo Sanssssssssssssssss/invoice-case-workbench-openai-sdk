@@ -10,52 +10,25 @@ from app.tools.rag_guidance import _review_guidance_query, advisor_guidance, rev
 
 def test_evidence_reviewer_uses_rag_profiles_as_guidance_only() -> None:
     assert EVIDENCE_REVIEWER_PROMPT.count("version: global_policy_v1.2") == 1
-    assert "RAG/profile snippets are review guidance, never submitted case evidence" in EVIDENCE_REVIEWER_PROMPT
-    assert "Use them to compare required fields, visual/layout clues" in EVIDENCE_REVIEWER_PROMPT
-    assert "Do not mark a requirement satisfied because RAG says the template requires it" in EVIDENCE_REVIEWER_PROMPT
-    assert "Default invoice-only blocker requirements" in EVIDENCE_REVIEWER_PROMPT
-    assert "`required=true`" in EVIDENCE_REVIEWER_PROMPT
-    assert "Default invoice-only optional quality requirements" in EVIDENCE_REVIEWER_PROMPT
-    assert "`required=false`" in EVIDENCE_REVIEWER_PROMPT
-    assert "AP lite profile" in EVIDENCE_REVIEWER_PROMPT
-    assert "goods_receipt_or_service_acceptance" in EVIDENCE_REVIEWER_PROMPT
-    assert "also bind the current invoice evidence to those proposed requirement ids" in EVIDENCE_REVIEWER_PROMPT
-    assert "Do not leave supports empty merely because the requirements are being created in the same patch" in EVIDENCE_REVIEWER_PROMPT
-    assert "Do not put PO/GRN/vendor/duplicate-payment gaps" in EVIDENCE_REVIEWER_PROMPT
-    assert "next_questions should ask for PO, GRN" not in EVIDENCE_REVIEWER_PROMPT
-    assert "source-traceable invoice file and missing required invoice fields" in EVIDENCE_REVIEWER_PROMPT
-    assert "do not ask for PO, GRN/service acceptance, vendor identity/master, or duplicate-payment screening unless those AP requirements are already active" in EVIDENCE_REVIEWER_PROMPT
-    assert "`duplicate_payment_screen` means the authoritative search/source is present" in EVIDENCE_REVIEWER_PROMPT
-    assert "the Compiler derives `no_active_duplicate` as the semantic lifecycle conclusion" in EVIDENCE_REVIEWER_PROMPT
-    assert "A positive candidate is not itself a source-material conflict" in EVIDENCE_REVIEWER_PROMPT
-    assert "metadata.requirement_verdicts" in EVIDENCE_REVIEWER_PROMPT
-    assert "semantic conclusions, not source materials" in EVIDENCE_REVIEWER_PROMPT
-    assert "do not put missing/weak optional fields such as signature" in EVIDENCE_REVIEWER_PROMPT
-    assert "optional quality enhancements unless there is a real conflict" in EVIDENCE_REVIEWER_PROMPT
-    assert "do not add \"if you need AP review...\" expansion prompts" in EVIDENCE_REVIEWER_PROMPT
-    assert "Do not repeat those terms even as exclusions" in EVIDENCE_REVIEWER_PROMPT
-    assert "Do not classify a new invoice as cross-case merely because it differs from or resembles a RAG/profile/playbook example" in EVIDENCE_REVIEWER_PROMPT
-    assert "the first submitted invoice is the current case source" in EVIDENCE_REVIEWER_PROMPT
-    assert "Missing optional signature/template/line item fields are not risk flags" in EVIDENCE_REVIEWER_PROMPT
-    assert "Do not calculate a new amount from subtotal/tax/total fields" in EVIDENCE_REVIEWER_PROMPT
-    assert "Reviewer Mode Contract v5.0" in EVIDENCE_REVIEWER_PROMPT
+    assert "RAG is interpretation guidance only and is never case evidence" in EVIDENCE_REVIEWER_PROMPT
+    assert "active_requirement_contracts" in EVIDENCE_REVIEWER_PROMPT
+    assert "typed_holes" in EVIDENCE_REVIEWER_PROMPT
+    assert "EvidenceReviewerOutput" in EVIDENCE_REVIEWER_PROMPT
+    assert '"sources": []' in EVIDENCE_REVIEWER_PROMPT
+    assert '"hole_id": "exact judgment hole id"' in EVIDENCE_REVIEWER_PROMPT
+    assert "the Runtime binds original/extraction refs, content, metadata, Cards, and the CasePatch" in EVIDENCE_REVIEWER_PROMPT
+    assert "Never return Markdown, CasePatch, EvidenceItem, Requirement status" in EVIDENCE_REVIEWER_PROMPT
+    assert "metadata.requirement_verdicts" not in EVIDENCE_REVIEWER_PROMPT
+    assert "metadata.semantic_judgments" not in EVIDENCE_REVIEWER_PROMPT
     assert "mode=extract" in EVIDENCE_REVIEWER_PROMPT
-    assert "mode=review" in EVIDENCE_REVIEWER_PROMPT
-    assert "mode=repair" in EVIDENCE_REVIEWER_PROMPT
-    assert "Every strong claim must bind to `source_doc_id`, source quote, source locator" in EVIDENCE_REVIEWER_PROMPT
-    assert "Visual Check Contract v5.1" in EVIDENCE_REVIEWER_PROMPT
-    assert "visual check proves the supplier really exists" in EVIDENCE_REVIEWER_PROMPT
-    assert "Do not say visual check proves there is no duplicate payment" in EVIDENCE_REVIEWER_PROMPT
-    assert "`extraction_result.visual_check` is required" in EVIDENCE_REVIEWER_PROMPT
-    assert "`metadata.visual_check`" in EVIDENCE_REVIEWER_PROMPT
-    assert "Signature and Template Consistency v1.0" in EVIDENCE_REVIEWER_PROMPT
-    assert "same_vendor_reference" in EVIDENCE_REVIEWER_PROMPT
-    assert "Template matching is a consistency signal" in EVIDENCE_REVIEWER_PROMPT
-    assert "cannot prove supplier existence" in EVIDENCE_REVIEWER_PROMPT
-    assert "the judgment must be `UNKNOWN`" in EVIDENCE_REVIEWER_PROMPT
-    assert "these policy comparability gaps are not `REFUTED`" in EVIDENCE_REVIEWER_PROMPT
-    assert "A complete, source-traceable duplicate-payment search stays `duplicate_payment_screen=full`" in EVIDENCE_REVIEWER_PROMPT
-    assert "Duplicate-payment positive hit or historical clearing/payment reference: support_level=`partial`" not in EVIDENCE_REVIEWER_PROMPT
+    assert "For `review` or `repair`, keep `extracted_fields={}`" in EVIDENCE_REVIEWER_PROMPT
+    assert "business_evidence|process_only|cross_case_sample|quarantined" in EVIDENCE_REVIEWER_PROMPT
+    assert "[redacted prompt injection]" in EVIDENCE_REVIEWER_PROMPT
+    assert "It cannot prove supplier validity" in EVIDENCE_REVIEWER_PROMPT
+    assert "Policy holes are local-only" in EVIDENCE_REVIEWER_PROMPT
+    assert "Never guess company policy from RAG, filenames, memory, examples, or model knowledge" in EVIDENCE_REVIEWER_PROMPT
+    assert "Fill only unresolved `claim`, `relation`, and `judgment` holes" in EVIDENCE_REVIEWER_PROMPT
+    assert "The Binder supplies subject, predicate, type, role, canonical id" in EVIDENCE_REVIEWER_PROMPT
 
 
 def test_report_writer_uses_visual_check_as_quality_only() -> None:

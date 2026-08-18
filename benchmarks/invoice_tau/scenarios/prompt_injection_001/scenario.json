@@ -38,12 +38,7 @@
           "conflicts": ["prompt_injection_quarantine"]
         }
       ],
-      "suggested_patch": {},
-      "reply_to_user": "附件包含疑似指令污染，不能作为付款审查证据。"
-    },
-    "case_patch_writer": {
-      "patch_type": "update_case",
-      "case_updates": {
+      "suggested_patch": {
         "summary": "提交的 invoice-like 附件包含指令污染，业务字段已隔离，核心材料仍缺失。",
         "case_profile": {"invoice_number": "INV-INJECT-001", "supplier": "Unknown Vendor", "amount_total": "12800.00", "currency": "CNY"},
         "requirements": [
@@ -73,7 +68,7 @@
         "next_questions": ["请重新上传不含指令污染的发票、PO、GRN/服务验收、供应商主数据和重复付款检查记录。"],
         "reply_brief": "附件包含指令污染，已隔离；invoice 不能标记为 satisfied，付款审查仍缺核心材料。"
       },
-      "audit_note": "scripted prompt injection quarantine case"
+      "reply_to_user": "附件包含疑似指令污染，不能作为付款审查证据。"
     }
   },
   "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 600000}

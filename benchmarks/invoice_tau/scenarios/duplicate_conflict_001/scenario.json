@@ -6,7 +6,19 @@
   "user_script": [{
     "message": "Review the evidence and identify any payment conflict. Do not generate a report.",
     "attach": ["invoice.md", "duplicate_history.md"],
-    "manager_decisions": []
+    "manager_decisions": [
+      {
+        "action": "delegate_agent",
+        "target": "evidence_reviewer",
+        "input": {
+          "mode": "review",
+          "active_requirement_ids": ["invoice", "duplicate_payment_screen"]
+        }
+      },
+      {"action": "delegate_agent", "target": "case_patch_writer", "input": {}},
+      {"action": "write_case_patch", "input": {}},
+      {"action": "final_answer", "final_answer": "no_active_duplicate=DISPROVED; EVIDENCE_SUFFICIENT_FOR_REPORT"}
+    ]
   }],
   "scripted_roles": {
     "evidence_reviewer": {
@@ -31,41 +43,34 @@
             "id": "ev_invoice", "type": "invoice", "credibility": "high", "source": "attachment",
             "summary": "Invoice INV-7001 remains payable.", "review_result": {"should_accept": true},
             "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Payable status: invoice INV-7001 remains payable."}],
-            "metadata": {"classification": "business_evidence", "source_filename": "invoice.md", "claim_to_source_refs": [{
-              "id": "CLM_INVOICE_PAYABLE_IDENTITY", "subject": "invoice", "predicate": "payable_identity", "value_type": "string",
-              "typed_value": "payable:INV-7001", "quote": "Payable status: invoice INV-7001 remains payable.",
-              "block_or_table_or_region": "invoice.md:9", "confidence": "high"
-            }]}
+            "metadata": {"classification": "business_evidence", "source_filename": "invoice.md"},
+            "semantic_claims": [{
+              "handle": "invoice_payable_identity", "hole_id": "hole:b3c083e649e64baa", "typed_value": "INV-7001",
+              "source_quote": "Payable status: invoice INV-7001 remains payable.", "source_locator": "invoice.md:9", "confidence": "high"
+            }]
           },
           {
             "id": "ev_duplicate", "type": "duplicate_payment_check", "credibility": "high", "source": "attachment",
             "summary": "Complete search found active settled PAY-2026-4421.", "review_result": {"should_accept": true},
             "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "Search coverage: complete across posted and cleared payments."}],
             "metadata": {
-              "classification": "business_evidence", "source_filename": "duplicate_history.md",
-              "claim_to_source_refs": [
-                {"id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY", "subject": "duplicate_search", "predicate": "payable_identity", "value_type": "string", "typed_value": "payable:INV-7001", "quote": "Current invoice: INV-7001", "block_or_table_or_region": "duplicate_history.md:5", "confidence": "high"},
-                {"id": "CLM_DUPLICATE_SEARCH_COVERAGE", "subject": "duplicate_search", "predicate": "coverage", "value_type": "enum", "typed_value": "complete", "quote": "Search coverage: complete across posted and cleared payments.", "block_or_table_or_region": "duplicate_history.md:7", "confidence": "high"},
-                {"id": "CLM_DUPLICATE_SEARCH_RESULT", "subject": "duplicate_search", "predicate": "result", "value_type": "enum", "typed_value": "candidate_found", "quote": "Search result: candidate found.", "block_or_table_or_region": "duplicate_history.md:8", "confidence": "high"},
-                {"id": "CLM_DUPLICATE_CANDIDATE_IDENTITY", "subject": "duplicate_search", "predicate": "candidate_identity", "entity_key": "candidate:1", "value_type": "string", "typed_value": "payment:PAY-2026-4421", "quote": "Prior payment document: PAY-2026-4421", "block_or_table_or_region": "duplicate_history.md:12", "confidence": "high"},
-                {"id": "CLM_PAYMENT_IDENTITY", "subject": "payment", "predicate": "identity", "entity_key": "candidate:1", "value_type": "string", "typed_value": "payment:PAY-2026-4421", "quote": "Prior payment document: PAY-2026-4421", "block_or_table_or_region": "duplicate_history.md:12", "confidence": "high"},
-                {"id": "CLM_PAYMENT_RELATIONSHIP", "subject": "payment", "predicate": "relationship_to_payable", "entity_key": "candidate:1", "value_type": "enum", "typed_value": "same_obligation", "quote": "Payable relationship: same obligation as invoice INV-7001", "block_or_table_or_region": "duplicate_history.md:20", "confidence": "high"},
-                {"id": "CLM_PAYMENT_EFFECT", "subject": "payment", "predicate": "economic_effect", "entity_key": "candidate:1", "value_type": "enum", "typed_value": "active_settled", "quote": "Lifecycle disposition: active settled; no reversal or refund found.", "block_or_table_or_region": "duplicate_history.md:21", "confidence": "high"}
-              ],
-              "semantic_judgments": [{
-                "id": "JDG_NO_ACTIVE_DUPLICATE", "verdict": "REFUTED",
-                "input_refs": [
-                  {"evidence_id": "ev_duplicate", "claim_id": "CLM_DUPLICATE_CANDIDATE_IDENTITY", "subject": "duplicate_search", "predicate": "candidate_identity"},
-                  {"evidence_id": "ev_duplicate", "claim_id": "CLM_PAYMENT_IDENTITY", "subject": "payment", "predicate": "identity"},
-                  {"evidence_id": "ev_duplicate", "claim_id": "CLM_PAYMENT_RELATIONSHIP", "subject": "payment", "predicate": "relationship_to_payable"},
-                  {"evidence_id": "ev_duplicate", "claim_id": "CLM_PAYMENT_EFFECT", "subject": "payment", "predicate": "economic_effect"}
-                ],
-                "supporting_refs": [],
-                "opposing_refs": [{"evidence_id": "ev_duplicate", "claim_id": "CLM_PAYMENT_EFFECT", "subject": "payment", "predicate": "economic_effect"}],
-                "open_questions": [], "confidence": "high",
-                "reason": "The same payable already has an economically active settled payment."
-              }]
-            }
+              "classification": "business_evidence", "source_filename": "duplicate_history.md"
+            },
+            "semantic_claims": [
+              {"handle": "search_payable_identity", "hole_id": "hole:872fc0890e51c61a", "typed_value": "INV-7001", "source_quote": "Current invoice: INV-7001", "source_locator": "duplicate_history.md:5", "confidence": "high"},
+              {"handle": "search_coverage", "hole_id": "hole:13a060880802d5eb", "typed_value": "complete", "source_quote": "Search coverage: complete across posted and cleared payments.", "source_locator": "duplicate_history.md:7", "confidence": "high"},
+              {"handle": "search_result", "hole_id": "hole:493f199983d67be6", "typed_value": "candidate_found", "source_quote": "Search result: candidate found.", "source_locator": "duplicate_history.md:8", "confidence": "high"},
+              {"handle": "candidate_identity", "hole_id": "hole:97420b616c18e079", "typed_value": "PAY-2026-4421", "source_quote": "Prior payment document: PAY-2026-4421", "source_locator": "duplicate_history.md:12", "confidence": "high", "entity_handle": "candidate:1"},
+              {"handle": "payment_identity", "hole_id": "hole:d765b6378679e233", "typed_value": "PAY-2026-4421", "source_quote": "Prior payment document: PAY-2026-4421", "source_locator": "duplicate_history.md:12", "confidence": "high", "entity_handle": "candidate:1"},
+              {"handle": "payment_relationship", "hole_id": "hole:ff23b67113176a9b", "typed_value": "same_obligation", "source_quote": "Payable relationship: same obligation as invoice INV-7001", "source_locator": "duplicate_history.md:20", "confidence": "high", "entity_handle": "candidate:1"},
+              {"handle": "payment_effect", "hole_id": "hole:0c8086d8335d4a2d", "typed_value": "active_settled", "source_quote": "Lifecycle disposition: active settled; no reversal or refund found.", "source_locator": "duplicate_history.md:21", "confidence": "high", "entity_handle": "candidate:1"}
+            ],
+            "semantic_proposals": [{
+              "handle": "no_active_duplicate_proposal", "hole_id": "hole:43df83f63fdb8f34", "verdict": "REFUTED",
+              "input_handles": ["invoice_payable_identity", "search_payable_identity", "search_coverage", "search_result", "candidate_identity", "payment_identity", "payment_relationship", "payment_effect"],
+              "opposing_handles": ["payment_effect"], "entity_handle": "candidate:1", "open_questions": [], "confidence": "high",
+              "reason": "The same payable already has an economically active settled payment."
+            }]
           }
         ],
         "risk_flags": ["duplicate_payment_hit"],

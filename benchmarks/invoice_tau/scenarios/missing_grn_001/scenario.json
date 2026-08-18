@@ -22,12 +22,7 @@
       "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-6101 amount 8800.00 CNY."}],
       "conflicts": [],
       "evidence_cards": [{"title": "Partial AP evidence chain", "doc_type": "invoice", "supports": ["invoice", "purchase_order", "vendor_identity", "duplicate_payment_screen"]}],
-      "suggested_patch": {},
-      "reply_to_user": "缺少收货或服务验收材料。"
-    },
-    "case_patch_writer": {
-      "patch_type": "update_case",
-      "case_updates": {
+      "suggested_patch": {
         "summary": "INV-6101 已提交发票、PO、供应商和重复付款检查，但缺少 GRN/服务验收。",
         "requirements": [
           {"id": "invoice", "label": "Invoice", "kind": "document", "required": true},
@@ -37,16 +32,16 @@
           {"id": "duplicate_payment_screen", "label": "Duplicate payment screen", "kind": "risk_check", "required": true}
         ],
         "add_evidence": [
-          {"id": "ev_invoice", "type": "invoice", "credibility": "high", "source": "attachment", "summary": "Invoice INV-6101 amount 8800.00 CNY.", "review_result": {"should_accept": true}, "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-6101 amount 8800.00 CNY"}]},
-          {"id": "ev_po", "type": "purchase_order", "credibility": "high", "source": "attachment", "summary": "PO-6101 matches supplier and amount.", "review_result": {"should_accept": true}, "supports": [{"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO-6101 matches invoice"}]},
-          {"id": "ev_vendor", "type": "vendor_record", "credibility": "high", "source": "attachment", "summary": "Vendor is active.", "review_result": {"should_accept": true}, "supports": [{"requirement": "vendor_identity", "support_level": "full", "quoted_text": "vendor active"}]},
-          {"id": "ev_duplicate", "type": "duplicate_payment_check", "credibility": "high", "source": "attachment", "summary": "No duplicate payment found.", "review_result": {"should_accept": true}, "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "No duplicate payment found"}]}
+          {"id": "ev_invoice", "type": "invoice", "credibility": "high", "source": "attachment", "summary": "Invoice INV-6101 amount 8800.00 CNY.", "review_result": {"should_accept": true, "evidence_type": "invoice"}, "supports": [{"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-6101 amount 8800.00 CNY"}], "metadata": {"classification": "business_evidence", "source_filename": "invoice.md"}},
+          {"id": "ev_po", "type": "purchase_order", "credibility": "high", "source": "attachment", "summary": "PO-6101 matches supplier and amount.", "review_result": {"should_accept": true, "evidence_type": "purchase_order"}, "supports": [{"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO-6101 matches invoice"}], "metadata": {"classification": "business_evidence", "source_filename": "po.md"}},
+          {"id": "ev_vendor", "type": "vendor_record", "credibility": "high", "source": "attachment", "summary": "Vendor is active.", "review_result": {"should_accept": true, "evidence_type": "vendor_record"}, "supports": [{"requirement": "vendor_identity", "support_level": "full", "quoted_text": "vendor active"}], "metadata": {"classification": "business_evidence", "source_filename": "vendor.md"}},
+          {"id": "ev_duplicate", "type": "duplicate_payment_check", "credibility": "high", "source": "attachment", "summary": "No duplicate payment found.", "review_result": {"should_accept": true, "evidence_type": "duplicate_payment_check"}, "supports": [{"requirement": "duplicate_payment_screen", "support_level": "full", "quoted_text": "No duplicate payment found"}], "metadata": {"classification": "business_evidence", "source_filename": "duplicate_check.md"}}
         ],
         "risk_flags": ["missing_goods_receipt_or_service_acceptance"],
         "next_questions": ["请补充 GRN 或服务验收材料。"],
         "reply_brief": "缺少 GRN/服务验收，不能进入报告阶段。"
       },
-      "audit_note": "scripted missing GRN case"
+      "reply_to_user": "缺少收货或服务验收材料。"
     }
   },
   "budgets": {"max_model_calls": 6, "max_tool_calls": 2, "max_role_calls": 3, "max_wall_time_ms": 600000}

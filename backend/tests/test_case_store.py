@@ -29,6 +29,7 @@ def test_case_creation_and_patch(tmp_path) -> None:
                         "type": "invoice",
                         "credibility": "medium",
                         "summary": "invoice text",
+                        "review_result": {"should_accept": True, "evidence_type": "invoice"},
                         "supports": [{"requirement": "invoice", "support_level": "partial", "quoted_text": "Invoice"}],
                     }
                 ]
@@ -40,8 +41,9 @@ def test_case_creation_and_patch(tmp_path) -> None:
     assert "purchase_order" in updated.missing_materials
     assert "invoice" not in updated.missing_materials
     assert "invoice" in updated.weak_materials
+    assert "invoice" not in updated.satisfied_materials
     invoice_requirement = next(item for item in updated.requirements if item.id == "invoice")
-    assert invoice_requirement.status == "submitted"
+    assert invoice_requirement.status == "weak"
 
 
 def test_case_store_rejects_duplicate_evidence_ids(tmp_path) -> None:
@@ -52,11 +54,29 @@ def test_case_store_rejects_duplicate_evidence_ids(tmp_path) -> None:
             "patch_type": "add_evidence",
             "case_updates": {"add_evidence": [
                 {"id": "ev_same", "type": "invoice"},
-                {"id": "ev_same", "type": "invoice"},
+                {"id": "ev_same", "type": "invoice", "summary": "different packet"},
             ]},
         })
 
     assert store.load("case_duplicate_ids").evidence_items == []
+
+
+def test_exact_reviewer_packet_replay_is_idempotent(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    patch = {
+        "patch_type": "add_evidence",
+        "case_updates": {"add_evidence": [{
+            "id": "ev_replayed",
+            "type": "invoice",
+            "source": "attachment",
+            "summary": "same reviewed packet",
+        }]},
+    }
+
+    store.apply_patch("case_replay", patch)
+    store.apply_patch("case_replay", patch)
+
+    assert [item.id for item in store.load("case_replay").evidence_items] == ["ev_replayed"]
 
 
 def test_generated_evidence_id_skips_an_existing_id(tmp_path) -> None:
@@ -167,6 +187,7 @@ def test_evidence_support_requirement_aliases_are_canonicalized(tmp_path) -> Non
         {"id": "purchase_order", "label": "Purchase order"},
         {"id": "goods_receipt_or_service_acceptance", "label": "Goods receipt"},
         {"id": "vendor_identity", "label": "Vendor identity"},
+        {"id": "duplicate_payment_screen", "label": "Duplicate payment screen"},
         {"id": "duplicate_payment_screen", "label": "Duplicate payment screen"},
     ]
     updated = store.apply_patch(
@@ -304,11 +325,17 @@ def test_cross_evidence_amount_mismatch_is_a_reportable_proof_finding(tmp_path) 
                                         {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
                                         {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
                                         {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
+                                        {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "order_scope_identity"},
+                                        {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "order_scope_identity"},
+                                        {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "order_scope_identity"},
                                     ],
                                     "supporting_refs": [
                                         {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
                                         {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
                                         {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
+                                        {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "order_scope_identity"},
+                                        {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "order_scope_identity"},
+                                        {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "order_scope_identity"},
                                     ],
                                     "confidence": "high",
                                     "reason": "The totals use the same gross, full-document economic scope.",
@@ -454,16 +481,16 @@ def test_cross_evidence_amount_mismatch_is_a_reportable_proof_finding(tmp_path) 
         },
     )
 
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
     assert "purchase_order" in updated.satisfied_materials
     assert "goods_receipt_or_service_acceptance" in updated.satisfied_materials
-    assert updated.conflict_materials == ["three_way_amount_match"]
-    assert updated.compiled_proof.decision.proof_status == "DISPROVED"
-    assert updated.compiled_proof.decision.outcome == "EVIDENCE_SUFFICIENT_FOR_REPORT"
+    assert updated.conflict_materials == []
+    assert updated.compiled_proof.decision_for("three_way_amount_match").proof_status == "INCOMPLETE"
+    assert updated.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
     assert all(not item.conflicts for item in updated.evidence_items[:3])
 
 
-def test_accepted_core_documents_backfill_supports_to_ready(tmp_path) -> None:
+def test_accepted_core_documents_do_not_invent_or_upgrade_support(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_core_support_backfill",
@@ -522,20 +549,16 @@ def test_accepted_core_documents_backfill_supports_to_ready(tmp_path) -> None:
         for support in evidence.supports
     }
     assert updated.status == "collecting_materials"
-    assert updated.compiled_proof.decision.proof_status == "INCOMPLETE"
-    assert statuses["invoice"] == "satisfied"
-    assert statuses["purchase_order"] == "satisfied"
-    assert statuses["goods_receipt_or_service_acceptance"] == "satisfied"
-    assert statuses["vendor_identity"] == "satisfied"
-    assert statuses["duplicate_payment_screen"] == "satisfied"
-    assert supports["invoice"] == "full"
-    assert supports["purchase_order"] == "full"
-    assert supports["goods_receipt_or_service_acceptance"] == "full"
-    assert supports["vendor_identity"] == "full"
-    assert supports["duplicate_payment_screen"] == "full"
+    assert any(item.proof_status == "INCOMPLETE" for item in updated.compiled_proof.decisions)
+    assert statuses["invoice"] == "weak"
+    assert statuses["purchase_order"] == "missing"
+    assert statuses["goods_receipt_or_service_acceptance"] == "missing"
+    assert statuses["vendor_identity"] == "missing"
+    assert statuses["duplicate_payment_screen"] == "missing"
+    assert supports == {"invoice": "partial"}
 
 
-def test_duplicate_payment_conflict_support_is_not_upgraded_to_satisfied(tmp_path) -> None:
+def test_legacy_conflict_does_not_backfill_canonical_support(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_duplicate_conflict_backfill",
@@ -565,10 +588,9 @@ def test_duplicate_payment_conflict_support_is_not_upgraded_to_satisfied(tmp_pat
     )
 
     requirement = updated.requirements[0]
-    support = updated.evidence_items[0].supports[0]
-    assert requirement.status == "conflict"
-    assert support.requirement == "duplicate_payment_screen"
-    assert support.support_level == "partial"
+    assert requirement.status == "missing"
+    assert updated.evidence_items[0].supports == []
+    assert updated.evidence_items[0].conflicts[0].requirement == "duplicate_payment_screen"
     assert updated.status == "collecting_materials"
 
 
@@ -579,7 +601,7 @@ def test_negative_duplicate_text_does_not_bypass_semantic_proof(tmp_path) -> Non
         {
             "patch_type": "add_evidence",
             "case_updates": {
-                "requirements": [{"id": "duplicate_payment_screen", "kind": "risk_check"}],
+                "requirements": [{"id": "invoice"}, {"id": "duplicate_payment_screen", "kind": "risk_check"}],
                 "add_evidence": [
                     {
                         "type": "duplicate_payment_check",
@@ -608,11 +630,11 @@ def test_negative_duplicate_text_does_not_bypass_semantic_proof(tmp_path) -> Non
     requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_screen")
     evidence = updated.evidence_items[0]
     assert evidence.conflicts == []
-    assert requirement.status == "satisfied"
+    assert requirement.status == "accepted"
     assert updated.status == "collecting_materials"
     assert updated.compiled_proof is not None
     assert updated.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
-    assert "no_active_duplicate" in updated.missing_materials
+    assert "no_active_duplicate" in updated.weak_materials
 
 
 def test_no_field_conflict_chinese_note_is_not_derived_as_conflict(tmp_path) -> None:
@@ -643,7 +665,7 @@ def test_no_field_conflict_chinese_note_is_not_derived_as_conflict(tmp_path) -> 
 
     invoice = next(item for item in updated.requirements if item.id == "invoice")
     assert updated.evidence_items[0].conflicts == []
-    assert invoice.status == "satisfied"
+    assert invoice.status == "accepted"
     assert updated.conflict_materials == []
 
 
@@ -778,9 +800,9 @@ def test_business_invoice_self_check_boundary_text_satisfies_field_requirements(
     assert evidence.credibility == "high"
     assert evidence.metadata["classification"] == "business_evidence"
     assert evidence.conflicts == []
-    assert requirements["invoice_number"].status == "satisfied"
-    assert requirements["supplier"].status == "satisfied"
-    assert requirements["buyer"].status == "satisfied"
+    assert requirements["invoice_number"].status == "accepted"
+    assert requirements["supplier"].status == "accepted"
+    assert requirements["buyer"].status == "accepted"
     assert updated.missing_materials == []
     assert updated.status == "ready_for_report"
 
@@ -813,7 +835,7 @@ def test_requirement_status_uses_review_details(tmp_path) -> None:
         },
     )
     invoice_requirement = next(item for item in updated.requirements if item.id == "invoice")
-    assert invoice_requirement.status == "satisfied"
+    assert invoice_requirement.status == "accepted"
 
 
 def test_requirement_conflict_is_scoped_to_matching_requirement(tmp_path) -> None:
@@ -850,9 +872,9 @@ def test_requirement_conflict_is_scoped_to_matching_requirement(tmp_path) -> Non
     )
 
     statuses = {item.id: item.status for item in updated.requirements}
-    assert statuses["invoice_number"] == "satisfied"
-    assert statuses["supplier"] == "satisfied"
-    assert statuses["amount_total"] == "satisfied"
+    assert statuses["invoice_number"] == "accepted"
+    assert statuses["supplier"] == "accepted"
+    assert statuses["amount_total"] == "accepted"
     assert updated.conflict_materials == []
     assert updated.status == "ready_for_report"
 
@@ -934,7 +956,7 @@ def test_superseded_conflicting_evidence_no_longer_blocks_requirement(tmp_path) 
 
     requirement = next(item for item in updated.requirements if item.id == "amount_total")
     old_evidence = next(item for item in updated.evidence_items if item.id == "ev_001")
-    assert requirement.status == "satisfied"
+    assert requirement.status == "accepted"
     assert updated.conflict_materials == []
     assert updated.status == "ready_for_report"
     assert old_evidence.metadata["review_stage"] == "superseded"
@@ -974,10 +996,10 @@ def test_untrusted_attachment_cannot_supersede_case_evidence(tmp_path) -> None:
 
     old = next(item for item in updated.evidence_items if item.id == "ev_old")
     assert old.metadata.get("review_stage") != "superseded"
-    assert next(item for item in updated.requirements if item.id == "amount_total").status == "conflict"
+    assert next(item for item in updated.requirements if item.id == "amount_total").status == "missing"
 
 
-def test_conflicting_evidence_still_blocks_without_supersedes(tmp_path) -> None:
+def test_legacy_conflict_cannot_override_full_canonical_support(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_unsuperseded_conflict",
@@ -1021,8 +1043,8 @@ def test_conflicting_evidence_still_blocks_without_supersedes(tmp_path) -> None:
     )
 
     requirement = next(item for item in updated.requirements if item.id == "amount_total")
-    assert requirement.status == "conflict"
-    assert updated.conflict_materials == ["amount_total"]
+    assert requirement.status == "accepted"
+    assert updated.conflict_materials == []
 
 
 def test_source_traceability_ignores_generic_original_word_in_amount_conflict(tmp_path) -> None:
@@ -1071,7 +1093,7 @@ def test_source_traceability_ignores_generic_original_word_in_amount_conflict(tm
     )
 
     requirement = next(item for item in updated.requirements if item.id == "source_traceability")
-    assert requirement.status == "satisfied"
+    assert requirement.status == "accepted"
     assert updated.conflict_materials == []
 
 
@@ -1110,8 +1132,8 @@ def test_single_invoice_case_can_use_field_requirements_without_ap_materials(tmp
     )
 
     statuses = {item.id: item.status for item in updated.requirements}
-    assert statuses["invoice_number"] == "satisfied"
-    assert statuses["supplier"] == "satisfied"
+    assert statuses["invoice_number"] == "accepted"
+    assert statuses["supplier"] == "accepted"
     assert statuses["signature_or_authorized_signatory"] == "weak"
     assert "purchase_order" not in updated.missing_materials
     assert "goods_receipt" not in updated.missing_materials
@@ -1151,7 +1173,7 @@ def test_empty_invoice_case_backfills_default_invoice_field_requirements(tmp_pat
     assert "purchase_order" not in updated.missing_materials
 
 
-def test_invoice_support_backfill_adds_optional_fields_from_inventory(tmp_path) -> None:
+def test_field_inventory_does_not_create_unreviewed_supports(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_invoice_inventory_supports",
@@ -1162,6 +1184,7 @@ def test_invoice_support_backfill_adds_optional_fields_from_inventory(tmp_path) 
                     {
                         "type": "invoice",
                         "credibility": "medium",
+                        "summary": "Invoice No 20-10-2015",
                         "review_result": {"should_accept": True, "evidence_type": "invoice"},
                         "supports": [
                             {"requirement": "invoice_number", "support_level": "full", "quoted_text": "Invoice No"},
@@ -1218,14 +1241,14 @@ def test_invoice_support_backfill_adds_optional_fields_from_inventory(tmp_path) 
 
     statuses = {item.id: item.status for item in updated.requirements}
     evidence_ids = {item.id: item.evidence_ids for item in updated.requirements}
-    assert statuses["line_items_product_title"] == "satisfied"
-    assert statuses["signature_or_authorized_signatory"] == "satisfied"
-    assert statuses["invoice_date"] == "satisfied"
-    assert evidence_ids["line_items_product_title"] == ["ev_001"]
-    assert evidence_ids["signature_or_authorized_signatory"] == ["ev_001"]
+    assert statuses["line_items_product_title"] == "missing"
+    assert statuses["signature_or_authorized_signatory"] == "missing"
+    assert statuses["invoice_date"] == "weak"
+    assert evidence_ids["line_items_product_title"] == []
+    assert evidence_ids["signature_or_authorized_signatory"] == []
 
 
-def test_ap_lite_invoice_requirement_backfills_from_core_invoice_fields(tmp_path) -> None:
+def test_core_invoice_fields_do_not_replace_explicit_document_support(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_ap_invoice_backfill",
@@ -1292,8 +1315,8 @@ def test_ap_lite_invoice_requirement_backfills_from_core_invoice_fields(tmp_path
     )
 
     invoice_requirement = next(item for item in updated.requirements if item.id == "invoice")
-    assert invoice_requirement.status == "satisfied"
-    assert "invoice" in updated.satisfied_materials
+    assert invoice_requirement.status == "missing"
+    assert "invoice" in updated.missing_materials
 
 
 def test_invoice_field_supports_override_wrong_empty_ap_default(tmp_path) -> None:
@@ -1372,6 +1395,7 @@ def test_existing_case_adds_safe_dynamic_field_supports_as_optional(tmp_path) ->
                 "add_evidence": [
                     {
                         "type": "purchase_order",
+                        "summary": "PO-9201 total 9900.00 CNY",
                         "review_result": {"should_accept": True, "evidence_type": "purchase_order"},
                         "supports": [
                             {"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO-9201"},
@@ -1390,9 +1414,9 @@ def test_existing_case_adds_safe_dynamic_field_supports_as_optional(tmp_path) ->
     assert requirements["po_number"].required is False
     assert requirements["po_ref"].required is False
     assert requirements["po_amount"].required is False
-    assert requirements["po_number"].status == "satisfied"
-    assert requirements["po_ref"].status == "satisfied"
-    assert requirements["po_amount"].status == "satisfied"
+    assert requirements["po_number"].status == "accepted"
+    assert requirements["po_ref"].status == "accepted"
+    assert requirements["po_amount"].status == "accepted"
 
 
 def test_case_patch_accepts_common_requirement_shapes(tmp_path) -> None:
@@ -1498,8 +1522,8 @@ def test_full_support_overrides_prior_partial_mentions(tmp_path) -> None:
     )
 
     statuses = {item.id: item.status for item in updated.requirements}
-    assert statuses["purchase_order"] == "satisfied"
-    assert statuses["vendor_identity"] == "satisfied"
+    assert statuses["purchase_order"] == "accepted"
+    assert statuses["vendor_identity"] == "accepted"
     assert "purchase_order" not in updated.missing_materials
     assert "vendor_identity" not in updated.missing_materials
     assert "purchase_order" in updated.satisfied_materials
@@ -1521,7 +1545,7 @@ def test_case_patch_schema_rejects_llm_status_and_missing_materials() -> None:
         )
 
 
-def test_conflicted_evidence_keeps_requirement_in_conflict(tmp_path) -> None:
+def test_raw_conflict_cannot_override_document_evidence_proof(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_conflicted_requirement",
@@ -1551,10 +1575,9 @@ def test_conflicted_evidence_keeps_requirement_in_conflict(tmp_path) -> None:
     )
 
     invoice_requirement = next(item for item in updated.requirements if item.id == "invoice")
-    assert invoice_requirement.status == "conflict"
+    assert invoice_requirement.status == "accepted"
     assert "invoice" not in updated.missing_materials
-    assert "invoice" in updated.conflict_materials
-    assert updated.status == "collecting_materials"
+    assert "invoice" not in updated.conflict_materials
 
 
 def test_reviewer_note_alone_does_not_become_truth_conflict(tmp_path) -> None:
@@ -1585,7 +1608,7 @@ def test_reviewer_note_alone_does_not_become_truth_conflict(tmp_path) -> None:
     po_requirement = next(item for item in updated.requirements if item.id == "purchase_order")
     assert updated.evidence_items[0].id == "ev_001"
     assert updated.evidence_items[0].conflicts == []
-    assert po_requirement.status == "satisfied"
+    assert po_requirement.status == "accepted"
     assert "purchase_order" not in updated.missing_materials
     assert "purchase_order" in updated.satisfied_materials
 
@@ -1642,7 +1665,7 @@ def test_resolved_conflict_note_is_not_derived_or_counted_as_active_conflict(tmp
     )
 
     requirements = {item.id: item.status for item in updated.requirements}
-    assert requirements["signature_or_authorized_signatory"] == "satisfied"
+    assert requirements["signature_or_authorized_signatory"] == "accepted"
     assert updated.conflict_materials == []
     assert updated.status == "ready_for_report"
 
@@ -1654,7 +1677,7 @@ def test_duplicate_candidate_source_stays_satisfied_while_semantic_proof_is_inco
         {
             "patch_type": "add_evidence",
             "case_updates": {
-                "requirements": [{"id": "duplicate_payment_screen"}],
+                "requirements": [{"id": "invoice"}, {"id": "duplicate_payment_screen"}],
                 "add_evidence": [
                     {
                         "type": "duplicate_payment_check",
@@ -1683,17 +1706,17 @@ def test_duplicate_candidate_source_stays_satisfied_while_semantic_proof_is_inco
     source_requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_screen")
     semantic_requirement = next(item for item in updated.requirements if item.id == "no_active_duplicate")
     assert updated.evidence_items[0].conflicts == []
-    assert source_requirement.status == "satisfied"
-    assert semantic_requirement.status == "missing"
+    assert source_requirement.status == "accepted"
+    assert semantic_requirement.status == "weak"
     assert updated.compiled_proof is not None
     assert updated.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
     assert updated.compiled_proof.decision_for("no_active_duplicate").outcome == "HOLD_FOR_EVIDENCE"
     assert "duplicate_payment_screen" not in updated.conflict_materials
-    assert "no_active_duplicate" in updated.missing_materials
+    assert "no_active_duplicate" in updated.weak_materials
     assert updated.status == "collecting_materials"
 
 
-def test_invoice_extracted_fields_backfill_requirements_and_supports(tmp_path) -> None:
+def test_extracted_fields_alone_do_not_activate_requirements_or_supports(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_invoice_field_backfill",
@@ -1705,7 +1728,7 @@ def test_invoice_extracted_fields_backfill_requirements_and_supports(tmp_path) -
                         "type": "invoice",
                         "credibility": "high",
                         "summary": "Flipkart retail invoice",
-                        "source": "attachment",
+                        "source": "user_message",
                         "review_result": {"should_accept": True, "evidence_type": "invoice"},
                         "supports": [],
                         "metadata": {
@@ -1769,17 +1792,10 @@ def test_invoice_extracted_fields_backfill_requirements_and_supports(tmp_path) -
         },
     )
 
-    requirements = {item.id: item for item in updated.requirements}
-    supports = {support.requirement: support for support in updated.evidence_items[0].supports}
-    assert "invoice_number" in requirements
-    assert "invoice_number" in supports
-    assert supports["invoice_number"].quoted_text == "Invoice No #: BLR_WFLD20151000982590"
-    assert requirements["invoice_number"].status == "satisfied"
-    assert requirements["currency_tax"].status == "satisfied"
-    assert requirements["signature_or_authorized_signatory"].required is False
-    assert requirements["signature_or_authorized_signatory"].status == "weak"
+    assert updated.requirements == []
+    assert updated.evidence_items[0].supports == []
     assert updated.missing_materials == []
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
 
 
 def test_case_store_normalizes_crop_metadata_into_field_inventory(tmp_path) -> None:
@@ -1912,7 +1928,7 @@ def test_duplicate_negative_check_is_not_derived_into_conflict(tmp_path) -> None
 
     duplicate_requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_check")
     assert updated.evidence_items[0].conflicts == []
-    assert duplicate_requirement.status == "satisfied"
+    assert duplicate_requirement.status == "accepted"
 
 
 def test_structured_metadata_conflict_keys_do_not_create_conflict(tmp_path) -> None:
@@ -1962,7 +1978,7 @@ def test_structured_metadata_conflict_keys_do_not_create_conflict(tmp_path) -> N
     invoice_number = next(item for item in updated.requirements if item.id == "invoice_number")
     template_match = next(item for item in updated.requirements if item.id == "template_match")
     assert updated.evidence_items[0].conflicts == []
-    assert invoice_number.status == "satisfied"
+    assert invoice_number.status == "accepted"
     assert template_match.status == "weak"
 
 
@@ -1978,7 +1994,7 @@ def test_optional_invoice_requirements_do_not_block_ready_state(tmp_path) -> Non
                         "type": "invoice",
                         "credibility": "medium",
                         "summary": "Invoice core fields are readable",
-                        "source": "attachment",
+                        "source": "user_message",
                         "review_result": {"should_accept": True, "evidence_type": "invoice"},
                         "supports": [
                             {"requirement": "invoice_number", "support_level": "full", "quoted_text": "Invoice No INV-1"},
@@ -2008,7 +2024,7 @@ def test_optional_invoice_requirements_do_not_block_ready_state(tmp_path) -> Non
     assert updated.status == "ready_for_report"
 
 
-def test_optional_invoice_conflict_still_blocks(tmp_path) -> None:
+def test_optional_raw_conflict_remains_a_non_blocking_annotation(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_invoice_optional_conflict",
@@ -2030,7 +2046,7 @@ def test_optional_invoice_conflict_still_blocks(tmp_path) -> None:
                         "type": "invoice",
                         "credibility": "medium",
                         "summary": "Invoice has template inconsistency",
-                        "source": "attachment",
+                        "source": "user_message",
                         "review_result": {"should_accept": True, "evidence_type": "invoice"},
                         "supports": [
                             {"requirement": "invoice_number", "support_level": "full", "quoted_text": "Invoice No INV-1"},
@@ -2056,8 +2072,9 @@ def test_optional_invoice_conflict_still_blocks(tmp_path) -> None:
         },
     )
 
-    assert "template_match" in updated.conflict_materials
-    assert updated.status == "collecting_materials"
+    assert next(item for item in updated.requirements if item.id == "template_match").status == "weak"
+    assert updated.conflict_materials == []
+    assert updated.status == "ready_for_report"
 
 
 def test_ap_lite_requirements_are_distinct_from_legacy_five(tmp_path) -> None:
@@ -2093,6 +2110,50 @@ def test_ap_lite_requirements_are_distinct_from_legacy_five(tmp_path) -> None:
     assert "vendor_record" not in ids
     assert "duplicate_payment_check" not in ids
     assert updated.missing_materials == ids
+
+
+def test_existing_requirement_scope_is_not_expanded_by_ap_evidence(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    updated = store.apply_patch(
+        "case_fixed_three_way_scope",
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "requirements": [
+                    {"id": "invoice"},
+                    {"id": "purchase_order"},
+                    {"id": "goods_receipt_or_service_acceptance"},
+                ],
+                "add_evidence": [
+                    {
+                        "id": "ev_invoice",
+                        "type": "invoice",
+                        "review_result": {"should_accept": True},
+                        "supports": [{"requirement": "invoice", "support_level": "full"}],
+                    },
+                    {
+                        "id": "ev_po",
+                        "type": "purchase_order",
+                        "review_result": {"should_accept": True},
+                        "supports": [{"requirement": "purchase_order", "support_level": "full"}],
+                    },
+                    {
+                        "id": "ev_grn",
+                        "type": "goods_receipt",
+                        "review_result": {"should_accept": True},
+                        "supports": [{"requirement": "goods_receipt_or_service_acceptance", "support_level": "full"}],
+                    },
+                ],
+            },
+        },
+    )
+
+    assert [item.id for item in updated.requirements] == [
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "three_way_amount_match",
+    ]
 
 
 def test_patch_cannot_create_compiler_requirement_or_support_it_directly(tmp_path) -> None:
@@ -2182,6 +2243,22 @@ def test_compiler_requirement_definition_and_projection_ignore_patch_updates(tmp
     assert all(item.evidence_ids == [] for item in derived.values())
 
 
+def test_removing_source_requirement_deactivates_derived_proof(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+
+    updated = store.apply_patch(
+        "case_remove_duplicate_control",
+        {
+            "patch_type": "update_case",
+            "case_updates": {"remove_requirements": ["duplicate_payment_screen"]},
+        },
+    )
+
+    requirement_ids = {item.id for item in updated.requirements}
+    assert "duplicate_payment_screen" not in requirement_ids
+    assert "no_active_duplicate" not in requirement_ids
+
+
 def test_duplicate_negative_chinese_notes_are_not_derived_into_conflict(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
@@ -2217,7 +2294,7 @@ def test_duplicate_negative_chinese_notes_are_not_derived_into_conflict(tmp_path
 
     duplicate_requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_check")
     assert updated.evidence_items[0].conflicts == []
-    assert duplicate_requirement.status == "satisfied"
+    assert duplicate_requirement.status == "accepted"
 
 
 def test_no_quantity_conflict_note_is_not_derived_into_conflict(tmp_path) -> None:
@@ -2255,7 +2332,7 @@ def test_no_quantity_conflict_note_is_not_derived_into_conflict(tmp_path) -> Non
 
     grn_requirement = next(item for item in updated.requirements if item.id == "goods_receipt")
     assert updated.evidence_items[0].conflicts == []
-    assert grn_requirement.status == "satisfied"
+    assert grn_requirement.status == "accepted"
 
 
 def test_cross_case_evidence_does_not_satisfy_active_requirements(tmp_path) -> None:
@@ -2354,7 +2431,7 @@ def test_cross_case_self_check_pass_does_not_strip_valid_supports(tmp_path) -> N
     )
 
     assert updated.evidence_items[0].supports
-    assert updated.requirements[0].status == "satisfied"
+    assert updated.requirements[0].status == "accepted"
 
 
 def test_patch_normalizes_conflict_objects(tmp_path) -> None:
@@ -2394,6 +2471,7 @@ def test_structured_conflict_scope_respects_explicit_requirement(tmp_path) -> No
                 "add_evidence": [
                     {
                         "type": "invoice",
+                        "summary": "Invoice amount evidence",
                         "review_result": {"should_accept": True},
                         "supports": [{"requirement": "invoice", "support_level": "partial"}],
                         "conflicts": [
@@ -2407,6 +2485,7 @@ def test_structured_conflict_scope_respects_explicit_requirement(tmp_path) -> No
                     },
                     {
                         "type": "purchase_order",
+                        "summary": "Purchase order amount evidence",
                         "review_result": {"should_accept": True},
                         "supports": [
                             {"requirement": "purchase_order", "support_level": "full"},
@@ -2431,7 +2510,7 @@ def test_structured_conflict_scope_respects_explicit_requirement(tmp_path) -> No
     )
 
     statuses = {item.id: item.status for item in updated.requirements}
-    assert statuses == {"invoice": "conflict", "purchase_order": "conflict"}
+    assert statuses == {"invoice": "weak", "purchase_order": "accepted"}
 
 
 def test_compiler_does_not_mutate_recorded_amount_conflicts(tmp_path) -> None:
@@ -2465,7 +2544,7 @@ def test_compiler_does_not_mutate_recorded_amount_conflicts(tmp_path) -> None:
         },
     )
 
-    assert next(item for item in updated.requirements if item.id == "invoice").status == "conflict"
+    assert next(item for item in updated.requirements if item.id == "invoice").status == "missing"
     assert [item.conflict_type for item in updated.evidence_items[0].conflicts] == [
         "amount_mismatch",
         "cross_evidence_amount_mismatch",
@@ -2496,7 +2575,7 @@ def test_patch_accepts_evidence_type_alias(tmp_path) -> None:
     assert updated.evidence_items[0].summary == "INV-ALIAS-001"
 
 
-def test_load_migrates_legacy_partial_requirement_status(tmp_path) -> None:
+def test_load_recompiles_legacy_partial_requirement_status(tmp_path) -> None:
     store = CaseStore(tmp_path)
     root = store.ensure_case_dirs("legacy_case")
     (root / "case_state.json").write_text(
@@ -2516,12 +2595,12 @@ def test_load_migrates_legacy_partial_requirement_status(tmp_path) -> None:
 
     state = store.load("legacy_case")
 
-    assert state.requirements[0].status == "submitted"
-    assert state.missing_materials == []
-    assert state.weak_materials == ["invoice"]
+    assert state.requirements[0].status == "missing"
+    assert state.missing_materials == ["invoice"]
+    assert state.weak_materials == []
     saved = json.loads((root / "case_state.json").read_text(encoding="utf-8"))
-    assert saved["requirements"][0]["status"] == "submitted"
-    assert saved["weak_materials"] == ["invoice"]
+    assert saved["requirements"][0]["status"] == "missing"
+    assert saved["missing_materials"] == ["invoice"]
 
 
 def test_case_store_persists_case_reducer_fields(tmp_path) -> None:

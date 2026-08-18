@@ -111,7 +111,7 @@ def test_case_385104_superseded_png_repair_releases_amount_and_source_traceabili
 
     statuses = {item.id: item.status for item in updated.requirements}
     old_evidence = next(item for item in updated.evidence_items if item.id == "ev_001")
-    assert statuses == {"amount_total": "satisfied", "source_traceability": "satisfied"}
+    assert statuses == {"amount_total": "accepted", "source_traceability": "accepted"}
     assert updated.conflict_materials == []
     assert updated.status == "ready_for_report"
     assert old_evidence.metadata["review_stage"] == "superseded"
@@ -165,6 +165,13 @@ def test_case_486266_ap_supplements_bind_manifest_and_keep_real_conflicts(tmp_pa
             ]
         },
     )
+    manifest = load_attachment_manifest(store, case_id)
+    for entry in manifest["attachments"]:
+        source_path = store.resolve_case_path(case_id, entry["original_ref"])
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(entry["name"], encoding="utf-8")
+        entry["sha256"] = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    save_attachment_manifest(store, case_id, manifest)
 
     updated = store.apply_patch(
         case_id,
@@ -187,7 +194,7 @@ def test_case_486266_ap_supplements_bind_manifest_and_keep_real_conflicts(tmp_pa
                         "source": "attachment",
                         "review_result": {"should_accept": True, "evidence_type": "invoice"},
                         "supports": [{"requirement": "invoice", "support_level": "partial", "quoted_text": "Invoice 5435569865439"}],
-                        "metadata": {"original_ref": "attachments/originals/01_invoice.pdf"},
+                        "metadata": {"classification": "business_evidence", "original_ref": "attachments/originals/01_invoice.pdf"},
                     },
                     {
                         "id": "ev_002",
@@ -197,7 +204,7 @@ def test_case_486266_ap_supplements_bind_manifest_and_keep_real_conflicts(tmp_pa
                         "source": "attachment",
                         "review_result": {"should_accept": True, "evidence_type": "purchase_order"},
                         "supports": [{"requirement": "purchase_order", "support_level": "full", "quoted_text": "PO-CR-5435569865439"}],
-                        "metadata": {"original_ref": "attachments/originals/02_purchase_order.md"},
+                        "metadata": {"classification": "business_evidence", "original_ref": "attachments/originals/02_purchase_order.md"},
                     },
                     {
                         "id": "ev_003",
@@ -220,7 +227,7 @@ def test_case_486266_ap_supplements_bind_manifest_and_keep_real_conflicts(tmp_pa
                                 "description": "Receipt date follows invoice date and needs business explanation.",
                             }
                         ],
-                        "metadata": {"original_ref": "attachments/originals/03_goods_receipt.md"},
+                        "metadata": {"classification": "business_evidence", "original_ref": "attachments/originals/03_goods_receipt.md"},
                     },
                     {
                         "id": "ev_004",
@@ -230,7 +237,7 @@ def test_case_486266_ap_supplements_bind_manifest_and_keep_real_conflicts(tmp_pa
                         "source": "attachment",
                         "review_result": {"should_accept": True, "evidence_type": "vendor_record"},
                         "supports": [{"requirement": "vendor_identity", "support_level": "full", "quoted_text": "Electric Installations - Urs Schmid"}],
-                        "metadata": {"original_ref": "attachments/originals/04_vendor_record.md"},
+                        "metadata": {"classification": "business_evidence", "original_ref": "attachments/originals/04_vendor_record.md"},
                     },
                     {
                         "id": "ev_005",
@@ -253,7 +260,7 @@ def test_case_486266_ap_supplements_bind_manifest_and_keep_real_conflicts(tmp_pa
                                 "description": "Same supplier and invoice reference have a historical clearing record.",
                             }
                         ],
-                        "metadata": {"original_ref": "attachments/originals/05_duplicate_payment_check.md"},
+                        "metadata": {"classification": "business_evidence", "original_ref": "attachments/originals/05_duplicate_payment_check.md"},
                     },
                 ],
             },
@@ -269,8 +276,9 @@ def test_case_486266_ap_supplements_bind_manifest_and_keep_real_conflicts(tmp_pa
     assert evidence_by_ref["attachments/originals/05_duplicate_payment_check.md"] == ["ev_005"]
     assert "purchase_order" in updated.satisfied_materials
     assert "vendor_identity" in updated.satisfied_materials
-    assert "goods_receipt_or_service_acceptance" in updated.conflict_materials
-    assert "duplicate_payment_screen" in updated.conflict_materials
+    assert "goods_receipt_or_service_acceptance" in updated.weak_materials
+    assert "duplicate_payment_screen" in updated.weak_materials
+    assert updated.conflict_materials == []
     _assert_timestamped_report_generated(store, case_id, started_at="2026-05-30T14:40:19+00:00")
 
 

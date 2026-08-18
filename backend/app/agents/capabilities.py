@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from app.state.schemas import CasePatch, EvidenceReviewResult, MaterialsAdvisorResult, ReportWriterResult
+from app.state.schemas import CasePatch, EvidenceReviewerOutput, MaterialsAdvisorResult, ReportWriterResult
 
 
 RoleOwner = Literal["planner", "route_policy"]
@@ -61,6 +61,7 @@ ROLE_CAPABILITIES: dict[str, RoleCapability] = {
         name="evidence_reviewer",
         input_keys=(
             "mode",
+            "active_requirement_ids",
             "user_message",
             "case_state",
             "rag_context",
@@ -68,19 +69,23 @@ ROLE_CAPABILITIES: dict[str, RoleCapability] = {
             "attachment_manifest",
             "extraction_context",
             "extraction_result",
+            "active_requirement_contracts",
+            "typed_holes",
             "target_evidence_id",
             "target_attachment_id",
             "user_correction",
             "memory_hints",
             "supervisor_task",
         ),
-        output_model=EvidenceReviewResult,
-        prompt_version="evidence_reviewer_v4.3+global_policy_v1.2+review_skill_v1.7+pdf_image_skill_v1.4+attachment_skill_v1.0+supervisor_task",
+        output_model=EvidenceReviewerOutput,
+        prompt_version="evidence_reviewer_v8.0+sparse_source_language_v1+global_policy_v1.2+review_skill_v3.0+pdf_image_skill_v2.1+attachment_skill_v1.0+supervisor_task",
         prompt_file="backend/app/agents/evidence_reviewer/prompt.md",
         context_policy=(
             "case_state_summary",
             "current_attachment_or_manifest",
             "extraction_result",
+            "active_requirement_contracts",
+            "typed_holes",
             "rag_guidance",
             "memory_hints",
         ),
@@ -119,7 +124,7 @@ ROLE_CAPABILITIES: dict[str, RoleCapability] = {
             "supervisor_task",
         ),
         output_model=ReportWriterResult,
-        prompt_version="report_writer_v5.1+global_policy_v1.2+pdf_skill_v2.1",
+        prompt_version="report_writer_v5.2+global_policy_v1.2+pdf_skill_v2.1",
         prompt_file="backend/app/agents/report_writer/prompt.md",
         context_policy=("case_state_summary", "evidence_chain_context", "attachment_manifest", "memory_hints"),
         max_retries=1,

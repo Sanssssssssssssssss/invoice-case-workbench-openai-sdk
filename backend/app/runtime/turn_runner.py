@@ -27,7 +27,7 @@ from app.runtime.agents_sdk import build_run_config, close_run_config_client, ru
 from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.runtime.context_assembler import ContextAssembler, context_budget
 from app.runtime.context_partition import build_context_packet, usage_from_result as extract_usage_from_result, with_usage_metrics
-from app.runtime.evidence_recovery import recover_text_direct_review
+from app.runtime.evidence_recovery import materialize_reviewer_output
 from app.runtime.patch_normalizer import PatchNormalizer
 from app.runtime.policy_gate import PolicyGate, infer_reviewer_mode, requires_materials_advice
 from app.runtime.reasoning_capture import append_reasoning_delta, extract_reasoning_from_result, extract_reasoning_from_stream_item, extract_stream_reasoning_delta
@@ -40,6 +40,13 @@ from app.session_manager import SessionManager
 from app.skills import SkillRegistry
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, AgentTurnResponse, PolicyCheck, SupervisorDecision
+from app.domain.invoice_requirements import (
+    AUTO_DERIVED_COMPILER_REQUIREMENTS,
+    default_requirement_required,
+    is_known_requirement,
+    requirement_kind,
+    requirement_label,
+)
 from app.tools.catalog import ToolCatalog
 from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
@@ -669,14 +676,27 @@ class TurnRunner:
         if _latest_observation(state, kind="tool", name="read_attachment") or _latest_attachment_batch_artifact_ref(state, self.store):
             if not self.context.last_evidence_reviewer_result(state, mode=("review", "repair")):
                 if not _latest_observation_error(state, kind="role", name="evidence_reviewer"):
-                    return "evidence_reviewer", {"mode": "review"}
-        if self.context.last_evidence_reviewer_result(state, mode=("review", "repair")):
-            if not self.context.last_role_result(state, name="case_patch_writer"):
-                if not _latest_observation_error(state, kind="role", name="case_patch_writer"):
-                    return "case_patch_writer", {}
-        if self.context.last_role_result(state, name="case_patch_writer"):
-            if not _latest_observation(state, kind="tool", name="write_case_patch"):
-                return "write_case_patch", {}
+                    selected = list(state.observability.get("active_requirement_ids") or [])
+                    if not selected:
+                        selected = [
+                            item.id
+                            for item in self.store.load(state.case_id).requirements
+                            if item.id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
+                        ]
+                    if selected:
+                        return "evidence_reviewer", {"mode": "review", "active_requirement_ids": selected}
+                    return None
+        reviewer_index = _latest_observation_index(state, kind="role", name="evidence_reviewer")
+        writer_index = _latest_observation_index(state, kind="role", name="case_patch_writer")
+        write_index = _latest_observation_index(state, kind="tool", name="write_case_patch")
+        if reviewer_index > writer_index and not _latest_observation_error(state, kind="role", name="case_patch_writer"):
+            return "case_patch_writer", {}
+        if writer_index > write_index:
+            return "write_case_patch", {}
+        if write_index >= 0 and not self.context.last_evidence_reviewer_result(state, mode="repair"):
+            repair = _binding_repair_payload(self.store.load(state.case_id))
+            if repair:
+                return "evidence_reviewer", repair
         if _report_requested_message(request.message) and self.store.load(state.case_id).status == "ready_for_report":
             if not self.context.last_role_result(state, name="report_writer"):
                 return "report_writer", {"report_instructions": request.message}
@@ -689,7 +709,10 @@ class TurnRunner:
     def _deterministic_final_after_patch(self, request: AgentTurnRequest, state: HarnessRunState) -> str:
         if not _latest_observation(state, kind="tool", name="write_case_patch"):
             return ""
-        if _report_requested_message(request.message) or requires_materials_advice(request.message):
+        if _report_requested_message(request.message):
+            case_state = self.store.load(state.case_id)
+            return "" if case_state.status == "ready_for_report" else _runtime_final_answer(case_state, state)
+        if requires_materials_advice(request.message):
             return ""
         return _runtime_final_answer(self.store.load(state.case_id), state)
 
@@ -763,7 +786,16 @@ class TurnRunner:
         state: HarnessRunState,
         final_text: str,
     ) -> AgentTurnResponse:
-        _ = request
+        if (
+            _latest_observation(state, kind="tool", name="read_attachment")
+            and not _latest_observation(state, kind="tool", name="write_case_patch")
+        ):
+            reviewer_error = _latest_observation_error(state, kind="role", name="evidence_reviewer")
+            final_text = (
+                "附件已读取，但本轮 evidence_reviewer 输出未通过结构校验；任何证据、Claim 或结论都没有写入案件。请重新发起材料审查。"
+                if reviewer_error
+                else _runtime_final_answer(self.store.load(state.case_id), state)
+            )
         decision = SupervisorDecision(
             action="final_answer",
             final_answer=final_text,
@@ -1222,11 +1254,32 @@ class TurnRunner:
             payload["user_question"] = payload.get("question_focus")
         if role == "evidence_reviewer":
             payload["mode"] = infer_reviewer_mode(payload, state)
+            selected = list(dict.fromkeys(str(item or "").strip() for item in payload.get("active_requirement_ids") or [] if str(item or "").strip()))
+            if not selected:
+                selected = list(state.observability.get("active_requirement_ids") or [])
+            unknown = [item for item in selected if not is_known_requirement(item)]
+            if unknown:
+                return {"status": "error", "role": role, "error": {"type": "ValueError", "message": f"Unknown active requirement ids: {unknown}"}}
+            if selected:
+                payload["active_requirement_ids"] = selected
+                state.observability["active_requirement_ids"] = selected
         if role == "case_patch_writer":
             reviewer_result = self.context.last_evidence_reviewer_result(state, mode=("review", "repair"))
             if not reviewer_result:
                 return {"status": "error", "role": role, "error": {"type": "ValueError", "message": "No reviewed evidence is available."}}
             result = reduce_review_to_patch(reviewer_result)
+            selected = list(state.observability.get("active_requirement_ids") or [])
+            if selected:
+                result["case_updates"]["requirements"] = [
+                    {
+                        "id": requirement_id,
+                        "label": requirement_label(requirement_id),
+                        "kind": requirement_kind(requirement_id),
+                        "required": default_requirement_required(requirement_id),
+                    }
+                    for requirement_id in selected
+                    if requirement_id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
+                ]
             capability = self.roles.trace_metadata(role)
             capability.update(
                 runtime="deterministic_reducer",
@@ -1291,6 +1344,8 @@ class TurnRunner:
                         on_stream=stream_handler,
                         prompt_partition=role_partition_metadata,
                     )
+                if role == "evidence_reviewer":
+                    result = materialize_reviewer_output(result, role_input)
                 _mark_prior_specialist_errors_recovered(
                     state,
                     self.llm.calls,
@@ -1324,14 +1379,6 @@ class TurnRunner:
                 span.update(output=safe_role_output(result))
                 return _manager_success("role", role, observation=observation)
             except Exception as exc:
-                recovery = self._recover_evidence_reviewer_timeout(state, role, role_input, role_capability, exc)
-                if recovery:
-                    span.update(
-                        output=safe_role_output(recovery, error=f"recovered after {type(exc).__name__}"),
-                        level="WARNING",
-                        status_message=f"recovered after {type(exc).__name__}",
-                    )
-                    return _manager_success("role", role, observation=_latest_observation(state, kind="role", name=role), result=recovery)
                 self.harness.record_role_call(state, role, role_input, {}, error=f"{type(exc).__name__}: {exc}", capability=role_capability)
                 self.harness.record_observation(state, self.context.record_error(kind="role", name=role, exc=exc))
                 span.update(output=safe_role_output({}, error=f"{type(exc).__name__}: {exc}"), level="ERROR", status_message=str(exc))
@@ -1349,64 +1396,6 @@ class TurnRunner:
             self.record_sdk_stream_event(state, event)
 
         return handle
-
-    def _recover_evidence_reviewer_timeout(
-        self,
-        state: HarnessRunState,
-        role: str,
-        role_input: dict[str, Any],
-        role_capability: dict[str, Any],
-        exc: Exception,
-    ) -> dict[str, Any] | None:
-        if role != "evidence_reviewer":
-            return None
-        if str(role_input.get("mode") or "").strip().lower() != "review":
-            return None
-        if not _is_recoverable_specialist_error(exc):
-            return None
-        artifact_ref = _latest_attachment_batch_artifact_ref(state, self.store)
-        if not artifact_ref:
-            return None
-        try:
-            attachment_batch = self.context.artifacts.read(state.case_id, artifact_ref)
-        except Exception:
-            return None
-        recovery = recover_text_direct_review(attachment_batch, error=exc)
-        if not recovery:
-            return None
-        capability = dict(role_capability)
-        capability["runtime_recovery"] = (
-            "text_direct_review_after_specialist_timeout"
-            if _is_timeout_error(exc)
-            else "text_direct_review_after_specialist_transient_failure"
-        )
-        _mark_latest_model_call_recovered(
-            self.llm.calls,
-            role=role,
-            recovered_by=capability["runtime_recovery"],
-            exc=exc,
-        )
-        self.harness.append_debug_event(
-            state,
-            kind="runtime_recovery",
-            name="evidence_reviewer_text_direct",
-            payload={
-                "role": role,
-                "mode": role_input.get("mode", ""),
-                "source_artifact_ref": artifact_ref,
-                "error": {"type": type(exc).__name__, "message": str(exc)},
-                "evidence_count": len((recovery.get("suggested_patch") or {}).get("add_evidence") or []),
-            },
-            summary="Recovered evidence_reviewer review from text-direct attachment extraction after timeout.",
-            parent_event_id=state.last_action_event_id,
-            caused_by_event_id=state.last_action_event_id,
-        )
-        self.harness.record_role_call(state, role, role_input, recovery, capability=capability)
-        observation = self.context.record_result(state, kind="role", name=role, result=recovery)
-        observation["runtime_recovery"] = capability["runtime_recovery"]
-        self.harness.record_observation(state, observation)
-        self._update_phase_after_role(state, role, recovery)
-        return recovery
 
     def _call_tool(self, state: HarnessRunState, request: AgentTurnRequest, decision: SupervisorDecision) -> dict[str, Any]:
         payload = self._tool_payload_defaults(decision.target, dict(decision.input or {}), state)
@@ -1749,6 +1738,50 @@ def _latest_observation(state: HarnessRunState, *, kind: str, name: str) -> dict
     return {}
 
 
+def _latest_observation_index(state: HarnessRunState, *, kind: str, name: str) -> int:
+    observations = getattr(state, "observations", []) or []
+    return next(
+        (
+            index
+            for index in range(len(observations) - 1, -1, -1)
+            if isinstance(observations[index], dict)
+            and observations[index].get("kind") == kind
+            and observations[index].get("name") == name
+        ),
+        -1,
+    )
+
+
+def _binding_repair_payload(case_state: Any) -> dict[str, Any]:
+    proof = getattr(case_state, "compiled_proof", None)
+    diagnostics = [
+        item
+        for item in list(getattr(proof, "diagnostics", []) or [])
+        if getattr(item, "category", "") == "binding"
+        and getattr(item, "retry_owner", "") == "reviewer"
+        and getattr(item, "blocking", True)
+    ]
+    if not diagnostics:
+        return {}
+    payload = {
+        "mode": "repair",
+        "active_requirement_ids": sorted({
+            str(getattr(item, "requirement_id", "") or "")
+            for item in diagnostics
+            if str(getattr(item, "requirement_id", "") or "")
+        }),
+        "compilation_diagnostics": [item.model_dump(mode="json") for item in diagnostics],
+    }
+    evidence_ids = sorted({
+        str(getattr(item, "evidence_id", "") or "")
+        for item in diagnostics
+        if str(getattr(item, "evidence_id", "") or "")
+    })
+    if len(evidence_ids) == 1:
+        payload["target_evidence_id"] = evidence_ids[0]
+    return payload
+
+
 def _latest_attachment_batch_artifact_ref(state: HarnessRunState, store: CaseStore) -> str:
     ref = str(_latest_observation(state, kind="tool", name="read_attachment").get("artifact_ref") or "").strip()
     if ref:
@@ -1974,6 +2007,12 @@ def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
     weak_ids = _requirement_ids(case_state, "weak")
     satisfied_ids = _requirement_ids(case_state, "satisfied") + _requirement_ids(case_state, "accepted")
     status = str(getattr(case_state, "status", "") or "")
+    diagnostics = list(getattr(proof, "diagnostics", []) or [])
+    binding_errors = [
+        item
+        for item in diagnostics
+        if getattr(item, "category", "") == "binding" and getattr(item, "blocking", True)
+    ]
 
     if decisions:
         lines = ["本轮材料审查已经记录到案卷，以下状态来自 canonical compiled proof。"]
@@ -2022,6 +2061,14 @@ def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
         lines.append(f"- 待核对问题：{_safe_text(questions[0], max_chars=260)}")
 
     if decisions:
+        if binding_errors:
+            lines.append(
+                "- Binding diagnostics: "
+                + _csv([
+                    str(getattr(item, "code", "BINDING_ERROR") or "BINDING_ERROR")
+                    for item in binding_errors
+                ])
+            )
         outcomes = {str(getattr(item, "outcome", "") or "") for item in decisions}
         decision_requirements = {
             str(getattr(item, "requirement_id", "") or "")
@@ -2033,6 +2080,14 @@ def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
             "weak": [item for item in weak_ids if item not in decision_requirements],
             "conflict": [item for item in conflict_ids if item not in decision_requirements],
         }
+        reportable_findings = [
+            str(getattr(item, "requirement_id", "") or getattr(item, "program_id", "") or "unnamed_decision")
+            for item in decisions
+            if str(getattr(item, "outcome", "") or "") == "EVIDENCE_SUFFICIENT_FOR_REPORT"
+            and str(getattr(item, "proof_status", "") or "") == "DISPROVED"
+        ]
+        if reportable_findings:
+            lines.append(f"可进入报告的已证实发现：{_csv(reportable_findings)}。")
         if (
             outcomes == {"EVIDENCE_SUFFICIENT_FOR_REPORT"}
             and status == "ready_for_report"
@@ -2041,6 +2096,8 @@ def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
             lines.append("结论：所有 canonical decisions 均为 EVIDENCE_SUFFICIENT_FOR_REPORT，且案卷已 ready_for_report；可进入报告。")
         elif "ABSTAIN_OR_ESCALATE" in outcomes:
             lines.append("结论：至少一个 canonical decision 为 ABSTAIN_OR_ESCALATE；应升级处理。")
+        elif binding_errors:
+            lines.append("结论：当前阻塞是 Reviewer 语义包与 Contract 的绑定失败，不是缺少业务材料；系统应修复语义包，不能调用材料顾问或要求用户重复补交已有来源。")
         elif "HOLD_FOR_EVIDENCE" in outcomes:
             lines.append("结论：至少一个 canonical decision 为 HOLD_FOR_EVIDENCE；应先处理 blocking proof obligations。")
         elif any(ordinary_blockers.values()):
@@ -2084,6 +2141,8 @@ def _is_timeout_error(exc: Exception) -> bool:
 
 def _is_recoverable_specialist_error(exc: Exception) -> bool:
     text = f"{type(exc).__name__}: {exc}".lower()
+    if any(marker in text for marker in ("modelbehaviorerror", "typeadapter", "validation error", "validationerror", "schema")):
+        return False
     return _is_timeout_error(exc) or is_transient_llm_error(exc) or "overloaded" in text
 
 
@@ -2155,31 +2214,6 @@ def _approval_rejection_answer(tool: str) -> str:
     if tool == "write_case_file":
         return "已取消执行 write_case_file；报告文件未写入。"
     return f"已取消执行 {tool}。" if tool else "已取消执行该操作。"
-
-
-def _mark_latest_model_call_recovered(
-    calls: list[ModelCallRecord],
-    *,
-    role: str,
-    recovered_by: str,
-    exc: Exception,
-) -> None:
-    error_type = type(exc).__name__
-    error_text = str(exc)
-    for record in reversed(calls):
-        if record.role != role or not record.error:
-            continue
-        if error_type not in record.error and error_text not in record.error:
-            continue
-        record.recovered_by = recovered_by
-        record.output_preview = f"Recovered by {recovered_by} after {error_type}."
-        record.raw_response = json.dumps(
-            {"recovered_by": recovered_by, "original_error_type": error_type},
-            ensure_ascii=False,
-        )
-        record.finish_reason = f"recovered_by:{recovered_by}"
-        record.error = ""
-        return
 
 
 def _mark_prior_specialist_errors_recovered(

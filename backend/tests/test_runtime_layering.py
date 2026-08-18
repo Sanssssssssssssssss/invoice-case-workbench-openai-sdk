@@ -16,7 +16,6 @@ from app.runtime.context_assembler import ContextAssembler
 from app.runtime.supervisor_contract import sorted_specialist_tool_specs
 from app.runtime.policy_gate import (
     PolicyGate,
-    attachment_result_needs_extract,
     guard_retry_feedback,
     requires_attachment_reopen,
     requires_materials_advice,
@@ -257,6 +256,27 @@ def test_requires_materials_advice_for_plain_chinese_material_question() -> None
     assert requires_materials_advice("这个案例属于什么类型，以后类似案例要保证发票里有什么内容？")
 
 
+def test_policy_gate_honors_explicit_no_advisor(tmp_path) -> None:
+    message = "审核附件，但不要 Advisor"
+    store, context, _harness, state = _state(tmp_path, message=message)
+
+    check = PolicyGate(store=store, context=context).check(
+        request=AgentTurnRequest(case_id=state.case_id, message=message),
+        state=state,
+        decision=SupervisorDecision(
+            action="delegate_agent",
+            target="materials_advisor",
+            input={},
+            reason="unnecessary",
+        ),
+        planner_context={"attachments": []},
+    )
+
+    assert requires_materials_advice(message) is False
+    assert check.allowed is False
+    assert check.error_type == "materials_advisor_forbidden"
+
+
 def test_policy_gate_does_not_loop_after_nonretryable_advisor_failure(tmp_path) -> None:
     store, context, harness, state = _state(tmp_path, message="你能审核哪些材料，这些材料我需要补充什么呢")
     harness.record_role_call(
@@ -296,6 +316,43 @@ def test_policy_gate_blocks_material_answer_after_advisor_terminal_failure(tmp_p
 
     assert not check.allowed
     assert check.error_type == "advisor_failure_requires_disclosure"
+
+
+def test_policy_gate_does_not_repeat_reviewer_after_invalid_json(tmp_path) -> None:
+    store, context, _harness, state = _state(tmp_path, message="review attachments")
+    state.role_calls.append({
+        "role": "evidence_reviewer",
+        "error": "ModelBehaviorError: Invalid JSON when parsing reviewer output",
+    })
+
+    check = PolicyGate(store=store, context=context).check(
+        request=AgentTurnRequest(case_id=state.case_id, message="review attachments"),
+        state=state,
+        decision=SupervisorDecision(
+            action="delegate_agent",
+            target="evidence_reviewer",
+            input={"mode": "review"},
+            reason="retry",
+        ),
+        planner_context={"attachments": []},
+    )
+
+    assert not check.allowed
+    assert check.error_type == "role_terminal_failure"
+
+    next_check = PolicyGate(store=store, context=context).check(
+        request=AgentTurnRequest(case_id=state.case_id, message="review attachments"),
+        state=state,
+        decision=SupervisorDecision(
+            action="delegate_agent",
+            target="case_patch_writer",
+            input={},
+            reason="cannot patch failed review",
+        ),
+        planner_context={"attachments": []},
+    )
+    assert not next_check.allowed
+    assert next_check.error_type == "reviewer_failure_requires_final"
 
 
 def test_policy_gate_blocks_repeating_nonretryable_failed_role(tmp_path) -> None:
@@ -387,45 +444,6 @@ def test_supervisor_task_carries_decision_brief_and_policy_feedback(tmp_path) ->
     assert task["reason"] == "用户上传了发票，需要先抽取字段。"
     assert task["short_plan"] == ["抽取字段", "再审查证据"]
     assert task["policy_feedback"]["error_type"] == "attachment_requires_reviewer"
-
-
-def test_text_attachment_extraction_ref_does_not_force_extract_mode() -> None:
-    result = {
-        "attachments": [
-            {
-                "name": "invoice.md",
-                "content_kind": "text",
-                "extraction_method": "text_direct",
-                "extraction_ref": "evidence/extractions/att_text.json",
-                "preview_paths": [],
-            }
-        ]
-    }
-
-    assert attachment_result_needs_extract(result) is False
-
-
-def test_multiple_text_attachments_do_not_force_extract_mode() -> None:
-    result = {
-        "attachments": [
-            {"name": "invoice.md", "content_kind": "text", "extraction_method": "text_direct", "preview_paths": []},
-            {"name": "po.md", "content_kind": "text", "extraction_method": "text_direct", "preview_paths": []},
-            {"name": "duplicate_check.md", "content_kind": "text", "extraction_method": "text_direct", "preview_paths": []},
-        ]
-    }
-
-    assert attachment_result_needs_extract(result) is False
-
-
-def test_multiple_pdf_attachments_still_use_extract_mode() -> None:
-    result = {
-        "attachments": [
-            {"name": "invoice.pdf", "content_kind": "pdf", "extraction_method": "pymupdf_text", "preview_paths": []},
-            {"name": "po.md", "content_kind": "text", "extraction_method": "text_direct", "preview_paths": []},
-        ]
-    }
-
-    assert attachment_result_needs_extract(result) is True
 
 
 def test_policy_gate_blocks_extract_when_text_attachment_expects_review(tmp_path) -> None:
@@ -552,8 +570,10 @@ def test_runtime_error_classification_blocks_terminal_read_attachment() -> None:
 def test_retry_predicates_only_allow_transient_failures() -> None:
     assert is_transient_llm_error(TimeoutError("provider timeout"))
     assert is_transient_llm_error(RuntimeError("503 service unavailable"))
+    assert is_transient_llm_error(RuntimeError("HTTP 500 service unavailable"))
     assert is_transient_tool_error(OSError("temporary OCR subprocess timeout"))
     assert not is_transient_llm_error(ValueError("schema validation failed"))
+    assert not is_transient_llm_error(RuntimeError("ModelBehaviorError: invoice 10500, variance 500"))
     assert not is_transient_tool_error(ValueError("policy block"))
 
 
@@ -664,7 +684,7 @@ def test_case_patch_normalizes_grn_support_alias(tmp_path) -> None:
     )
 
     assert state.evidence_items[0].supports[0].requirement == "goods_receipt_or_service_acceptance"
-    assert state.requirements[0].status == "satisfied"
+    assert state.requirements[0].status == "accepted"
 
 
 def test_step_limit_answer_does_not_leak_guard_retry_instruction(tmp_path) -> None:

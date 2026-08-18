@@ -213,7 +213,21 @@ def _state_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[Che
         key = {"proof_status": "proof_status", "proof_outcome": "outcome", "proof_policy_version": "policy_version"}[name]
         observed = str(decision.get(key) or "")
         checks.append(CheckResult(name=name, passed=observed == expected_value, score=1.0 if observed == expected_value else 0.0, details={"expected": expected_value, "observed": observed}))
-    observed_obligations = {str(item.get("id") or "") for item in proof.get("obligations") or [] if isinstance(item, dict)}
+    target_program_id = str(decision.get("program_id") or "")
+    proof_checks = {
+        str(item.get("id") or ""): str(item.get("status") or "")
+        for item in proof.get("checks") or []
+        if isinstance(item, dict)
+        and (not target_program_id or str(item.get("program_id") or "") == target_program_id)
+    }
+    for check_id, expected_status in expected.proof_checks.items():
+        observed = proof_checks.get(check_id, "")
+        checks.append(CheckResult(name=f"proof_check:{check_id}", passed=observed == expected_status, score=1.0 if observed == expected_status else 0.0, details={"expected": expected_status, "observed": observed}))
+    observed_obligations = {
+        str(item)
+        for item in decision.get("obligation_ids") or []
+        if str(item)
+    }
     for obligation_id in expected.proof_obligation_ids:
         checks.append(CheckResult(name=f"proof_obligation:{obligation_id}", passed=obligation_id in observed_obligations, score=1.0 if obligation_id in observed_obligations else 0.0, details={"observed": sorted(observed_obligations)}))
     for flag in expected.must_not_have_risk_flags:

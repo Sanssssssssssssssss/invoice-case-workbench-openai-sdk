@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Mapping
+import re
+from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel
 
-from app.domain.invoice_requirements import POLICY_PATH
+from app.domain.invoice_contracts import build_requirement_contracts
+from app.domain.invoice_requirements import POLICY_PATH, REQUIREMENT_PACK
 from app.domain.semantic_graph import (
-    AttributeBinding,
-    ClaimBinding,
     ClaimSelector,
     NodeSpec,
     SemanticGraphSpec,
     compile_proof_graph,
+    lower_case_evidence_ir,
 )
-from app.state.schemas import CompiledProof, EvidenceItem, VerificationRecord
+from app.state.schemas import CompiledProof, EvidenceItem, RequirementContract, VerificationRecord
 
 
 class InvoiceProofPolicy(BaseModel):
@@ -26,211 +27,336 @@ class InvoiceProofPolicy(BaseModel):
     comparable_tax_bases: list[str]
     comparable_coverages: list[str]
     amount_match_requirement: str
-    semantic_judgment_min_confidence: str = "high"
-
-
-AMOUNT_SUBJECTS = ("invoice", "purchase_order", "goods_receipt")
+    semantic_judgment_min_confidence: Literal["low", "medium", "high"] = "high"
 
 
 def load_invoice_proof_policy(path: Path = POLICY_PATH) -> InvoiceProofPolicy:
     return InvoiceProofPolicy.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def amount_proof_program(policy: InvoiceProofPolicy) -> SemanticGraphSpec:
-    attributes = (
-        AttributeBinding("currency", ("currency", "currency_tax"), "currency", fallback_from_primary_quote=True),
-        AttributeBinding("basis", ("basis", "amount_basis"), allowed_values=("invoice_total", "line_total", "order_total", "received_value", "cumulative_received_value", "unknown")),
-        AttributeBinding("tax_basis", ("tax_basis",), allowed_values=("gross", "net", "unknown")),
-        AttributeBinding("coverage", ("coverage", "amount_coverage"), allowed_values=("full", "partial", "cumulative", "unknown")),
-    )
-    bindings = (
-        ClaimBinding("invoice", "amount", "extracted_field", ("invoice",), "invoice", "decimal", ("amount_total", "invoice_total", "amount", "total"), attributes=attributes, quote_must_contain_value=True),
-        ClaimBinding("purchase_order", "amount", "extracted_field", ("purchase_order",), "purchase_order", "decimal", ("po_amount", "approved_amount", "order_total", "amount_total", "amount", "total"), attributes=attributes, quote_must_contain_value=True),
-        ClaimBinding("goods_receipt", "amount", "extracted_field", ("goods_receipt",), "goods_receipt_or_service_acceptance", "decimal", ("received_value", "grn_amount", "amount_total", "amount", "total"), attributes=attributes, quote_must_contain_value=True),
-        ClaimBinding("invoice", "order_scope_identity", "semantic_ir", ("invoice",), "invoice", "string", quote_must_contain_value=True),
-        ClaimBinding("purchase_order", "order_scope_identity", "semantic_ir", ("purchase_order",), "purchase_order", "string", quote_must_contain_value=True),
-        ClaimBinding("goods_receipt", "order_scope_identity", "semantic_ir", ("goods_receipt",), "goods_receipt_or_service_acceptance", "string", quote_must_contain_value=True),
-    )
-    selectors = tuple(ClaimSelector(subject, "amount") for subject in AMOUNT_SUBJECTS)
-    scope_selectors = tuple(ClaimSelector(subject, "order_scope_identity") for subject in AMOUNT_SUBJECTS)
-    presence = ("CHK_INVOICE_AMOUNT_PRESENT", "CHK_PO_AMOUNT_PRESENT", "CHK_GRN_VALUE_PRESENT")
-    nodes = (
-        NodeSpec(presence[0], policy.amount_match_requirement, "present", (selectors[0],), missing_premise="source-traceable invoice amount", obligation_id="OBL_INVOICE_AMOUNT_PRESENT"),
-        NodeSpec(presence[1], policy.amount_match_requirement, "present", (selectors[1],), missing_premise="source-traceable purchase order amount", obligation_id="OBL_PO_AMOUNT_PRESENT"),
-        NodeSpec(presence[2], policy.amount_match_requirement, "present", (selectors[2],), missing_premise="source-traceable goods receipt amount", obligation_id="OBL_GRN_VALUE_PRESENT"),
-        NodeSpec("CHK_DOCUMENT_SCOPE_IDENTITY", policy.amount_match_requirement, "same", scope_selectors, missing_premise="one explicit source-linked order scope identity shared by invoice, purchase order, and goods receipt", obligation_id="OBL_DOCUMENT_SCOPE_IDENTITY"),
-        NodeSpec("CHK_CURRENCY_COMPATIBLE", policy.amount_match_requirement, "same", selectors, presence, "currency", missing_premise="explicit source-linked currency for every amount", obligation_id="OBL_CURRENCY_COMPATIBLE"),
-        NodeSpec("CHK_AMOUNT_BASIS_ALLOWED", policy.amount_match_requirement, "allowed_by_subject", selectors, presence, "basis", {"allowed_by_subject": policy.allowed_amount_basis_by_subject, "on_disallowed": "INCOMPLETE"}, missing_premise="source-linked amount basis for every document", obligation_id="OBL_AMOUNT_BASIS"),
-        NodeSpec("CHK_TAX_BASIS_ALLOWED", policy.amount_match_requirement, "allowed", selectors, presence, "tax_basis", {"allowed": policy.comparable_tax_bases, "on_disallowed": "INCOMPLETE"}, missing_premise="source-linked tax basis for every document", obligation_id="OBL_TAX_BASIS"),
-        NodeSpec("CHK_TAX_BASIS_EQUAL", policy.amount_match_requirement, "same", selectors, presence, "tax_basis", {"on_mismatch": "INCOMPLETE"}, missing_premise="reconciliation showing one comparable tax basis across all three documents", obligation_id="OBL_TAX_BASIS_EQUAL"),
-        NodeSpec("CHK_COVERAGE_COMPATIBLE", policy.amount_match_requirement, "allowed", selectors, presence, "coverage", {"allowed": policy.comparable_coverages, "on_disallowed": "INCOMPLETE"}, missing_premise="source-linked full and comparable document coverage", obligation_id="OBL_DOCUMENT_COVERAGE"),
-        NodeSpec("CHK_AMOUNT_BASIS_COMPATIBLE", policy.amount_match_requirement, "all", depends_on=("CHK_AMOUNT_BASIS_ALLOWED", "CHK_TAX_BASIS_ALLOWED", "CHK_TAX_BASIS_EQUAL", "CHK_COVERAGE_COMPATIBLE")),
-        NodeSpec(
-            "JDG_AMOUNT_SCOPE_COMPARABLE",
-            policy.amount_match_requirement,
-            "llm_judgment",
-            selectors,
-            (*presence, "CHK_DOCUMENT_SCOPE_IDENTITY", "CHK_CURRENCY_COMPATIBLE", "CHK_AMOUNT_BASIS_COMPATIBLE"),
-            params={"min_confidence": policy.semantic_judgment_min_confidence},
-            executor="llm",
-            judgment_id="JDG_AMOUNT_SCOPE_COMPARABLE",
-            required_attributes=("basis", "tax_basis", "coverage"),
-            missing_premise="source-grounded semantic judgment that the three amounts describe the same economic scope",
-            obligation_id="OBL_AMOUNT_SCOPE_COMPARABLE",
-        ),
-        NodeSpec(
-            "CHK_AMOUNT_WITHIN_TOLERANCE",
-            policy.amount_match_requirement,
-            "within_percent",
-            selectors,
-            ("CHK_DOCUMENT_SCOPE_IDENTITY", "CHK_CURRENCY_COMPATIBLE", "CHK_AMOUNT_BASIS_COMPATIBLE", "JDG_AMOUNT_SCOPE_COMPARABLE"),
-            params={"threshold_percent": policy.amount_tolerance_percent, "pairs": ((0, 1), (0, 2))},
-        ),
-        NodeSpec(
-            "REQ_THREE_WAY_AMOUNT_MATCH",
-            policy.amount_match_requirement,
-            "all",
-            depends_on=(*presence, "CHK_DOCUMENT_SCOPE_IDENTITY", "CHK_CURRENCY_COMPATIBLE", "CHK_AMOUNT_BASIS_COMPATIBLE", "JDG_AMOUNT_SCOPE_COMPARABLE", "CHK_AMOUNT_WITHIN_TOLERANCE"),
-        ),
-    )
+def contract_proof_program(
+    contract: RequirementContract,
+    *,
+    unresolved_policy_keys: set[str] | None = None,
+    policy_values: Mapping[str, Any] | None = None,
+) -> SemanticGraphSpec:
+    """Small generic view for policy contracts that do not need a specialized kernel."""
+    prefix = re.sub(r"[^A-Z0-9]+", "_", contract.requirement_id.upper()).strip("_")
+    missing_policy = unresolved_policy_keys or set()
+    kernel_policy = policy_values or {}
+    min_confidence = str(kernel_policy.get("semantic_judgment_min_confidence") or "high")
+    if contract.proof_template == "evidence_support":
+        root_id = f"REQ_{prefix}"
+        nodes = (
+            NodeSpec(
+                root_id,
+                contract.requirement_id,
+                "evidence_support",
+                params={"role": contract.requirement_id},
+                missing_premise=f"trusted accepted evidence supporting {contract.requirement_id}",
+                obligation_id=f"OBL_{prefix}_SOURCE",
+            ),
+        )
+    else:
+        selectors = tuple(
+            ClaimSelector(item.subject, item.predicate)
+            for item in contract.inputs
+            if item.hole_kind in {"claim", "relation"}
+        )
+        source_nodes = tuple(
+            NodeSpec(
+                f"SRC_{prefix}_{re.sub(r'[^A-Z0-9]+', '_', role.upper()).strip('_')}",
+                contract.requirement_id,
+                "evidence_support",
+                params={"role": role},
+                missing_premise=f"trusted accepted evidence supporting {role}",
+                obligation_id=f"OBL_{prefix}_{re.sub(r'[^A-Z0-9]+', '_', role.upper()).strip('_')}_SOURCE",
+            )
+            for role in contract.evidence_roles
+        )
+        policy_nodes = tuple(
+            NodeSpec(
+                f"POL_{prefix}_{re.sub(r'[^A-Z0-9]+', '_', key.upper()).strip('_')}",
+                contract.requirement_id,
+                "policy_present",
+                params={"configured": key not in missing_policy, "policy_key": key},
+                missing_premise=f"configured enterprise policy value {key}",
+                obligation_id=f"OBL_{prefix}_{re.sub(r'[^A-Z0-9]+', '_', key.upper()).strip('_')}_POLICY",
+            )
+            for key in contract.policy_inputs
+        )
+        target = next(
+            (item.predicate for item in contract.inputs if item.hole_kind == "judgment"),
+            contract.target_predicate,
+        )
+        if contract.proof_template == "reconciliation":
+            nodes, root_id = _reconciliation_contract_nodes(
+                contract,
+                prefix,
+                source_nodes,
+                policy_nodes,
+                target,
+                kernel_policy,
+            )
+        elif contract.proof_template == "entity_lifecycle":
+            nodes, root_id = _lifecycle_contract_nodes(
+                contract,
+                prefix,
+                source_nodes,
+                policy_nodes,
+                target,
+                min_confidence=min_confidence,
+            )
+        else:
+            root_id = f"JDG_{prefix}"
+            nodes = (
+                *source_nodes,
+                *policy_nodes,
+                NodeSpec(
+                    root_id,
+                    contract.requirement_id,
+                    "llm_judgment",
+                    selectors=selectors,
+                    depends_on=tuple(item.id for item in (*source_nodes, *policy_nodes)),
+                    params={"min_confidence": min_confidence},
+                    executor="llm",
+                    judgment_id=root_id,
+                    target_predicate=target,
+                    missing_premise=f"source-grounded semantic judgment for {target}",
+                    obligation_id=f"OBL_{prefix}_JUDGMENT",
+                ),
+            )
     return SemanticGraphSpec(
-        id="three_way_amount_match",
-        version="3",
-        requirement_id=policy.amount_match_requirement,
-        claim_bindings=bindings,
+        id=f"contract_view:{contract.requirement_id}",
+        version=contract.version,
+        requirement_id=contract.requirement_id,
+        claim_bindings=(),
         nodes=nodes,
-        root_id="REQ_THREE_WAY_AMOUNT_MATCH",
-        activation_requirements=("invoice", "purchase_order", "goods_receipt_or_service_acceptance"),
+        root_id=root_id,
     )
 
 
-def no_active_duplicate_program(policy: InvoiceProofPolicy) -> SemanticGraphSpec:
-    bindings = (
-        ClaimBinding("invoice", "payable_identity", "semantic_ir", ("invoice",), "invoice", "string", quote_must_contain_value=True),
-        ClaimBinding("duplicate_search", "payable_identity", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "string", quote_must_contain_value=True),
-        ClaimBinding("duplicate_search", "coverage", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "enum", allowed_values=("complete", "partial", "unknown")),
-        ClaimBinding("duplicate_search", "result", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "enum", allowed_values=("no_candidate", "candidate_found", "unknown")),
-        ClaimBinding("duplicate_search", "candidate_identity", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "string", quote_must_contain_value=True),
-        ClaimBinding("payment", "identity", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "string", quote_must_contain_value=True),
-        ClaimBinding("payment", "relationship_to_payable", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "enum", allowed_values=("same_obligation", "different_obligation", "unknown")),
-        ClaimBinding("payment", "economic_effect", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "enum", allowed_values=("neutralized_by_reversal", "active_settled", "unknown")),
-        ClaimBinding("reversal", "reverses", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "string", quote_must_contain_value=True),
-        ClaimBinding("reversal", "posting_status", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "enum", allowed_values=("posted", "draft", "voided", "unknown")),
-        ClaimBinding("reversal", "scope", "semantic_ir", ("duplicate_payment_check",), "duplicate_payment_screen", "enum", allowed_values=("full", "partial", "unknown")),
+def _reconciliation_contract_nodes(
+    contract: RequirementContract,
+    prefix: str,
+    source_nodes: tuple[NodeSpec, ...],
+    policy_nodes: tuple[NodeSpec, ...],
+    target: str,
+    policy_values: Mapping[str, Any],
+) -> tuple[tuple[NodeSpec, ...], str]:
+    typed_inputs = [item for item in contract.inputs if item.hole_kind in {"claim", "relation"}]
+    selectors = [ClaimSelector(item.subject, item.predicate, required=item.required) for item in typed_inputs]
+    required_rows = [(item, selector) for item, selector in zip(typed_inputs, selectors) if item.required]
+    presence = tuple(
+        NodeSpec(
+            f"CHK_{prefix}_INPUT_{index}",
+            contract.requirement_id,
+            "present",
+            (selector,),
+            missing_premise=f"source-grounded {item.subject}.{item.predicate}",
+            obligation_id=f"OBL_{prefix}_INPUT_{index}",
+        )
+        for index, (item, selector) in enumerate(required_rows, start=1)
     )
-    selectors = (
-        ClaimSelector("invoice", "payable_identity"),
-        ClaimSelector("duplicate_search", "payable_identity"),
-        ClaimSelector("duplicate_search", "coverage"),
-        ClaimSelector("duplicate_search", "result"),
-        ClaimSelector("duplicate_search", "candidate_identity", required=False),
-        ClaimSelector("payment", "identity", required=False),
-        ClaimSelector("payment", "relationship_to_payable", required=False),
-        ClaimSelector("payment", "economic_effect", required=False),
-        ClaimSelector("reversal", "reverses", required=False),
-        ClaimSelector("reversal", "posting_status", required=False),
-        ClaimSelector("reversal", "scope", required=False),
-    )
-    nodes = (
-        NodeSpec(
-            "CHK_DUPLICATE_SEARCH_SCOPE",
-            "no_active_duplicate",
-            "same",
-            selectors[:2],
-            params={"on_mismatch": "INCOMPLETE"},
-            missing_premise="duplicate search explicitly scoped to the current payable identity",
-            obligation_id="OBL_DUPLICATE_SEARCH_SCOPE",
-        ),
-        NodeSpec(
-            "CHK_DUPLICATE_SEARCH_COVERAGE",
-            "no_active_duplicate",
-            "allowed",
-            (selectors[2],),
-            ("CHK_DUPLICATE_SEARCH_SCOPE",),
-            params={"allowed": ("complete",), "on_disallowed": "INCOMPLETE"},
-            missing_premise="complete authoritative duplicate-payment search coverage",
-            obligation_id="OBL_DUPLICATE_SEARCH_COVERAGE",
-        ),
-        NodeSpec(
-            "CHK_DUPLICATE_SEARCH_RESULT",
-            "no_active_duplicate",
-            "allowed",
-            (selectors[3],),
-            ("CHK_DUPLICATE_SEARCH_SCOPE",),
-            params={"allowed": ("no_candidate", "candidate_found"), "on_disallowed": "INCOMPLETE"},
-            missing_premise="resolved duplicate-payment search result",
-            obligation_id="OBL_DUPLICATE_SEARCH_RESULT",
-        ),
-        NodeSpec(
-            "JDG_NO_ACTIVE_DUPLICATE",
-            "no_active_duplicate",
-            "llm_judgment",
-            selectors,
-            ("CHK_DUPLICATE_SEARCH_COVERAGE", "CHK_DUPLICATE_SEARCH_RESULT"),
-            params={
-                "min_confidence": policy.semantic_judgment_min_confidence,
-                "entity_judgments": {
-                    "branch_selector": ("duplicate_search", "result"),
-                    "empty_value": "no_candidate",
-                    "grouped_value": "candidate_found",
-                    "empty_verdict": "SUPPORTED",
-                    "group_selectors": tuple(
-                        (selector.subject, selector.predicate)
-                        for selector in selectors[4:]
-                    ),
-                    "anchor_selector": ("duplicate_search", "candidate_identity"),
-                    "verdict_value_options": {
-                        "SUPPORTED": (
-                            (
-                                ("payment", "relationship_to_payable", ("same_obligation",)),
-                                ("payment", "economic_effect", ("neutralized_by_reversal",)),
-                                ("reversal", "posting_status", ("posted",)),
-                                ("reversal", "scope", ("full",)),
-                            ),
-                        ),
-                        "REFUTED": (
-                            (
-                                ("payment", "relationship_to_payable", ("same_obligation",)),
-                                ("payment", "economic_effect", ("active_settled",)),
-                            ),
-                        ),
-                    },
-                    "verdict_equalities": {
-                        "SUPPORTED": (
-                            (
-                                ("duplicate_search", "candidate_identity"),
-                                ("payment", "identity"),
-                            ),
-                            (
-                                ("payment", "identity"),
-                                ("reversal", "reverses"),
-                            ),
-                        ),
-                        "REFUTED": (
-                            (
-                                ("duplicate_search", "candidate_identity"),
-                                ("payment", "identity"),
-                            ),
-                        ),
-                    },
+    numeric = [
+        selector
+        for item, selector in zip(typed_inputs, selectors)
+        if item.value_type in {"decimal", "integer"}
+    ]
+    attribute_presence: list[NodeSpec] = []
+    attribute_checks: list[NodeSpec] = []
+    for attribute in ("unit", "currency", "basis", "tax_basis", "coverage"):
+        selected = [
+            selector
+            for item, selector in zip(typed_inputs, selectors)
+            if attribute in item.required_attributes
+        ]
+        if not selected:
+            continue
+        present = NodeSpec(
+            f"CHK_{prefix}_{attribute.upper()}_PRESENT",
+            contract.requirement_id,
+            "attribute_present",
+            tuple(selected),
+            tuple(node.id for node in presence),
+            attribute,
+            missing_premise=f"source-grounded {attribute} for compared values",
+            obligation_id=f"OBL_{prefix}_{attribute.upper()}",
+        )
+        attribute_presence.append(present)
+        if attribute == "coverage":
+            allowed_coverages = tuple(policy_values.get("comparable_coverages") or ("full",))
+            attribute_checks.append(NodeSpec(
+                f"CHK_{prefix}_COVERAGE_COMPATIBLE",
+                contract.requirement_id,
+                "allowed",
+                tuple(selected),
+                (present.id,),
+                attribute,
+                {"allowed": allowed_coverages, "on_disallowed": "INCOMPLETE"},
+                missing_premise="full and comparable source coverage",
+                obligation_id=f"OBL_{prefix}_COVERAGE",
+            ))
+        elif attribute == "basis" and contract.capability == "amount_reconciliation":
+            attribute_checks.append(NodeSpec(
+                f"CHK_{prefix}_BASIS_ALLOWED",
+                contract.requirement_id,
+                "allowed_by_subject",
+                tuple(selected),
+                (present.id,),
+                attribute,
+                {
+                    "allowed_by_subject": policy_values.get("allowed_amount_basis_by_subject") or {},
+                    "on_disallowed": "INCOMPLETE",
                 },
+                missing_premise="policy-compatible amount basis for each source role",
+                obligation_id=f"OBL_{prefix}_BASIS",
+            ))
+        elif attribute in {"unit", "currency", "tax_basis"} and len(selected) > 1:
+            same = NodeSpec(
+                f"CHK_{prefix}_{attribute.upper()}_COMPATIBLE",
+                contract.requirement_id,
+                "same",
+                tuple(selected),
+                (present.id,),
+                attribute,
+                {"on_mismatch": "INCOMPLETE"},
+                missing_premise=f"comparable {attribute} across source values",
+                obligation_id=f"OBL_{prefix}_{attribute.upper()}_COMPATIBLE",
+            )
+            attribute_checks.append(same)
+            if attribute == "tax_basis":
+                attribute_checks.append(NodeSpec(
+                    f"CHK_{prefix}_TAX_BASIS_ALLOWED",
+                    contract.requirement_id,
+                    "allowed",
+                    tuple(selected),
+                    (same.id,),
+                    attribute,
+                    {
+                        "allowed": tuple(policy_values.get("comparable_tax_bases") or ()),
+                        "on_disallowed": "INCOMPLETE",
+                    },
+                    missing_premise="policy-compatible tax basis",
+                    obligation_id=f"OBL_{prefix}_TAX_BASIS_ALLOWED",
+                ))
+    gates = (*source_nodes, *policy_nodes, *presence, *attribute_presence, *attribute_checks)
+    judgment_id = f"JDG_{prefix}"
+    judgment = NodeSpec(
+        judgment_id,
+        contract.requirement_id,
+        "llm_judgment",
+        tuple(selectors),
+        tuple(node.id for node in gates),
+        params={"min_confidence": str(policy_values.get("semantic_judgment_min_confidence") or "high")},
+        executor="llm",
+        judgment_id=judgment_id,
+        target_predicate=target,
+        missing_premise=f"source-grounded comparability judgment for {target}",
+        obligation_id=f"OBL_{prefix}_JUDGMENT",
+    )
+    numeric_check: tuple[NodeSpec, ...] = ()
+    if len(numeric) > 1:
+        threshold = Decimal("0")
+        for key in contract.policy_inputs:
+            if "tolerance" not in key:
+                continue
+            try:
+                threshold = Decimal(str(policy_values[key]))
+                break
+            except (KeyError, ValueError, ArithmeticError):
+                continue
+        numeric_check = (NodeSpec(
+            f"CHK_{prefix}_WITHIN_TOLERANCE",
+            contract.requirement_id,
+            "within_percent",
+            tuple(numeric),
+            (judgment.id,),
+            params={"threshold_percent": threshold, "pairs": tuple((0, index) for index in range(1, len(numeric)))},
+            missing_premise="configured tolerance and comparable numeric source values",
+            obligation_id=f"OBL_{prefix}_TOLERANCE",
+        ),)
+    root_id = f"REQ_{prefix}"
+    root = NodeSpec(
+        root_id,
+        contract.requirement_id,
+        "all",
+        depends_on=tuple(node.id for node in (*gates, judgment, *numeric_check)),
+    )
+    return (*gates, judgment, *numeric_check, root), root_id
+
+
+def _lifecycle_contract_nodes(
+    contract: RequirementContract,
+    prefix: str,
+    source_nodes: tuple[NodeSpec, ...],
+    policy_nodes: tuple[NodeSpec, ...],
+    target: str,
+    *,
+    min_confidence: str,
+) -> tuple[tuple[NodeSpec, ...], str]:
+    typed_inputs = [item for item in contract.inputs if item.hole_kind in {"claim", "relation"}]
+    selectors = [ClaimSelector(item.subject, item.predicate, required=item.required) for item in typed_inputs]
+    presence = tuple(
+        NodeSpec(
+            f"CHK_{prefix}_INPUT_{index}",
+            contract.requirement_id,
+            "present",
+            (selector,),
+            missing_premise=f"source-grounded {item.subject}.{item.predicate}",
+            obligation_id=f"OBL_{prefix}_INPUT_{index}",
+        )
+        for index, (item, selector) in enumerate(zip(typed_inputs, selectors), start=1)
+        if item.required
+    )
+    grouped = [
+        (item.subject, item.predicate)
+        for item in typed_inputs
+        if item.binding_mode == "per_entity"
+    ]
+    grouped_by_subject: dict[str, list[tuple[str, str]]] = {}
+    for subject, predicate in grouped:
+        grouped_by_subject.setdefault(subject, []).append((subject, predicate))
+    branch = next(
+        ((item.subject, item.predicate) for item in typed_inputs if item.binding_mode == "global" and item.predicate in {"result", "search_result"}),
+        (typed_inputs[0].subject, typed_inputs[0].predicate) if typed_inputs else ("", ""),
+    )
+    judgment_id = f"JDG_{prefix}"
+    judgment = NodeSpec(
+        judgment_id,
+        contract.requirement_id,
+        "llm_judgment",
+        tuple(selectors),
+        tuple(node.id for node in (*source_nodes, *presence)),
+        params={
+            "min_confidence": min_confidence,
+            "grouped_contract": {
+                "branch_selector": branch,
+                "group_selectors": tuple(grouped),
+                "complete_selector_groups": tuple(tuple(items) for items in grouped_by_subject.values()),
+                "required_group_selectors": tuple(
+                    (item.subject, item.predicate)
+                    for item in typed_inputs
+                    if item.binding_mode == "per_entity" and item.group_required
+                ),
+                "empty_values": ("none", "no_candidate", "no_hold", "clear"),
+                "grouped_values": ("candidate_found", "hold_found", "active_hold_found", "records_found"),
             },
-            executor="llm",
-            judgment_id="JDG_NO_ACTIVE_DUPLICATE",
-            missing_premise="authoritative lifecycle disposition for every candidate historical payment",
-            obligation_id="OBL_DUPLICATE_DISPOSITION",
-        ),
-        NodeSpec("FINAL_NO_ACTIVE_DUPLICATE", "no_active_duplicate", "all", depends_on=("JDG_NO_ACTIVE_DUPLICATE",)),
+        },
+        executor="llm",
+        judgment_id=judgment_id,
+        target_predicate=target,
+        missing_premise=f"complete source-grounded lifecycle judgments for {target}",
+        obligation_id=f"OBL_{prefix}_JUDGMENT",
     )
-    return SemanticGraphSpec(
-        id="no_active_duplicate",
-        version="3",
-        requirement_id="no_active_duplicate",
-        claim_bindings=bindings,
-        nodes=nodes,
-        root_id="FINAL_NO_ACTIVE_DUPLICATE",
-        activation_requirements=("duplicate_payment_screen",),
+    root_id = f"REQ_{prefix}"
+    root = NodeSpec(
+        root_id,
+        contract.requirement_id,
+        "all",
+        depends_on=tuple(node.id for node in (*policy_nodes, judgment)),
     )
+    return (*source_nodes, *policy_nodes, *presence, judgment, root), root_id
 
 
 def compile_evidence_proof(
@@ -240,18 +366,31 @@ def compile_evidence_proof(
     *,
     active_requirement_ids: set[str],
     trusted_sources: Mapping[str, Mapping[str, Any]] | None = None,
+    contracts: list[RequirementContract] | None = None,
+    requirement_pack: Mapping[str, Any] | None = None,
 ) -> CompiledProof:
-    policy = policy or load_invoice_proof_policy()
+    pack = requirement_pack or REQUIREMENT_PACK
+    policy = policy or InvoiceProofPolicy.model_validate(pack)
+    kernel_policy = {**pack, **policy.model_dump(mode="python")}
+    built_contracts, initial_holes = build_requirement_contracts(active_requirement_ids, pack=pack)
+    contracts = contracts or built_contracts
+    unresolved_policy = {hole.policy_key for hole in initial_holes if hole.kind == "policy"}
     programs = [
-        program
-        for program in (amount_proof_program(policy), no_active_duplicate_program(policy))
-        if set(program.activation_requirements) <= active_requirement_ids
+        contract_proof_program(
+            contract,
+            unresolved_policy_keys=unresolved_policy,
+            policy_values=kernel_policy,
+        )
+        for contract in contracts
     ]
     return _compile_programs(
         programs,
         evidence_items,
         verification_records,
         policy,
+        active_requirement_ids=active_requirement_ids,
+        contracts=contracts,
+        requirement_pack=pack,
         trusted_sources=trusted_sources,
     )
 
@@ -262,8 +401,26 @@ def _compile_programs(
     verification_records: list[VerificationRecord] | None,
     policy: InvoiceProofPolicy,
     *,
+    active_requirement_ids: set[str] | None = None,
+    contracts: list[RequirementContract] | None = None,
+    requirement_pack: Mapping[str, Any] | None = None,
     trusted_sources: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> CompiledProof:
+    active_ids = active_requirement_ids or {
+        requirement_id
+        for program in programs
+        for requirement_id in (*program.activation_requirements, program.requirement_id)
+    }
+    pack = requirement_pack or REQUIREMENT_PACK
+    if contracts is None:
+        contracts, _ = build_requirement_contracts(active_ids, pack=pack)
+    evidence_ir, lowering_diagnostics = lower_case_evidence_ir(
+        programs,
+        evidence_items,
+        compiler_version=policy.compiler_version,
+        trusted_sources=trusted_sources,
+        contracts=contracts,
+    )
     results = [
         compile_proof_graph(
             program,
@@ -272,16 +429,66 @@ def _compile_programs(
             compiler_version=policy.compiler_version,
             verification_records=verification_records,
             trusted_sources=trusted_sources,
+            evidence_ir=evidence_ir,
+            contracts=contracts,
         )
         for program in programs
     ]
-    claims = _unique_models([item for result in results for item in result.claims])
-    judgments = _unique_models([item for result in results for item in result.judgments])
+    proposals = _unique_models([item for result in results for item in result.proposals])
     checks = [item for result in results for item in result.checks]
     obligations = [item for result in results for item in result.obligations]
     decisions = [result.decision for result in results]
-    primary = next((item for item in decisions if item.requirement_id == policy.amount_match_requirement), decisions[0] if decisions else None)
-    return CompiledProof(claims=claims, judgments=judgments, checks=checks, obligations=obligations, decisions=decisions, decision=primary)
+    rejected_contract_ids = {
+        contract.contract_id
+        for contract in contracts
+        for result in results
+        if result.decision.requirement_id == contract.requirement_id
+        and any(
+            check.operator == "llm_judgment"
+            and check.status == "INCOMPLETE"
+            and all(
+                next(item for item in result.checks if item.id == dependency_id).status == "PROVED"
+                for dependency_id in check.depends_on_check_ids
+            )
+            for check in result.checks
+        )
+    }
+    contracts, holes = build_requirement_contracts(
+        active_ids,
+        evidence_ir=evidence_ir,
+        proposals=[item for item in proposals if item.contract_id not in rejected_contract_ids],
+        pack=pack,
+    )
+    incomplete_requirements = {
+        decision.requirement_id
+        for decision in decisions
+        if decision.proof_status == "INCOMPLETE"
+    }
+    contract_requirements = {item.contract_id: item.requirement_id for item in contracts}
+    for hole in holes:
+        hole.contract_ids = [
+            item
+            for item in hole.contract_ids
+            if contract_requirements.get(item) in incomplete_requirements
+        ]
+        hole.requirement_ids = [
+            item for item in hole.requirement_ids if item in incomplete_requirements
+        ]
+    holes = [item for item in holes if item.contract_ids and item.requirement_ids]
+    diagnostics = _unique_models([
+        *lowering_diagnostics,
+        *(item for result in results for item in result.diagnostics),
+    ])
+    return CompiledProof(
+        evidence_ir=evidence_ir,
+        contracts=contracts,
+        holes=holes,
+        proposals=proposals,
+        diagnostics=diagnostics,
+        checks=checks,
+        obligations=obligations,
+        decisions=decisions,
+    )
 
 
 def compile_invoice_proof(
@@ -290,14 +497,20 @@ def compile_invoice_proof(
     policy: InvoiceProofPolicy | None = None,
     *,
     trusted_sources: Mapping[str, Mapping[str, Any]] | None = None,
+    contracts: list[RequirementContract] | None = None,
 ) -> CompiledProof:
-    policy = policy or load_invoice_proof_policy()
-    return _compile_programs(
-        [amount_proof_program(policy)],
+    return compile_evidence_proof(
         evidence_items,
         verification_records,
-        policy,
+        policy or load_invoice_proof_policy(),
+        active_requirement_ids={
+            "invoice",
+            "purchase_order",
+            "goods_receipt_or_service_acceptance",
+            "three_way_amount_match",
+        },
         trusted_sources=trusted_sources,
+        contracts=contracts,
     )
 
 
@@ -307,14 +520,15 @@ def compile_no_active_duplicate_proof(
     policy: InvoiceProofPolicy | None = None,
     *,
     trusted_sources: Mapping[str, Mapping[str, Any]] | None = None,
+    contracts: list[RequirementContract] | None = None,
 ) -> CompiledProof:
-    policy = policy or load_invoice_proof_policy()
-    return _compile_programs(
-        [no_active_duplicate_program(policy)],
+    return compile_evidence_proof(
         evidence_items,
         verification_records,
-        policy,
+        policy or load_invoice_proof_policy(),
+        active_requirement_ids={"invoice", "duplicate_payment_screen", "no_active_duplicate"},
         trusted_sources=trusted_sources,
+        contracts=contracts,
     )
 
 
@@ -331,10 +545,9 @@ def _unique_models(values: list[Any]) -> list[Any]:
 
 __all__ = [
     "InvoiceProofPolicy",
-    "amount_proof_program",
+    "contract_proof_program",
     "compile_evidence_proof",
     "compile_invoice_proof",
     "compile_no_active_duplicate_proof",
     "load_invoice_proof_policy",
-    "no_active_duplicate_program",
 ]

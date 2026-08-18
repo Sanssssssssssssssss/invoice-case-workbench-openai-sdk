@@ -32,6 +32,12 @@ class PolicyGate:
     ) -> PolicyCheck:
         if decision.action == "delegate_agent" and decision.target not in ROLE_TARGETS:
             return block("invalid_delegate_target", "delegate_agent must target a known specialist role.")
+        if (
+            decision.action == "delegate_agent"
+            and decision.target == "materials_advisor"
+            and forbids_materials_advice(request.message)
+        ):
+            return block("materials_advisor_forbidden", "The user explicitly forbade materials_advisor for this turn.")
         if decision.action == "call_tool" and not self.tool_catalog.has(decision.target):
             return block("invalid_tool_target", "call_tool must target a known tool.")
         if decision.action == "call_tool" and self.tool_catalog.get(decision.target).internal_only:
@@ -124,7 +130,14 @@ class PolicyGate:
                     constraints=["Choose delegate_agent target=evidence_reviewer input.mode=repair."],
                 )
 
-        if has_observation(state, kind="tool", name="read_attachment") and not _review_finished(state):
+        reviewer_terminal_failure = _role_failed_nonretryable(state, "evidence_reviewer")
+        if reviewer_terminal_failure and decision.action not in {"final_answer", "ask_user"}:
+            return block(
+                "reviewer_failure_requires_final",
+                "Evidence review failed terminally in this turn; no CasePatch can be produced.",
+                constraints=["Use final_answer. Runtime will disclose that review failed and no evidence was written."],
+            )
+        if has_observation(state, kind="tool", name="read_attachment") and not _review_finished(state) and not reviewer_terminal_failure:
             expected_mode = _next_reviewer_mode(state)
             if not _decision_is_reviewer(decision, expected_mode):
                 return block(
@@ -289,7 +302,7 @@ def _decision_payload_error(decision: SupervisorDecision, tool_catalog: ToolCata
 
 def next_action_hint(kind: str, name: str, result: Any | None = None) -> str:
     if kind == "tool" and name == "read_attachment":
-        return "delegate_agent:evidence_reviewer_extract" if attachment_result_needs_extract(result) else "delegate_agent:evidence_reviewer_review"
+        return "delegate_agent:evidence_reviewer_review"
     if kind == "role" and name == "evidence_reviewer":
         mode = str(result.get("mode") or "review") if isinstance(result, dict) else "review"
         return "delegate_agent:evidence_reviewer_review" if mode == "extract" else "delegate_agent:case_patch_writer"
@@ -307,7 +320,7 @@ def next_action_hint(kind: str, name: str, result: Any | None = None) -> str:
 
 
 def reviewer_hint_after_attachment(result: Any | None) -> str:
-    return "delegate_agent:evidence_reviewer_extract" if attachment_result_needs_extract(result) else "delegate_agent:evidence_reviewer_review"
+    return "delegate_agent:evidence_reviewer_review"
 
 
 def infer_reviewer_mode(payload: dict[str, Any], state: Any) -> str:
@@ -322,31 +335,6 @@ def infer_reviewer_mode(payload: dict[str, Any], state: Any) -> str:
     if has_reviewer_mode(state, "extract") and not (has_reviewer_mode(state, "review") or has_reviewer_mode(state, "repair")):
         return "review"
     return "review"
-
-
-def attachment_result_needs_extract(result: Any | None) -> bool:
-    if not isinstance(result, dict):
-        return False
-    attachments = result.get("attachments")
-    items = attachments if isinstance(attachments, list) else [result]
-    successful = [item for item in items if isinstance(item, dict) and item.get("status") != "error"]
-    return any(_attachment_item_needs_extract(item) for item in successful)
-
-
-def _attachment_item_needs_extract(item: dict[str, Any]) -> bool:
-    content_kind = str(item.get("content_kind") or "").lower()
-    method = str(item.get("extraction_method") or "").lower()
-    warnings = " ".join(str(warning).lower() for warning in item.get("warnings") or [])
-    name_or_path = f"{item.get('name') or ''} {item.get('path') or ''} {item.get('source_path') or ''}".lower()
-    if content_kind in {"pdf", "image"}:
-        return True
-    if any(token.endswith((".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".gif", ".bmp")) for token in name_or_path.split()):
-        return True
-    if "ocr" in method or "ocr" in warnings:
-        return True
-    if item.get("preview_paths"):
-        return True
-    return False
 
 
 def has_observation(state: Any, *, kind: str, name: str) -> bool:
@@ -385,6 +373,9 @@ def guard_retry_feedback(error_type: str, hint: str) -> dict[str, Any]:
 def requires_materials_advice(message: str) -> bool:
     text = str(message or "").lower()
     if not text:
+        return False
+    compact = re.sub(r"\s+", "", text)
+    if forbids_materials_advice(message):
         return False
     chinese_terms = (
         "审核哪些材料",
@@ -512,6 +503,14 @@ def _is_blocked_by_runtime_feedback(decision: SupervisorDecision, feedback: dict
     return False
 
 
+def forbids_materials_advice(message: str) -> bool:
+    compact = re.sub(r"\s+", "", str(message or "").lower())
+    return any(
+        term in compact
+        for term in ("不要advisor", "不调用advisor", "无需advisor", "不用advisor", "noadvisor", "withoutadvisor")
+    )
+
+
 def _manifest_attachment_status_block(decision: SupervisorDecision, store: CaseStore, state: Any) -> dict[str, Any]:
     if decision.action != "call_tool" or decision.target != "read_attachment":
         return {}
@@ -602,6 +601,8 @@ def _role_failed_nonretryable(state: Any, role: str) -> bool:
                 "invalid temperature",
                 "structured_output_parse_error",
                 "schema validation",
+                "modelbehaviorerror",
+                "invalid json",
                 "timeout",
                 "timed out",
                 "apitimeouterror",

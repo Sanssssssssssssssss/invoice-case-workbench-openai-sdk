@@ -34,6 +34,7 @@ Capability-use guidance:
   their content.
 - For PDF/image/OCR/multiple attachments, normally call
   `evidence_reviewer` with `mode=extract`, then `mode=review`.
+- For a new case, select only explicit ids from `context_pack.requirement_catalog.profiles` and pass them as `active_requirement_ids`; the local Contract builder activates derived conclusions. Profiles may be combined, but ids must never be invented. Omit this field when the case already defines its scope.
 - For simple pasted/text evidence, `mode=review` is usually enough.
 - After review or repair, normally call `case_patch_writer`, then
   `write_case_patch`, before claiming the case was updated.

@@ -82,8 +82,10 @@ def test_case_state_consistency_accepts_compiler_derived_requirement_support() -
         requirements=[SimpleNamespace(id="three_way_amount_match", status="satisfied", required=True)],
         evidence_items=[SimpleNamespace(id="ev_001", supports=[])],
         compiled_proof=SimpleNamespace(
-            claims=[SimpleNamespace(id="claim_001", evidence_id="ev_001", source_quote="Total GBP 100", source_locator="page 1")],
-            checks=[SimpleNamespace(id="REQ_THREE_WAY_AMOUNT_MATCH", program_id="amount", requirement_id="three_way_amount_match", status="PROVED", input_claim_ids=["claim_001"])],
+            evidence_ir=SimpleNamespace(
+                claims=[SimpleNamespace(id="claim_001", evidence_id="ev_001", source_quote="Total GBP 100", source_locator="page 1")]
+            ),
+            checks=[SimpleNamespace(id="REQ_THREE_WAY_AMOUNT_MATCH", program_id="amount", requirement_id="three_way_amount_match", status="PROVED", input_claim_ids=["claim_001"], input_evidence_ids=[])],
             decisions=[SimpleNamespace(program_id="amount", root_check_id="REQ_THREE_WAY_AMOUNT_MATCH")],
         ),
     )
@@ -98,7 +100,12 @@ def test_case_state_consistency_ignores_optional_weak_but_blocks_optional_confli
             SimpleNamespace(id="invoice_number", status="satisfied", required=True),
             SimpleNamespace(id="signature_or_authorized_signatory", status="weak", required=False),
         ],
-        evidence_items=[SimpleNamespace(supports=[SimpleNamespace(requirement="invoice_number")])],
+        evidence_items=[SimpleNamespace(id="ev_invoice", supports=[SimpleNamespace(requirement="invoice_number")])],
+        compiled_proof=SimpleNamespace(
+            evidence_ir=SimpleNamespace(claims=[]),
+            checks=[SimpleNamespace(id="REQ_INVOICE_NUMBER", program_id="invoice_number", requirement_id="invoice_number", status="PROVED", input_claim_ids=[], input_evidence_ids=["ev_invoice"])],
+            decisions=[SimpleNamespace(program_id="invoice_number", root_check_id="REQ_INVOICE_NUMBER")],
+        ),
     )
     assert enforce_case_state_consistency(text, ok_state) == text
 
@@ -107,7 +114,8 @@ def test_case_state_consistency_ignores_optional_weak_but_blocks_optional_confli
             SimpleNamespace(id="invoice_number", status="satisfied", required=True),
             SimpleNamespace(id="template_match", status="conflict", required=False),
         ],
-        evidence_items=[SimpleNamespace(supports=[SimpleNamespace(requirement="invoice_number"), SimpleNamespace(requirement="template_match")])],
+        evidence_items=[SimpleNamespace(id="ev_invoice", supports=[SimpleNamespace(requirement="invoice_number"), SimpleNamespace(requirement="template_match")])],
+        compiled_proof=ok_state.compiled_proof,
     )
     with pytest.raises(CaseStateConsistencyError, match="optional requirement conflicts"):
         enforce_case_state_consistency(text, conflict_state)

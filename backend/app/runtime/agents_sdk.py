@@ -112,9 +112,8 @@ def _client_for(settings: Settings, *, base_url: str, timeout_seconds: float) ->
 
 
 def _use_responses_api(provider: str, base_url: str) -> bool:
-    if str(provider or "").lower() != "openai":
-        return False
-    return str(base_url or "").rstrip("/") == "https://api.openai.com/v1"
+    target = (str(provider or "").lower(), str(base_url or "").rstrip("/"))
+    return target in {("openai", "https://api.openai.com/v1"), ("deepseek", "https://api.deepseek.com")}
 
 
 async def _safe_close_openai_client(client: AsyncOpenAI) -> None:

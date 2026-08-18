@@ -56,12 +56,18 @@
               "input_refs": [
                 {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
                 {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
-                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"}
+                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
+                {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "order_scope_identity"},
+                {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "order_scope_identity"},
+                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "order_scope_identity"}
               ],
               "supporting_refs": [
                 {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
                 {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
-                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"}
+                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
+                {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "order_scope_identity"},
+                {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "order_scope_identity"},
+                {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "order_scope_identity"}
               ],
               "opposing_refs": [],
               "open_questions": [],

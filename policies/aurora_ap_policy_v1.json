@@ -1,7 +1,7 @@
 {
   "policy_version": "aurora_ap_lite_v1",
   "requirement_pack_version": "aurora_requirement_pack_v1",
-  "compiler_version": "evidence_language_compiler_v0.3",
+  "compiler_version": "evidence_language_compiler_v0.4",
   "tenant": "Aurora Office Supplies demo",
   "policy_basis": {
     "status": "demo_tenant_assumption",
@@ -20,6 +20,7 @@
   "unconfigured_policy_values": [
     "invoice_calculation_rounding_tolerance",
     "quantity_matching_tolerance",
+    "contract_matching_tolerance",
     "duplicate_search_window",
     "approval_authority_limits",
     "bank_change_cooling_period",
@@ -32,11 +33,149 @@
     "line_items_product_title", "signature_or_authorized_signatory", "template_match",
     "po_number", "po_ref", "po_amount", "po_date", "grn_number", "received_quantity", "inspection_status",
     "vendor_status", "vendor_id", "bank_last_four", "duplicate_invoice_found", "prior_payment_found", "clearing_document", "payment_reference",
-    "invoice_fields_valid", "invoice_calculation_valid", "three_way_quantity_match", "vendor_identity_active", "vendor_bank_change_record", "vendor_bank_account_authorized",
-    "approval_matrix", "invoice_approval_record", "approval_authority_satisfied", "sod_control_record", "sod_control_satisfied",
-    "payment_release_record", "payment_release_authorized", "contract_or_sow", "service_acceptance", "non_po_contract_match",
-    "tax_and_account_coding_record", "tax_and_account_coding_valid", "exception_hold_record", "no_unresolved_payment_hold", "audit_trail_record", "audit_chain_complete"
+    "vendor_bank_change_record", "approval_matrix", "invoice_approval_record", "sod_control_record",
+    "payment_release_record", "contract_or_sow", "service_acceptance",
+    "tax_and_account_coding_record", "exception_hold_record", "audit_trail_record"
   ],
+  "contract_version": "aurora_proof_contracts_v2",
+  "proof_contracts": {
+    "three_way_amount_match": {
+      "proof_template": "reconciliation", "target_predicate": "payable.three_way_amount_match", "capability": "amount_reconciliation", "activation": "derived",
+      "activation_requirement_groups": [["invoice"], ["purchase_order"], ["goods_receipt", "goods_receipt_or_service_acceptance"]],
+      "inputs": [
+        {"subject": "invoice", "predicate": "amount", "role": "invoice", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["currency", "basis", "tax_basis", "coverage"]},
+        {"subject": "purchase_order", "predicate": "amount", "role": "purchase_order", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["currency", "basis", "tax_basis", "coverage"]},
+        {"subject": "goods_receipt", "predicate": "amount", "role": "goods_receipt_or_service_acceptance", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["currency", "basis", "tax_basis", "coverage"]},
+        {"subject": "invoice", "predicate": "order_scope_identity", "role": "invoice", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "purchase_order", "predicate": "order_scope_identity", "role": "purchase_order", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "goods_receipt", "predicate": "order_scope_identity", "role": "goods_receipt_or_service_acceptance", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "payable", "predicate": "amount_scope_comparable", "role": "three_way_amount_match", "hole_kind": "judgment"}
+      ],
+      "candidate_actions": ["inspect_amount_basis", "request_missing_amount_source"]
+    },
+    "no_active_duplicate": {
+      "proof_template": "entity_lifecycle", "target_predicate": "payable.no_active_duplicate", "capability": "payment_lifecycle", "activation": "derived",
+      "activation_requirement_groups": [["invoice"], ["duplicate_payment_check", "duplicate_payment_screen"]],
+      "inputs": [
+        {"subject": "invoice", "predicate": "payable_identity", "role": "invoice", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "duplicate_search", "predicate": "payable_identity", "role": "duplicate_payment_screen", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "duplicate_search", "predicate": "coverage", "role": "duplicate_payment_screen", "hole_kind": "claim", "value_type": "enum", "allowed_values": ["complete", "partial", "unknown"]},
+        {"subject": "duplicate_search", "predicate": "result", "role": "duplicate_payment_screen", "hole_kind": "claim", "value_type": "enum", "allowed_values": ["no_candidate", "candidate_found", "unknown"]},
+        {"subject": "duplicate_search", "predicate": "candidate_identity", "role": "duplicate_payment_screen", "hole_kind": "relation", "value_type": "string", "required": false, "binding_mode": "per_entity", "binding_group": "duplicate_candidate", "group_required": true},
+        {"subject": "payment", "predicate": "identity", "role": "duplicate_payment_screen", "hole_kind": "relation", "value_type": "string", "required": false, "binding_mode": "per_entity", "binding_group": "duplicate_candidate", "group_required": true},
+        {"subject": "payment", "predicate": "relationship_to_payable", "role": "duplicate_payment_screen", "hole_kind": "claim", "value_type": "enum", "allowed_values": ["same_obligation", "different_obligation", "unknown"], "required": false, "binding_mode": "per_entity", "binding_group": "duplicate_candidate", "group_required": true},
+        {"subject": "payment", "predicate": "economic_effect", "role": "duplicate_payment_screen", "hole_kind": "claim", "value_type": "enum", "allowed_values": ["neutralized_by_reversal", "active_settled", "unknown"], "required": false, "binding_mode": "per_entity", "binding_group": "duplicate_candidate", "group_required": true},
+        {"subject": "reversal", "predicate": "reverses", "role": "duplicate_payment_screen", "hole_kind": "relation", "value_type": "string", "required": false, "binding_mode": "per_entity", "binding_group": "duplicate_candidate"},
+        {"subject": "reversal", "predicate": "posting_status", "role": "duplicate_payment_screen", "hole_kind": "claim", "value_type": "enum", "allowed_values": ["posted", "draft", "voided", "unknown"], "required": false, "binding_mode": "per_entity", "binding_group": "duplicate_candidate"},
+        {"subject": "reversal", "predicate": "scope", "role": "duplicate_payment_screen", "hole_kind": "claim", "value_type": "enum", "allowed_values": ["full", "partial", "unknown"], "required": false, "binding_mode": "per_entity", "binding_group": "duplicate_candidate"},
+        {"subject": "payable", "predicate": "no_active_duplicate_lifecycle", "role": "no_active_duplicate", "hole_kind": "judgment"}
+      ],
+      "candidate_actions": ["inspect_duplicate_candidates", "request_complete_payment_search"]
+    },
+    "invoice_fields_valid": {
+      "proof_template": "semantic_gate", "target_predicate": "invoice.fields_valid", "capability": "document_semantics", "activation": "explicit",
+      "inputs": [
+        {"subject": "invoice", "predicate": "identifier", "role": "invoice", "hole_kind": "claim", "value_type": "string"},
+        {"subject": "invoice", "predicate": "supplier_identity", "role": "invoice", "hole_kind": "claim", "value_type": "string"},
+        {"subject": "invoice", "predicate": "buyer_identity", "role": "invoice", "hole_kind": "claim", "value_type": "string"},
+        {"subject": "invoice", "predicate": "issue_date", "role": "invoice", "hole_kind": "claim", "value_type": "date"},
+        {"subject": "invoice", "predicate": "currency", "role": "invoice", "hole_kind": "claim", "value_type": "currency"},
+        {"subject": "invoice", "predicate": "tax_treatment", "role": "invoice", "hole_kind": "claim", "value_type": "enum"}
+      ],
+      "candidate_actions": ["inspect_invoice_fields"]
+    },
+    "invoice_calculation_valid": {"proof_template": "semantic_gate", "target_predicate": "invoice.calculation_valid", "capability": "document_semantics", "activation": "explicit", "inputs": [{"subject": "invoice", "predicate": "calculation_trace", "role": "invoice", "hole_kind": "claim", "value_type": "string"}], "candidate_actions": ["inspect_invoice_calculation"]},
+    "three_way_quantity_match": {
+      "proof_template": "reconciliation", "target_predicate": "payable.three_way_quantity_match", "capability": "quantity_reconciliation", "activation": "explicit",
+      "inputs": [
+        {"subject": "invoice", "predicate": "quantity", "role": "invoice", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["unit", "basis", "coverage"]},
+        {"subject": "purchase_order", "predicate": "quantity", "role": "purchase_order", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["unit", "basis", "coverage"]},
+        {"subject": "goods_receipt", "predicate": "quantity", "role": "goods_receipt_or_service_acceptance", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["unit", "basis", "coverage"]},
+        {"subject": "invoice", "predicate": "order_scope_identity", "role": "invoice", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "purchase_order", "predicate": "order_scope_identity", "role": "purchase_order", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "goods_receipt", "predicate": "order_scope_identity", "role": "goods_receipt_or_service_acceptance", "hole_kind": "relation", "value_type": "string"}
+      ],
+      "candidate_actions": ["inspect_quantity_basis"]
+    },
+    "vendor_identity_active": {
+      "proof_template": "semantic_gate", "target_predicate": "vendor.identity_active", "capability": "master_data_status", "activation": "explicit",
+      "inputs": [
+        {"subject": "vendor", "predicate": "identity", "role": "vendor_identity", "hole_kind": "relation", "value_type": "string", "binding_mode": "same_entity", "binding_group": "vendor"},
+        {"subject": "vendor", "predicate": "status", "role": "vendor_identity", "hole_kind": "claim", "value_type": "enum", "binding_mode": "same_entity", "binding_group": "vendor"},
+        {"subject": "vendor", "predicate": "status_effective_date", "role": "vendor_identity", "hole_kind": "claim", "value_type": "date", "binding_mode": "same_entity", "binding_group": "vendor"}
+      ],
+      "candidate_actions": ["inspect_vendor_master_record"]
+    },
+    "vendor_bank_account_authorized": {"proof_template": "semantic_gate", "target_predicate": "vendor.bank_account_authorized", "capability": "bank_change_authorization", "activation": "explicit", "inputs": [{"subject": "vendor", "predicate": "status", "role": "vendor_identity", "hole_kind": "claim", "value_type": "enum", "binding_mode": "same_entity", "binding_group": "vendor"}, {"subject": "vendor_bank", "predicate": "authorization_record", "role": "vendor_bank_change_record", "hole_kind": "claim", "value_type": "string", "binding_mode": "same_entity", "binding_group": "vendor"}], "candidate_actions": ["inspect_bank_change_record"]},
+    "approval_authority_satisfied": {
+      "proof_template": "semantic_gate", "target_predicate": "approval.authority_satisfied", "capability": "approval_authority", "activation": "explicit",
+      "inputs": [
+        {"subject": "approval", "predicate": "approver_identity", "role": "invoice_approval_record", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "approval", "predicate": "authority_level", "role": "approval_matrix", "hole_kind": "claim", "value_type": "string"},
+        {"subject": "approval", "predicate": "approved_amount", "role": "invoice_approval_record", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["currency"]}
+      ],
+      "candidate_actions": ["inspect_approval_matrix"]
+    },
+    "sod_control_satisfied": {
+      "proof_template": "semantic_gate", "target_predicate": "approval.sod_satisfied", "capability": "segregation_of_duties", "activation": "explicit",
+      "inputs": [
+        {"subject": "process", "predicate": "requestor_identity", "role": "sod_control_record", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "process", "predicate": "approver_identity", "role": "sod_control_record", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "process", "predicate": "releaser_identity", "role": "sod_control_record", "hole_kind": "relation", "value_type": "string"}
+      ],
+      "candidate_actions": ["inspect_sod_record"]
+    },
+    "payment_release_authorized": {
+      "proof_template": "semantic_gate", "target_predicate": "payment.release_authorized", "capability": "payment_release", "activation": "explicit",
+      "inputs": [
+        {"subject": "payment_release", "predicate": "payable_identity", "role": "payment_release_record", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "payment_release", "predicate": "status", "role": "payment_release_record", "hole_kind": "claim", "value_type": "enum"},
+        {"subject": "payment_release", "predicate": "releaser_identity", "role": "payment_release_record", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "payment_release", "predicate": "amount", "role": "payment_release_record", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["currency"]}
+      ],
+      "candidate_actions": ["inspect_payment_release_record"]
+    },
+    "non_po_contract_match": {
+      "proof_template": "reconciliation", "target_predicate": "payable.non_po_contract_match", "capability": "contract_reconciliation", "activation": "explicit",
+      "inputs": [
+        {"subject": "invoice", "predicate": "contract_identity", "role": "invoice", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "contract", "predicate": "contract_identity", "role": "contract_or_sow", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "service_acceptance", "predicate": "contract_identity", "role": "service_acceptance", "hole_kind": "relation", "value_type": "string"},
+        {"subject": "invoice", "predicate": "contract_amount", "role": "invoice", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["unit", "currency", "basis", "coverage"]},
+        {"subject": "contract", "predicate": "contract_amount", "role": "contract_or_sow", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["unit", "currency", "basis", "coverage"]},
+        {"subject": "service_acceptance", "predicate": "contract_amount", "role": "service_acceptance", "hole_kind": "claim", "value_type": "decimal", "required_attributes": ["unit", "currency", "basis", "coverage"]}
+      ],
+      "candidate_actions": ["inspect_contract_scope"]
+    },
+    "tax_and_account_coding_valid": {
+      "proof_template": "semantic_gate", "target_predicate": "invoice.tax_and_account_coding_valid", "capability": "tax_account_coding", "activation": "explicit",
+      "inputs": [
+        {"subject": "coding", "predicate": "jurisdiction", "role": "tax_and_account_coding_record", "hole_kind": "claim", "value_type": "string"},
+        {"subject": "coding", "predicate": "tax_code", "role": "tax_and_account_coding_record", "hole_kind": "claim", "value_type": "string"},
+        {"subject": "coding", "predicate": "account_code", "role": "tax_and_account_coding_record", "hole_kind": "claim", "value_type": "string"}
+      ],
+      "candidate_actions": ["inspect_tax_coding_record"]
+    },
+    "no_unresolved_payment_hold": {
+      "proof_template": "entity_lifecycle", "target_predicate": "payment.no_unresolved_hold", "capability": "payment_lifecycle", "activation": "explicit",
+      "inputs": [
+        {"subject": "hold_search", "predicate": "result", "role": "exception_hold_record", "hole_kind": "claim", "value_type": "enum"},
+        {"subject": "hold", "predicate": "identity", "role": "exception_hold_record", "hole_kind": "relation", "value_type": "string", "required": false, "binding_mode": "per_entity", "binding_group": "hold", "group_required": true},
+        {"subject": "hold", "predicate": "status", "role": "exception_hold_record", "hole_kind": "claim", "value_type": "enum", "required": false, "binding_mode": "per_entity", "binding_group": "hold", "group_required": true},
+        {"subject": "hold", "predicate": "resolution_status", "role": "exception_hold_record", "hole_kind": "claim", "value_type": "enum", "required": false, "binding_mode": "per_entity", "binding_group": "hold", "group_required": true}
+      ],
+      "candidate_actions": ["inspect_hold_lifecycle"]
+    },
+    "audit_chain_complete": {
+      "proof_template": "semantic_gate", "target_predicate": "evidence.audit_chain_complete", "capability": "audit_traceability", "activation": "explicit",
+      "inputs": [
+        {"subject": "audit", "predicate": "event_sequence", "role": "audit_trail_record", "hole_kind": "claim", "value_type": "string"},
+        {"subject": "audit", "predicate": "source_integrity", "role": "audit_trail_record", "hole_kind": "claim", "value_type": "enum"},
+        {"subject": "audit", "predicate": "retention_start_date", "role": "audit_trail_record", "hole_kind": "claim", "value_type": "date"}
+      ],
+      "candidate_actions": ["inspect_audit_trail"]
+    }
+  },
   "requirements": {
     "invoice": {"label": "发票原件", "kind": "document", "owner": "evidence", "default_required": true},
     "purchase_order": {"label": "采购订单", "kind": "document", "owner": "evidence", "default_required": true},
@@ -46,8 +185,8 @@
     "goods_receipt_or_service_acceptance": {"label": "收货/服务验收记录", "kind": "document", "owner": "evidence", "default_required": true},
     "vendor_identity": {"label": "供应商身份/主数据", "kind": "document", "owner": "evidence", "default_required": true},
     "duplicate_payment_screen": {"label": "重复付款筛查来源", "kind": "risk_check", "owner": "evidence", "default_required": true},
-    "three_way_amount_match": {"label": "三单金额匹配", "kind": "cross_check", "owner": "compiler", "default_required": true},
-    "no_active_duplicate": {"label": "无仍具经济效力的重复付款", "kind": "cross_check", "owner": "compiler", "default_required": true},
+    "three_way_amount_match": {"label": "三单金额匹配", "kind": "cross_check", "owner": "compiler", "default_required": true, "required_policy_values": ["amount_tolerance_percent", "allowed_amount_basis_by_subject", "comparable_tax_bases", "comparable_coverages"]},
+    "no_active_duplicate": {"label": "无仍具经济效力的重复付款", "kind": "cross_check", "owner": "compiler", "default_required": true, "required_policy_values": ["duplicate_search_window"]},
 
     "invoice_number": {"label": "发票号码", "kind": "field", "owner": "evidence", "default_required": true},
     "supplier": {"label": "供应商/开票方", "kind": "field", "owner": "evidence", "default_required": true},
@@ -79,10 +218,10 @@
 
     "invoice_fields_valid": {"label": "发票必填字段有效", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["invoice"], "required_policy_values": ["jurisdiction_tax_rules"], "rag_profile": "invoice_field_completeness"},
     "invoice_calculation_valid": {"label": "发票内部计算有效", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["invoice"], "required_policy_values": ["invoice_calculation_rounding_tolerance"], "rag_profile": "invoice_calculation_validation"},
-    "three_way_quantity_match": {"label": "三单数量匹配", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["invoice", "purchase_order", "goods_receipt_or_service_acceptance"], "required_policy_values": ["quantity_matching_tolerance"], "rag_profile": "ap_three_way_matching"},
+    "three_way_quantity_match": {"label": "三单数量匹配", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["invoice", "purchase_order", "goods_receipt_or_service_acceptance"], "required_policy_values": ["quantity_matching_tolerance", "comparable_coverages"], "rag_profile": "ap_three_way_matching"},
     "vendor_identity_active": {"label": "供应商身份有效且启用", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["vendor_identity"], "rag_profile": "vendor_onboarding_master_data_governance"},
     "vendor_bank_change_record": {"label": "供应商银行变更记录", "kind": "document", "owner": "evidence", "default_required": true, "rag_profile": "vendor_master_bank_change_control"},
-    "vendor_bank_account_authorized": {"label": "供应商收款账户已授权", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["vendor_identity", "vendor_bank_change_record"], "rag_profile": "vendor_master_bank_change_control"},
+    "vendor_bank_account_authorized": {"label": "供应商收款账户已授权", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["vendor_identity", "vendor_bank_change_record"], "required_policy_values": ["bank_change_cooling_period"], "rag_profile": "vendor_master_bank_change_control"},
     "approval_matrix": {"label": "审批权限矩阵", "kind": "document", "owner": "evidence", "default_required": true, "rag_profile": "approval_authority_matrix_control"},
     "invoice_approval_record": {"label": "发票审批记录", "kind": "document", "owner": "evidence", "default_required": true, "rag_profile": "approval_authority_matrix_control"},
     "approval_authority_satisfied": {"label": "审批权限满足", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["approval_matrix", "invoice_approval_record"], "required_policy_values": ["approval_authority_limits"], "rag_profile": "approval_authority_matrix_control"},
@@ -92,13 +231,13 @@
     "payment_release_authorized": {"label": "付款释放已授权", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["payment_release_record"], "required_policy_values": ["payment_release_thresholds"], "rag_profile": "payment_release_disbursement_control"},
     "contract_or_sow": {"label": "合同/工作说明书", "kind": "document", "owner": "evidence", "default_required": true, "rag_profile": "non_po_contract_invoice_control"},
     "service_acceptance": {"label": "服务验收记录", "kind": "document", "owner": "evidence", "default_required": true, "rag_profile": "non_po_contract_invoice_control"},
-    "non_po_contract_match": {"label": "非 PO 合同发票匹配", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["invoice", "contract_or_sow", "service_acceptance"], "rag_profile": "non_po_contract_invoice_control"},
+    "non_po_contract_match": {"label": "非 PO 合同发票匹配", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["invoice", "contract_or_sow", "service_acceptance"], "required_policy_values": ["contract_matching_tolerance", "comparable_coverages"], "rag_profile": "non_po_contract_invoice_control"},
     "tax_and_account_coding_record": {"label": "税务与会计编码记录", "kind": "document", "owner": "evidence", "default_required": true, "rag_profile": "tax_gl_coding_cost_center_control"},
     "tax_and_account_coding_valid": {"label": "税务与会计编码有效", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["tax_and_account_coding_record"], "required_policy_values": ["jurisdiction_tax_rules"], "rag_profile": "tax_gl_coding_cost_center_control"},
     "exception_hold_record": {"label": "例外/Hold 记录", "kind": "document", "owner": "evidence", "default_required": true, "rag_profile": "exception_hold_tolerance_control"},
     "no_unresolved_payment_hold": {"label": "无未解决的付款 Hold", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["exception_hold_record"], "rag_profile": "exception_hold_tolerance_control"},
     "audit_trail_record": {"label": "证据审计链记录", "kind": "document", "owner": "evidence", "default_required": true, "rag_profile": "audit_trail_retention_control"},
-    "audit_chain_complete": {"label": "证据审计链完整", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["audit_trail_record"], "rag_profile": "audit_trail_retention_control"}
+    "audit_chain_complete": {"label": "证据审计链完整", "kind": "cross_check", "owner": "reviewer", "default_required": true, "premise_requirements": ["audit_trail_record"], "required_policy_values": ["record_retention_period"], "rag_profile": "audit_trail_retention_control"}
   },
   "profiles": {
     "legacy_three_way": [
@@ -138,12 +277,11 @@
       {"id": "invoice", "required": true},
       {"id": "purchase_order", "required": true},
       {"id": "goods_receipt_or_service_acceptance", "required": true},
-      {"id": "three_way_amount_match", "required": true},
       {"id": "three_way_quantity_match", "required": true}
     ],
     "duplicate_control": [
-      {"id": "duplicate_payment_screen", "required": true},
-      {"id": "no_active_duplicate", "required": true}
+      {"id": "invoice", "required": true},
+      {"id": "duplicate_payment_screen", "required": true}
     ],
     "vendor_control": [
       {"id": "vendor_identity", "required": true},

@@ -6,6 +6,9 @@ backend/.env
 backend/storage/
 __pycache__/
 .pytest_cache/
+.pytest_tmp_*/
+.pytest_tmp_*.xml
+.tmp_tau_inspect*/
 tmp/
 *.pyc
 *.tsbuildinfo
@@ -14,6 +17,9 @@ backend/storage/rag/embeddings.json
 backend/storage/*.sqlite
 backend/storage/checkpoints/
 workspace/cases/
+/workspace/
+/reports/live_golden_cases/
+/reports/migrations/
 reports/evals/latest_session_eval.*
 reports/evals/ragas_latest.json
 reports/evals/ragas_latest.jsonl

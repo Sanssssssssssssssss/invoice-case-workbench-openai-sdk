@@ -1,0 +1,22 @@
+{
+  "case_status": "collecting_materials",
+  "min_evidence_count": 3,
+  "reply_any_of": ["部分", "收货", "覆盖", "补充", "材料"],
+  "requirements": {
+    "invoice": "accepted",
+    "purchase_order": "accepted",
+    "goods_receipt_or_service_acceptance": "accepted",
+    "three_way_amount_match": "weak"
+  },
+  "proof_requirement_id": "three_way_amount_match",
+  "proof_status": "INCOMPLETE",
+  "proof_outcome": "HOLD_FOR_EVIDENCE",
+  "proof_policy_version": "aurora_ap_lite_v1",
+  "proof_checks": {"CHK_COVERAGE_COMPATIBLE": "INCOMPLETE"},
+  "proof_obligation_ids": ["OBL_DOCUMENT_COVERAGE"],
+  "must_have_evidence_types": ["invoice", "purchase_order", "goods_receipt"],
+  "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
+  "trace_must_not_call": ["materials_advisor", "report_writer", "write_case_file", "render_pdf"],
+  "artifacts_must_not_exist": ["reports/*.md", "reports/*.pdf"],
+  "budgets": {"max_model_calls": 5, "max_tool_calls": 2, "max_role_calls": 2, "max_wall_time_ms": 700000}
+}

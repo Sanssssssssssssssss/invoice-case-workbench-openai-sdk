@@ -1,8 +1,8 @@
 {
   "reply_contains": ["no_active_duplicate=DISPROVED", "EVIDENCE_SUFFICIENT_FOR_REPORT"],
   "requirements": {
-    "invoice": "satisfied",
-    "duplicate_payment_screen": "satisfied",
+    "invoice": "accepted",
+    "duplicate_payment_screen": "accepted",
     "no_active_duplicate": "conflict"
   },
   "proof_requirement_id": "no_active_duplicate",

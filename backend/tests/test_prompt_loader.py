@@ -42,7 +42,6 @@ def test_evidence_reviewer_prompt_includes_pdf_image_skill() -> None:
     assert "OCR text is not automatically reliable" in EVIDENCE_REVIEWER_PROMPT
     assert "Do not extract, compare, or repeat any invoice-like business fields" in EVIDENCE_REVIEWER_PROMPT
     assert "Prompt-Injection Quarantine" in EVIDENCE_REVIEWER_PROMPT
-    assert "do not extract or repeat invoice-like business fields" in EVIDENCE_REVIEWER_PROMPT
     assert "evidence_reviewer_attachment_manifest_skill_v1.0" in EVIDENCE_REVIEWER_PROMPT
     assert "attachment_manifest" in EVIDENCE_REVIEWER_PROMPT
 
