@@ -122,12 +122,12 @@ class PolicyGate:
                         constraints=[f"Choose call_tool target=read_attachment input.attachment_id={attachment_id}."],
                     )
 
-        if requires_evidence_repair(user_message) and not (has_reviewer_mode(state, "repair") or has_reviewer_mode(state, "review")):
-            if not _decision_is_reviewer(decision, "repair"):
+        if requires_evidence_repair(user_message) and not has_reviewer_mode(state, "review"):
+            if not _decision_is_reviewer(decision, "review"):
                 return block(
                     "repair_requires_reviewer",
-                    "Weak/conflicting evidence cleanup or supersede requests must go through evidence_reviewer mode=repair first.",
-                    constraints=["Choose delegate_agent target=evidence_reviewer input.mode=repair."],
+                    "Weak/conflicting evidence must be recompiled from the current source set.",
+                    constraints=["Choose delegate_agent target=evidence_reviewer input.mode=review."],
                 )
 
         reviewer_terminal_failure = _role_failed_nonretryable(state, "evidence_reviewer")
@@ -146,15 +146,7 @@ class PolicyGate:
                     constraints=[f"Choose delegate_agent target=evidence_reviewer input.mode={expected_mode}."],
                 )
 
-        if has_reviewer_mode(state, "extract") and not (has_reviewer_mode(state, "review") or has_reviewer_mode(state, "repair")):
-            if not _decision_is_reviewer(decision, "review"):
-                return block(
-                    "extract_requires_review",
-                    "Extraction is not evidence acceptance. Run evidence_reviewer mode=review before patching or answering.",
-                    constraints=["Choose delegate_agent target=evidence_reviewer input.mode=review."],
-                )
-
-        if (has_reviewer_mode(state, "review") or has_reviewer_mode(state, "repair")) and not has_observation(state, kind="role", name="case_patch_writer"):
+        if has_reviewer_mode(state, "review") and not has_observation(state, kind="role", name="case_patch_writer"):
             if not (decision.action == "delegate_agent" and decision.target == "case_patch_writer"):
                 return block(
                     "review_requires_patch_draft",
@@ -304,8 +296,7 @@ def next_action_hint(kind: str, name: str, result: Any | None = None) -> str:
     if kind == "tool" and name == "read_attachment":
         return "delegate_agent:evidence_reviewer_review"
     if kind == "role" and name == "evidence_reviewer":
-        mode = str(result.get("mode") or "review") if isinstance(result, dict) else "review"
-        return "delegate_agent:evidence_reviewer_review" if mode == "extract" else "delegate_agent:case_patch_writer"
+        return "delegate_agent:case_patch_writer"
     if kind == "role" and name == "case_patch_writer":
         return "write_case_patch"
     if kind == "tool" and name == "write_case_patch":
@@ -321,20 +312,6 @@ def next_action_hint(kind: str, name: str, result: Any | None = None) -> str:
 
 def reviewer_hint_after_attachment(result: Any | None) -> str:
     return "delegate_agent:evidence_reviewer_review"
-
-
-def infer_reviewer_mode(payload: dict[str, Any], state: Any) -> str:
-    explicit = str(payload.get("mode") or "").strip().lower()
-    if explicit in {"extract", "review", "repair"}:
-        return explicit
-    hint = _latest_next_action_hint(getattr(state, "observations", []) or [])
-    if "evidence_reviewer_extract" in hint:
-        return "extract"
-    if "evidence_reviewer_review" in hint:
-        return "review"
-    if has_reviewer_mode(state, "extract") and not (has_reviewer_mode(state, "review") or has_reviewer_mode(state, "repair")):
-        return "review"
-    return "review"
 
 
 def has_observation(state: Any, *, kind: str, name: str) -> bool:
@@ -622,15 +599,11 @@ def _answer_discloses_role_failure(answer: str, role: str) -> bool:
 
 
 def _review_finished(state: Any) -> bool:
-    return has_reviewer_mode(state, "review") or has_reviewer_mode(state, "repair")
+    return has_reviewer_mode(state, "review")
 
 
 def _next_reviewer_mode(state: Any) -> str:
-    if has_reviewer_mode(state, "extract"):
-        return "review"
-    for observation in reversed(getattr(state, "observations", []) or []):
-        if isinstance(observation, dict) and observation.get("kind") == "tool" and observation.get("name") == "read_attachment":
-            return "extract" if str(observation.get("next_action_hint") or "").endswith("evidence_reviewer_extract") else "review"
+    _ = state
     return "review"
 
 
@@ -678,7 +651,7 @@ def _evidence_pipeline_pending(request: AgentTurnRequest, state: HarnessRunState
         return True
     if has_observation(state, kind="tool", name="read_attachment") and not _review_finished(state):
         return True
-    if (has_reviewer_mode(state, "review") or has_reviewer_mode(state, "repair")) and not has_observation(
+    if has_reviewer_mode(state, "review") and not has_observation(
         state, kind="role", name="case_patch_writer"
     ):
         return True

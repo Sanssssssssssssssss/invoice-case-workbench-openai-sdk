@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from typing import Any
 
 
@@ -40,9 +39,8 @@ def preserve_reviewer_quote_fields(patch: dict[str, Any], reviewer_result: dict[
                 continue
             if "quoted_text" in source:
                 target["quoted_text"] = source.get("quoted_text") or []
-            for key in ("local_source_handle", "semantic_claims", "semantic_proposals"):
-                if source.get(key) not in (None, "", [], {}) and target.get(key) in (None, "", [], {}):
-                    target[key] = deepcopy(source[key])
+            if source.get("local_source_handle") and not target.get("local_source_handle"):
+                target["local_source_handle"] = source["local_source_handle"]
             for target_support, source_support in zip(target.get("supports") or [], source.get("supports") or []):
                 if isinstance(target_support, dict) and isinstance(source_support, dict) and "quoted_text" in source_support:
                     target_support["quoted_text"] = source_support.get("quoted_text") or ""
@@ -94,10 +92,14 @@ def compact_case_patch_for_write(patch: dict[str, Any]) -> dict[str, Any]:
         for item in items:
             if not isinstance(item, dict):
                 continue
-            for field, limit in (("summary", 260), ("content", 420), ("reviewer_notes", 420)):
+            metadata = item.get("metadata")
+            compiler_source = isinstance(metadata, dict) and bool(metadata.get("compiler_source_sha256"))
+            limits = [("summary", 260), ("reviewer_notes", 420)]
+            if not compiler_source:
+                limits.append(("content", 420))
+            for field, limit in limits:
                 if field in item:
                     item[field] = _short_patch_text(item.get(field) or "", limit)
-            metadata = item.get("metadata")
             if isinstance(metadata, dict):
                 _compact_evidence_metadata(metadata)
     return compact

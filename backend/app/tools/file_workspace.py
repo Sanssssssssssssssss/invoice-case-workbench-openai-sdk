@@ -28,7 +28,15 @@ class FileWorkspace:
     def read_case_state(self, case_id: str) -> dict[str, Any]:
         return self.store.load(case_id).model_dump()
 
-    def write_case_patch(self, case_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    def write_case_patch(
+        self,
+        case_id: str,
+        patch: dict[str, Any],
+        *,
+        review_artifact: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if review_artifact is not None:
+            return self.store.apply_review_patch(case_id, patch, review_artifact).model_dump()
         return self.store.apply_patch(case_id, patch).model_dump()
 
     def list_case_files(self, case_id: str) -> dict[str, Any]:

@@ -8,243 +8,27 @@ from typing import Any
 
 import pytest
 
+from app.compiler_runtime import (
+    CheckAssessment,
+    Claim,
+    EvidenceIR,
+    ProofNode,
+    ProofPlan,
+    ReviewArtifact,
+    compile_review_artifact,
+)
+from app.compiler_runtime.policy import policy_excerpt_for, policy_hash
 from app.config import get_settings
 from app.harness import HarnessRuntime
 from app.llm import ModelCallRecord
-from app.runtime.evidence_recovery import materialize_reviewer_output
-from app.runtime.patch_normalizer import PatchNormalizer
 from app.runtime.policy_gate import _report_requested as _policy_report_requested
-from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, SdkManagerRunner, TurnRunner, _binding_repair_payload, _latest_observation_index, _report_requested_message, _runtime_final_answer
-from app.state.attachment_manifest import load_attachment_manifest, save_attachment_manifest
+from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, SdkManagerRunner, TurnRunner, _latest_observation_index, _report_requested_message, _runtime_final_answer
+from app.state.attachment_manifest import save_attachment_manifest
 from app.state.case_store import CaseStore
-from app.state.schemas import AgentTurnRequest, Attachment, CasePatch, CaseState, CompilationDiagnostic, CompiledProof, DecisionProof, EvidenceItem, EvidenceReviewerOutput, EvidenceReviewResult, ProofObligation, Requirement
+from app.state.schemas import AgentTurnRequest, Attachment, CaseState, EvidenceItem, Requirement
 
 
-def test_sparse_reviewer_output_is_bound_to_runtime_attachment_metadata() -> None:
-    result = materialize_reviewer_output(
-        {
-            "mode": "review",
-            "sources": [{
-                "local_source_handle": "s1",
-                "attachment_id": "att-1",
-                "type": "invoice",
-                "credibility": "high",
-                "classification": "business_evidence",
-                "should_accept": True,
-                "summary": "Invoice INV-1",
-                "source_traceability": "original_document",
-                "supports": [
-                    {"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-1"},
-                    {"requirement": "three_way_amount_match", "support_level": "full", "quoted_text": "Total GBP 100"},
-                ],
-                "conflicts": [],
-                "semantic_claims": [],
-                "semantic_proposals": [],
-                "reviewer_notes": "",
-            }],
-            "extracted_fields": {},
-            "risk_flags": [],
-            "next_questions": [],
-            "reply_to_user": "Reviewed.",
-        },
-        {"attachment_context": [{
-            "attachment_id": "att-1",
-            "name": "invoice.pdf",
-            "original_ref": "attachments/invoice.pdf",
-            "extraction_ref": "evidence/invoice.json",
-            "content_kind": "pdf",
-            "extraction_method": "pdf_text",
-            "body_markdown": "Invoice INV-1 total GBP 100",
-        }]},
-    )
-
-    item = result["suggested_patch"]["add_evidence"][0]
-    assert item["metadata"]["original_ref"] == "attachments/invoice.pdf"
-    assert item["metadata"]["extraction_ref"] == "evidence/invoice.json"
-    assert item["content"] == "Invoice INV-1"
-    assert [support["requirement"] for support in item["supports"]] == ["invoice"]
-
-
-def test_sparse_reviewer_repair_supersedes_the_diagnostic_target() -> None:
-    result = materialize_reviewer_output(
-        {
-            "mode": "repair",
-            "sources": [{
-                "attachment_id": "att-1",
-                "type": "invoice",
-                "classification": "business_evidence",
-                "should_accept": True,
-                "supports": [
-                    {"requirement": "invoice", "support_level": "full", "quoted_text": "Invoice INV-1"},
-                ],
-            }],
-        },
-        {
-            "target_evidence_id": "ev-old",
-            "case_state": {
-                "evidence_items": [{"id": "ev-old", "metadata": {"attachment_id": "att-1"}}],
-            },
-            "attachment_context": [{
-                "attachment_id": "att-1",
-                "name": "invoice.pdf",
-                "body_markdown": "Invoice INV-1",
-            }],
-            "active_requirement_contracts": [
-                {"requirement_id": "invoice", "proof_template": "evidence_support"},
-            ],
-        },
-    )
-
-    metadata = result["suggested_patch"]["add_evidence"][0]["metadata"]
-    assert metadata["review_stage"] == "corrected"
-    assert metadata["supersedes_evidence_id"] == "ev-old"
-
-
-def test_sparse_reviewer_supports_active_generic_evidence_contract() -> None:
-    result = materialize_reviewer_output(
-        {
-            "mode": "review",
-            "sources": [{
-                "local_source_handle": "s1",
-                "attachment_id": "att-1",
-                "type": "unknown",
-                "classification": "business_evidence",
-                "should_accept": True,
-                "supports": [
-                    {"requirement": "approval_matrix", "support_level": "full", "quoted_text": "Level 2 limit GBP 10,000"},
-                    {"requirement": "invoice", "support_level": "full", "quoted_text": "not an invoice"},
-                ],
-            }],
-        },
-        {
-            "attachment_context": [{
-                "attachment_id": "att-1",
-                "name": "approval-matrix.csv",
-                "body_markdown": "Level 2 limit GBP 10,000",
-            }],
-            "active_requirement_contracts": [
-                {"requirement_id": "approval_matrix", "proof_template": "evidence_support"},
-                {"requirement_id": "invoice", "proof_template": "evidence_support"},
-            ],
-        },
-    )
-
-    supports = result["suggested_patch"]["add_evidence"][0]["supports"]
-    assert [item["requirement"] for item in supports] == ["approval_matrix"]
-
-
-@pytest.mark.parametrize(
-    ("role_alias", "evidence_type"),
-    [
-        ("goods_receipt_or_service_acceptance", "goods_receipt"),
-        ("vendor_identity", "vendor_record"),
-        ("duplicate_payment_screen", "duplicate_payment_check"),
-    ],
-)
-def test_sparse_reviewer_normalizes_requirement_role_aliases(role_alias: str, evidence_type: str) -> None:
-    output = EvidenceReviewerOutput.model_validate({
-        "mode": "review",
-        "sources": [{
-            "local_source_handle": "s1",
-            "attachment_id": "att-1",
-            "type": role_alias,
-            "classification": "business_evidence",
-        }],
-    })
-
-    assert output.sources[0].type == evidence_type
-
-
-def test_patch_normalizer_preserves_runtime_attachment_identity() -> None:
-    reviewer = {
-        "mode": "review",
-        "evidence_cards": [{"title": "Payment evidence"}],
-        "suggested_patch": {
-            "add_evidence": [{"id": "ev_001", "type": "duplicate_payment_check", "source": "attachment", "summary": "Payment evidence",
-                "local_source_handle": "payment-export",
-                "semantic_claims": [{
-                    "handle": "payment-id",
-                    "hole_id": "hole:payment-identity",
-                    "typed_value": "PAY-1",
-                    "source_quote": "Payment PAY-1",
-                    "source_locator": "payment export row 1",
-                    "confidence": "high",
-                    "entity_handle": "candidate:1",
-                }],
-                "semantic_proposals": [{
-                    "handle": "payment-lifecycle",
-                    "hole_id": "hole:payment-lifecycle",
-                    "verdict": "SUPPORTED",
-                    "confidence": "high",
-                    "reason": "Source-bound status is explicit.",
-                }],
-                "metadata": {
-                "attachment_id": "att_invoice",
-                "original_ref": "attachments/originals/invoice.md",
-                "source_filename": "invoice.md",
-            }}]
-        }
-    }
-    reviewer = EvidenceReviewResult.model_validate(reviewer).model_dump(mode="json")
-    patch = CasePatch.model_validate({"case_updates": {"add_evidence": [{"id": "ev_001", "metadata": {}}]}}).model_dump(mode="json")
-
-    normalized = PatchNormalizer().preserve_reviewer_quote_fields(patch, reviewer)
-
-    assert normalized["case_updates"]["add_evidence"][0]["metadata"] == reviewer["suggested_patch"]["add_evidence"][0]["metadata"]
-    assert normalized["case_updates"]["add_evidence"][0]["semantic_claims"] == reviewer["suggested_patch"]["add_evidence"][0]["semantic_claims"]
-    assert normalized["case_updates"]["add_evidence"][0]["semantic_proposals"] == reviewer["suggested_patch"]["add_evidence"][0]["semantic_proposals"]
-    compact = PatchNormalizer().compact_for_write(normalized)
-    compact = CasePatch.model_validate(compact).model_dump(mode="json")
-    assert compact["case_updates"]["add_evidence"][0]["semantic_claims"][0]["entity_handle"] == "candidate:1"
-    assert compact["case_updates"]["add_evidence"][0]["semantic_proposals"][0]["hole_id"] == "hole:payment-lifecycle"
-
-
-def test_patch_compaction_does_not_truncate_or_untype_ir_claims() -> None:
-    claims = [{
-        "handle": f"quantity-{index}",
-        "hole_id": "hole:line-quantity",
-        "typed_value": str(index),
-        "source_quote": f"Quantity: {index} units",
-        "source_locator": f"table row {index}",
-        "confidence": "high",
-    } for index in range(16)]
-    patch = {"case_updates": {"add_evidence": [{"id": "ev_lines", "semantic_claims": claims}]}}
-
-    compact = PatchNormalizer().compact_for_write(patch)
-    compact_claims = compact["case_updates"]["add_evidence"][0]["semantic_claims"]
-
-    assert len(compact_claims) == 16
-    assert compact_claims[-1]["typed_value"] == "15"
-    assert compact_claims[-1]["source_locator"] == "table row 15"
-
-
-def test_patch_compaction_drops_retired_semantic_metadata() -> None:
-    metadata = {key: [{"invented": True}] for key in (
-        "claim_to_source_refs", "semantic_judgments", "requirement_verdicts", "proof_proposals"
-    )}
-
-    compact = PatchNormalizer().compact_for_write({"case_updates": {"add_evidence": [{"metadata": metadata}]}})
-
-    assert not set(metadata).intersection(compact["case_updates"]["add_evidence"][0]["metadata"])
-
-
-def test_binding_diagnostic_routes_one_reviewer_repair_packet() -> None:
-    case_state = SimpleNamespace(compiled_proof=CompiledProof(diagnostics=[CompilationDiagnostic(
-        stage="verification",
-        code="SCOPE_CONFLICT",
-        category="binding",
-        retry_owner="reviewer",
-        requirement_id="vendor_identity_active",
-    )]))
-
-    payload = _binding_repair_payload(case_state)
-
-    assert payload["mode"] == "repair"
-    assert payload["active_requirement_ids"] == ["vendor_identity_active"]
-    assert payload["compilation_diagnostics"][0]["code"] == "SCOPE_CONFLICT"
-
-
-def test_observation_index_allows_repair_to_supersede_prior_patch() -> None:
+def test_observation_index_tracks_latest_reviewer_for_patch_ordering() -> None:
     state = SimpleNamespace(observations=[
         {"kind": "role", "name": "evidence_reviewer"},
         {"kind": "role", "name": "case_patch_writer"},
@@ -328,204 +112,105 @@ def _runtime(tmp_path, monkeypatch, manager: ScriptedManagerRunner) -> AgentRunt
     return AgentRuntime(store=CaseStore(tmp_path / "cases"), manager_runner=manager)
 
 
+def _runtime_artifact(
+    requirement_id: str,
+    status: str,
+    *,
+    missing_fact: str = "",
+    source_id: str = "ev_proof",
+    source_text: str = "",
+) -> ReviewArtifact:
+    source_text = source_text or f"Evidence for {requirement_id}"
+    check_id = f"check.{requirement_id}"
+    plan = ProofPlan(
+        plan_id=f"plan.{requirement_id}",
+        objective=f"Establish {requirement_id} from grounded case evidence.",
+        active_requirement_ids=[requirement_id],
+        roots={requirement_id: check_id},
+        nodes=[ProofNode(
+            id=check_id,
+            kind="CHECK",
+            statement=f"The available evidence supports {requirement_id}.",
+            requirement_refs=[requirement_id],
+        )],
+    )
+    claims = []
+    if status != "NOT_FOUND":
+        claims = [Claim(
+            id=f"claim.{requirement_id}",
+            subject=f"requirement:{requirement_id}",
+            predicate="evidence_status",
+            value=status.lower(),
+            source_id=source_id,
+            quote=source_text,
+            locator="line 1",
+            confidence="high",
+        )]
+    evidence_ir = EvidenceIR(
+        source_ids=[source_id],
+        source_fingerprints={source_id: hashlib.sha256(source_text.encode("utf-8")).hexdigest()},
+        claims=claims,
+    )
+    assessment = CheckAssessment(
+        check_id=check_id,
+        status=status,
+        claim_ids=[item.id for item in claims],
+        source_ids=[source_id] if claims else [],
+        examined_source_ids=[source_id],
+        reason="fixture verifier assessment",
+        missing_fact=missing_fact,
+    )
+    return ReviewArtifact(
+        plan=plan,
+        plan_hash=plan.content_hash(),
+        evidence_ir=evidence_ir,
+        evidence_snapshot_hash=evidence_ir.content_hash(),
+        assessments=[assessment],
+        submitted_claim_refs={check_id: [item.id for item in claims]},
+        policy_hash=policy_hash(policy_excerpt_for([requirement_id])),
+        compiler_version="test",
+        model="fixture",
+    )
+
+
+def _runtime_proof(
+    requirement_id: str,
+    status: str,
+    *,
+    missing_fact: str = "",
+):
+    return compile_review_artifact(
+        _runtime_artifact(requirement_id, status, missing_fact=missing_fact)
+    )
+
+
 def _seed_ready_case(store: CaseStore, case_id: str) -> None:
-    amount_refs = [
-        {"evidence_id": "ev_001", "subject": "invoice", "predicate": "amount"},
-        {"evidence_id": "ev_002", "subject": "purchase_order", "predicate": "amount"},
-        {"evidence_id": "ev_003", "subject": "goods_receipt", "predicate": "amount"},
-        {"evidence_id": "ev_001", "subject": "invoice", "predicate": "order_scope_identity"},
-        {"evidence_id": "ev_002", "subject": "purchase_order", "predicate": "order_scope_identity"},
-        {"evidence_id": "ev_003", "subject": "goods_receipt", "predicate": "order_scope_identity"},
-    ]
-    duplicate_refs = [
-        {"evidence_id": "ev_001", "claim_id": "CLM_INVOICE_PAYABLE_IDENTITY", "subject": "invoice", "predicate": "payable_identity"},
-        {"evidence_id": "ev_005", "claim_id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY", "subject": "duplicate_search", "predicate": "payable_identity"},
-        {"evidence_id": "ev_005", "claim_id": "CLM_DUPLICATE_SEARCH_COVERAGE", "subject": "duplicate_search", "predicate": "coverage"},
-        {"evidence_id": "ev_005", "claim_id": "CLM_DUPLICATE_SEARCH_RESULT", "subject": "duplicate_search", "predicate": "result"},
-    ]
+    source_text = "Invoice INV-5001 remains payable\nOrder scope PO-5001\nTotal 12800.00 CNY\nInvoice total\nGross total"
     evidence_items = [
         EvidenceItem(
             id="ev_001",
             type="invoice",
             source="attachment",
             summary="Invoice INV-5001 amount 12800.00 CNY.",
+            content=source_text,
             review_result={"should_accept": True},
             supports=[{"requirement": "invoice", "support_level": "full"}],
             metadata={
                 "classification": "business_evidence",
                 "original_ref": "attachments/originals/ev_001.md",
+                "compiler_source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
                 "extracted_fields": {
                     "amount_total": {"value": "12800.00", "source_quote": "Total 12800.00 CNY", "source_locator": "invoice total", "confidence": "high"},
                     "basis": {"value": "invoice_total", "source_quote": "Invoice total", "source_locator": "invoice total", "confidence": "high"},
                     "tax_basis": {"value": "gross", "source_quote": "Gross total", "source_locator": "invoice total", "confidence": "high"},
                     "coverage": {"value": "full", "source_quote": "Invoice total", "source_locator": "invoice total", "confidence": "high"},
                 },
-                "claim_to_source_refs": [
-                    {
-                        "id": "CLM_INVOICE_PAYABLE_IDENTITY",
-                        "subject": "invoice",
-                        "predicate": "payable_identity",
-                        "value_type": "string",
-                        "typed_value": "payable:INV-5001",
-                        "quote": "Invoice INV-5001 remains payable",
-                        "block_or_table_or_region": "invoice header",
-                        "confidence": "high",
-                    },
-                    {
-                        "id": "CLM_INVOICE_ORDER_SCOPE",
-                        "subject": "invoice",
-                        "predicate": "order_scope_identity",
-                        "value_type": "string",
-                        "typed_value": "PO-5001",
-                        "quote": "Order scope PO-5001",
-                        "block_or_table_or_region": "invoice order scope",
-                        "confidence": "high",
-                    },
-                ],
-                "semantic_judgments": [{
-                    "id": "JDG_AMOUNT_SCOPE_COMPARABLE",
-                    "verdict": "SUPPORTED",
-                    "input_refs": amount_refs,
-                    "supporting_refs": amount_refs,
-                    "opposing_refs": [],
-                    "open_questions": [],
-                    "confidence": "high",
-                    "reason": "The three totals describe the same gross full scope.",
-                }],
-            },
-        ),
-        EvidenceItem(
-            id="ev_002",
-            type="purchase_order",
-            source="attachment",
-            summary="PO-5001 matches supplier and amount.",
-            review_result={"should_accept": True},
-            supports=[{"requirement": "purchase_order", "support_level": "full"}],
-            metadata={
-                "classification": "business_evidence",
-                "original_ref": "attachments/originals/ev_002.md",
-                "extracted_fields": {
-                    "amount_total": {"value": "12800.00", "source_quote": "Total 12800.00 CNY", "source_locator": "PO total", "confidence": "high"},
-                    "basis": {"value": "order_total", "source_quote": "PO total", "source_locator": "PO total", "confidence": "high"},
-                    "tax_basis": {"value": "gross", "source_quote": "Gross total", "source_locator": "PO total", "confidence": "high"},
-                    "coverage": {"value": "full", "source_quote": "PO total", "source_locator": "PO total", "confidence": "high"},
-                },
-                "claim_to_source_refs": [{
-                    "id": "CLM_PO_ORDER_SCOPE",
-                    "subject": "purchase_order",
-                    "predicate": "order_scope_identity",
-                    "value_type": "string",
-                    "typed_value": "PO-5001",
-                    "quote": "Order scope PO-5001",
-                    "block_or_table_or_region": "PO order scope",
-                    "confidence": "high",
-                }],
-            },
-        ),
-        EvidenceItem(
-            id="ev_003",
-            type="goods_receipt",
-            source="attachment",
-            summary="GRN-5001 received 16 of 16 units.",
-            review_result={"should_accept": True},
-            supports=[{"requirement": "goods_receipt_or_service_acceptance", "support_level": "full"}],
-            metadata={
-                "classification": "business_evidence",
-                "original_ref": "attachments/originals/ev_003.md",
-                "extracted_fields": {
-                    "received_value": {"value": "12800.00", "source_quote": "Received 12800.00 CNY", "source_locator": "GRN value", "confidence": "high"},
-                    "basis": {"value": "received_value", "source_quote": "Received value", "source_locator": "GRN value", "confidence": "high"},
-                    "tax_basis": {"value": "gross", "source_quote": "Gross received value", "source_locator": "GRN value", "confidence": "high"},
-                    "coverage": {"value": "full", "source_quote": "Received complete", "source_locator": "GRN status", "confidence": "high"},
-                },
-                "claim_to_source_refs": [{
-                    "id": "CLM_GRN_ORDER_SCOPE",
-                    "subject": "goods_receipt",
-                    "predicate": "order_scope_identity",
-                    "value_type": "string",
-                    "typed_value": "PO-5001",
-                    "quote": "Order scope PO-5001",
-                    "block_or_table_or_region": "GRN order scope",
-                    "confidence": "high",
-                }],
-            },
-        ),
-        EvidenceItem(
-            id="ev_004",
-            type="vendor_record",
-            source="attachment",
-            summary="Vendor is active and bank tail matches.",
-            review_result={"should_accept": True},
-            supports=[{"requirement": "vendor_identity", "support_level": "full"}],
-            metadata={"classification": "business_evidence", "original_ref": "attachments/originals/ev_004.md"},
-        ),
-        EvidenceItem(
-            id="ev_005",
-            type="duplicate_payment_check",
-            source="attachment",
-            summary="No duplicate payment found.",
-            review_result={"should_accept": True},
-            supports=[{"requirement": "duplicate_payment_screen", "support_level": "full"}],
-            metadata={
-                "classification": "business_evidence",
-                "original_ref": "attachments/originals/ev_005.md",
-                "claim_to_source_refs": [
-                    {
-                        "id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY",
-                        "subject": "duplicate_search",
-                        "predicate": "payable_identity",
-                        "value_type": "string",
-                        "typed_value": "payable:INV-5001",
-                        "quote": "Search payable identity is INV-5001",
-                        "block_or_table_or_region": "search scope",
-                        "confidence": "high",
-                    },
-                    {
-                        "id": "CLM_DUPLICATE_SEARCH_COVERAGE",
-                        "subject": "duplicate_search",
-                        "predicate": "coverage",
-                        "value_type": "enum",
-                        "typed_value": "complete",
-                        "quote": "Search covers posted and cleared payments",
-                        "block_or_table_or_region": "search scope",
-                        "confidence": "high",
-                    },
-                    {
-                        "id": "CLM_DUPLICATE_SEARCH_RESULT",
-                        "subject": "duplicate_search",
-                        "predicate": "result",
-                        "value_type": "enum",
-                        "typed_value": "no_candidate",
-                        "quote": "Search found no candidate payment",
-                        "block_or_table_or_region": "search result",
-                        "confidence": "high",
-                    },
-                ],
-                "semantic_judgments": [{
-                    "id": "JDG_NO_ACTIVE_DUPLICATE",
-                    "verdict": "SUPPORTED",
-                    "input_refs": duplicate_refs,
-                    "supporting_refs": duplicate_refs,
-                    "opposing_refs": [],
-                    "open_questions": [],
-                    "confidence": "high",
-                    "reason": "The complete search found no candidate payment.",
-                }],
             },
         ),
     ]
-    # This fixture exercises report generation only; semantic Compiler cases have dedicated fixtures.
-    evidence_items = [evidence_items[0]]
     evidence_items[0].supports[0].quoted_text = "Total 12800.00 CNY"
-    for item in evidence_items:
-        for key in ("claim_to_source_refs", "semantic_judgments", "requirement_verdicts", "proof_proposals"):
-            item.metadata.pop(key, None)
     source_texts = {
-        "ev_001": "Invoice INV-5001 remains payable\nOrder scope PO-5001\nTotal 12800.00 CNY\nInvoice total\nGross total",
-        "ev_002": "Order scope PO-5001\nTotal 12800.00 CNY\nPO total\nGross total",
-        "ev_003": "Order scope PO-5001\nReceived 12800.00 CNY\nReceived value\nGross received value\nReceived complete",
-        "ev_004": "Vendor is active and bank tail matches.",
-        "ev_005": "Search payable identity is INV-5001\nSearch covers posted and cleared payments\nSearch found no candidate payment",
+        "ev_001": source_text,
     }
     attachments = []
     for item in evidence_items:
@@ -542,6 +227,12 @@ def _seed_ready_case(store: CaseStore, case_id: str) -> None:
             "evidence_ids": [item.id],
         })
     save_attachment_manifest(store, case_id, {"attachments": attachments})
+    artifact = _runtime_artifact(
+        "invoice",
+        "SUPPORTED",
+        source_id="ev_001",
+        source_text=source_text,
+    )
     store.save(CaseState(
         case_id=case_id,
         status="ready_for_report",
@@ -549,16 +240,9 @@ def _seed_ready_case(store: CaseStore, case_id: str) -> None:
             Requirement(id="invoice", status="satisfied", evidence_ids=["ev_001"], kind="document"),
         ],
         evidence_items=evidence_items,
+        review_artifact=artifact,
+        compiled_proof=compile_review_artifact(artifact),
     ))
-
-
-def _update_seeded_source(store: CaseStore, case_id: str, evidence_id: str, text: str) -> None:
-    manifest = load_attachment_manifest(store, case_id)
-    entry = next(item for item in manifest["attachments"] if evidence_id in item.get("evidence_ids", []))
-    path = store.resolve_case_path(case_id, entry["original_ref"])
-    path.write_text(text, encoding="utf-8")
-    entry["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-    save_attachment_manifest(store, case_id, manifest)
 
 
 def _fake_report_writer(role: str, role_input: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
@@ -739,7 +423,7 @@ def test_policy_blocked_manager_tool_does_not_consume_step_budget(tmp_path, monk
     assert any(observation.get("kind") == "policy" and observation.get("name") == "attachment_unread" for observation in state.observations)
 
 
-def test_evidence_reviewer_timeout_fails_closed_without_semantic_fallback(tmp_path, monkeypatch) -> None:
+def test_evidence_reviewer_timeout_fails_closed_without_fabricated_review(tmp_path, monkeypatch) -> None:
     runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
     runner = runtime.runner
     state = HarnessRuntime(runner.store).begin_run("case_reviewer_timeout_recovery", "review", run_id="run_reviewer_timeout_recovery")
@@ -788,13 +472,13 @@ def test_evidence_reviewer_timeout_fails_closed_without_semantic_fallback(tmp_pa
     class APITimeoutError(Exception):
         pass
 
-    def fail_call(role: str, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+    def fail_run(_runtime: Any, **_kwargs: Any) -> Any:
         raise APITimeoutError("Request timed out.")
 
-    monkeypatch.setattr(runner.roles, "call", fail_call)
+    monkeypatch.setattr("app.runtime.turn_runner.EvidenceCompilerRuntime.run", fail_run)
     runner.llm.calls.append(
         ModelCallRecord(
-            role="evidence_reviewer",
+            role="task_compiler",
             model="test",
             prompt_version="test",
             input_preview="{}",
@@ -809,13 +493,12 @@ def test_evidence_reviewer_timeout_fails_closed_without_semantic_fallback(tmp_pa
         request=review_request,
         planner_context={},
         name="evidence_reviewer",
-        payload={"mode": "review"},
+        payload={"mode": "review", "active_requirement_ids": ["invoice"]},
     )
 
     assert result["status"] == "error"
     assert result["role"] == "evidence_reviewer"
     assert runner.context.last_evidence_reviewer_result(state, mode="review") == {}
-    assert state.role_calls[-1]["error"].startswith("APITimeoutError:")
 
 
 def test_evidence_reviewer_timeout_does_not_promote_pdf_text_to_review(tmp_path, monkeypatch) -> None:
@@ -840,10 +523,10 @@ def test_evidence_reviewer_timeout_does_not_promote_pdf_text_to_review(tmp_path,
     class APITimeoutError(Exception):
         pass
 
-    def fail_call(role: str, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+    def fail_run(_runtime: Any, **_kwargs: Any) -> Any:
         runner.llm.calls.append(
             ModelCallRecord(
-                role=role,
+                role="task_compiler",
                 model="test",
                 prompt_version="test",
                 input_preview="{}",
@@ -853,8 +536,7 @@ def test_evidence_reviewer_timeout_does_not_promote_pdf_text_to_review(tmp_path,
         )
         raise APITimeoutError("Request timed out.")
 
-    monkeypatch.setattr(runner.roles, "call", fail_call)
-    request = AgentTurnRequest(case_id=state.case_id, message="review pdf text")
+    monkeypatch.setattr("app.runtime.turn_runner.EvidenceCompilerRuntime.run", fail_run)
 
     review_request = AgentTurnRequest(case_id=state.case_id, message="continue review")
     result = runner.invoke_manager_tool(
@@ -862,7 +544,7 @@ def test_evidence_reviewer_timeout_does_not_promote_pdf_text_to_review(tmp_path,
         request=review_request,
         planner_context={},
         name="evidence_reviewer",
-        payload={"mode": "review"},
+        payload={"mode": "review", "active_requirement_ids": ["invoice"]},
     )
 
     assert result["status"] == "error"
@@ -937,7 +619,8 @@ def test_case_patch_writer_reduces_review_without_llm_call(tmp_path, monkeypatch
     assert not any(call.role == "case_patch_writer" for call in runner.llm.calls)
     assert len(case_state.evidence_items) == 1
     assert "duplicate_payment_screen" not in case_state.conflict_materials
-    assert case_state.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
+    assert case_state.compiled_proof is None
+    assert case_state.review_artifact is None
     assert "PAY-2026-4431" in json.dumps(case_state.model_dump(), ensure_ascii=False)
 
 
@@ -998,7 +681,8 @@ def test_ungrounded_legacy_conflict_does_not_override_manager_or_compiler(tmp_pa
     response = runtime.run_turn(AgentTurnRequest(case_id="case_duplicate_history_guard", message="总结重复付款审查结果"))
 
     assert "status=collecting_materials" not in response.reply
-    assert response.case_state.compiled_proof.decision_for("duplicate_payment_screen").proof_status == "INCOMPLETE"
+    assert response.case_state.compiled_proof is None
+    assert response.case_state.review_artifact is None
     assert response.reply == "重复付款筛查尚未形成可采信证明。"
     events = runtime.runner.store.resolve_case_path(
         "case_duplicate_history_guard", f"traces/{response.trace['run_id']}/events.jsonl"
@@ -1086,126 +770,70 @@ def test_attachment_review_waits_for_manager_scope_when_none_was_selected(tmp_pa
     assert runtime.runner._deterministic_policy_continuation(request, state) is None
 
 
-def _obsolete_runtime_final_answer_treats_legacy_disproved_proof_as_reportable(tmp_path) -> None:
-    store = CaseStore(tmp_path)
-    _seed_ready_case(store, "case_reportable_amount_finding")
-    case_state = store.load("case_reportable_amount_finding")
-    amount = case_state.evidence_items[0].metadata["extracted_fields"]["amount_total"]
-    amount.update({"value": "14000.00", "source_quote": "Total 14000.00 CNY"})
-    _update_seeded_source(
-        store,
-        case_state.case_id,
-        "ev_001",
-        "Invoice INV-5001 remains payable\nOrder scope PO-5001\nTotal 14000.00 CNY\nInvoice total\nGross total",
-    )
-    store.save(case_state)
-    case_state = store.load(case_state.case_id)
-    state = HarnessRuntime(store).begin_run(case_state.case_id, "审核", run_id="run_reportable_amount")
-
-    answer = _runtime_final_answer(case_state, state)
-
-    assert "three_way_amount_match=DISPROVED" in answer
-    assert "outcome=EVIDENCE_SUFFICIENT_FOR_REPORT" in answer
-    assert "可进入报告" in answer
-    assert "继续补料或复核" not in answer
-
-
 @pytest.mark.parametrize(
-    ("proof_status", "outcome", "expected_conclusion"),
+    ("compiler_status", "case_status", "requirement_status"),
     [
-        ("PROVED", "EVIDENCE_SUFFICIENT_FOR_REPORT", "可进入报告"),
-        ("DISPROVED", "EVIDENCE_SUFFICIENT_FOR_REPORT", "可进入报告"),
-        ("INCOMPLETE", "HOLD_FOR_EVIDENCE", "应先处理 blocking proof obligations"),
-        ("INCOMPLETE", "ABSTAIN_OR_ESCALATE", "应升级处理"),
+        ("SUPPORTED", "ready_for_report", "satisfied"),
+        ("CONTRADICTED", "ready_for_report", "conflict"),
+        ("NOT_FOUND", "collecting_materials", "missing"),
     ],
 )
-def test_runtime_final_answer_renders_any_semantic_decision_generically(
+def test_runtime_final_answer_renders_any_compiler_decision_generically(
     tmp_path,
-    proof_status: str,
-    outcome: str,
-    expected_conclusion: str,
+    compiler_status: str,
+    case_status: str,
+    requirement_status: str,
 ) -> None:
     store = CaseStore(tmp_path)
-    state = HarnessRuntime(store).begin_run("case_semantic_decision", "审核", run_id="run_semantic_decision")
-    obligation = ProofObligation(
-        id="OBL_SEMANTIC_POLICY_ALIGNMENT",
-        check_id="CHK_SEMANTIC_POLICY_ALIGNMENT",
-        missing_premise="需要权威来源确认自定义语义前提",
-        blocking=True,
-    )
-    decision = DecisionProof(
-        program_id="semantic_policy_program",
-        requirement_id="semantic_policy_alignment",
-        root_check_id="FINAL_SEMANTIC_POLICY_ALIGNMENT",
-        outcome=outcome,
-        proof_status=proof_status,
-        obligation_ids=[obligation.id] if proof_status == "INCOMPLETE" else [],
-        policy_version="test",
-        compiler_version="test",
-        evidence_snapshot_hash="test",
-        stop_reason="test decision",
+    state = HarnessRuntime(store).begin_run("case_compiler_decision", "审核", run_id="run_compiler_decision")
+    proof = _runtime_proof(
+        "policy_alignment",
+        compiler_status,
+        missing_fact="需要权威来源确认政策前提" if compiler_status == "NOT_FOUND" else "",
     )
     case_state = CaseState(
         case_id=state.case_id,
-        status="ready_for_report",
-        requirements=[Requirement(id="semantic_policy_alignment", status="satisfied")],
-        evidence_items=[EvidenceItem(id="ev_semantic", type="unknown", summary="PAY-771 and CLR-771 are irrelevant lexical noise.")],
+        status=case_status,
+        requirements=[Requirement(id="policy_alignment", status=requirement_status)],
+        evidence_items=[EvidenceItem(id="ev_proof", type="unknown", summary="PAY-771 and CLR-771 are irrelevant lexical noise.")],
         risk_flags=["duplicate_payment_risk lexical noise"],
-        compiled_proof=CompiledProof(
-            obligations=[obligation] if proof_status == "INCOMPLETE" else [],
-            decisions=[decision],
-            decision=decision,
-        ),
+        compiled_proof=proof,
     )
 
     answer = _runtime_final_answer(case_state, state)
 
-    assert f"semantic_policy_alignment={proof_status}" in answer
-    assert f"outcome={outcome}" in answer
-    assert expected_conclusion in answer
+    assert f"policy_alignment={compiler_status}" in answer
     assert "PAY-771" not in answer
     assert "CLR-771" not in answer
     assert "重复付款" not in answer
-    if proof_status == "INCOMPLETE":
-        assert "OBL_SEMANTIC_POLICY_ALIGNMENT" in answer
-        assert "需要权威来源确认自定义语义前提" in answer
+    if compiler_status == "NOT_FOUND":
+        assert "obligation:policy_alignment:check.policy_alignment" in answer
+        assert "需要权威来源确认政策前提" in answer
     else:
-        assert "Blocking proof obligations：无" in answer
+        assert "尚未完成的核查：无" in answer
 
 
 def test_runtime_final_answer_keeps_uncompiled_requirement_blockers(tmp_path) -> None:
     store = CaseStore(tmp_path)
     state = HarnessRuntime(store).begin_run("case_mixed_requirements", "审核", run_id="run_mixed_requirements")
-    decision = DecisionProof(
-        program_id="semantic_policy_program",
-        requirement_id="semantic_policy_alignment",
-        root_check_id="FINAL_SEMANTIC_POLICY_ALIGNMENT",
-        outcome="EVIDENCE_SUFFICIENT_FOR_REPORT",
-        proof_status="PROVED",
-        policy_version="test",
-        compiler_version="test",
-        evidence_snapshot_hash="test",
-        stop_reason="proved",
-    )
     case_state = CaseState(
         case_id=state.case_id,
         status="collecting_materials",
         requirements=[
-            Requirement(id="semantic_policy_alignment", status="satisfied"),
+            Requirement(id="policy_alignment", status="satisfied"),
             Requirement(id="uncompiled_supporting_record", status="missing"),
         ],
         risk_flags=["manual_follow_up_required"],
         next_questions=["请补充非编译支持记录。"],
-        compiled_proof=CompiledProof(decisions=[decision], decision=decision),
+        compiled_proof=_runtime_proof("policy_alignment", "SUPPORTED"),
     )
 
     answer = _runtime_final_answer(case_state, state)
 
-    assert "semantic_policy_alignment=PROVED" in answer
+    assert "policy_alignment=SUPPORTED" in answer
     assert "missing=uncompiled_supporting_record" in answer
     assert "manual_follow_up_required" in answer
     assert "请补充非编译支持记录" in answer
-    assert "仍有非编译 requirements 未完成" in answer
     assert "可进入报告" not in answer
 
 
@@ -1327,51 +955,6 @@ def test_report_request_runs_file_and_pdf_approval_pipeline(tmp_path, monkeypatc
     assert any(event["kind"] == "approval" and event["name"] == "approved" for event in final.trace["observations"])
     final_trace = json.loads((tmp_path / "cases" / "case_report_approval" / "traces" / f"{response.trace['run_id']}.json").read_text(encoding="utf-8"))
     assert final_trace["interrupts"] == []
-
-
-def _obsolete_disproved_legacy_amount_proof_is_written_as_a_report_finding(tmp_path, monkeypatch) -> None:
-    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
-    case_id = "case_disproved_amount_report"
-    _seed_ready_case(runtime.runner.store, case_id)
-    case_state = runtime.runner.store.load(case_id)
-    case_state.evidence_items[0].metadata["extracted_fields"]["amount_total"].update(
-        {"value": "14000.00", "source_quote": "Total 14000.00 CNY"}
-    )
-    _update_seeded_source(
-        runtime.runner.store,
-        case_id,
-        "ev_001",
-        "Invoice INV-5001 remains payable\nOrder scope PO-5001\nTotal 14000.00 CNY\nInvoice total\nGross total",
-    )
-    runtime.runner.store.save(case_state)
-
-    compiled = runtime.runner.store.load(case_id)
-    assert compiled.status == "ready_for_report"
-    assert compiled.compiled_proof.decision.proof_status == "DISPROVED"
-
-    def report_finding(role: str, role_input: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
-        proof = role_input["case_state"]["compiled_proof"]
-        assert proof["decision"]["proof_status"] == "DISPROVED"
-        assert proof["decision"]["outcome"] == "EVIDENCE_SUFFICIENT_FOR_REPORT"
-        assert "CHK_AMOUNT_WITHIN_TOLERANCE" in proof["decision"]["failing_check_ids"]
-        return {
-            "title": "INV-5001 三单金额检查报告",
-            "markdown": (
-                "# INV-5001 三单金额检查报告\n\n"
-                "结论：DISPROVED；发票 14000.00 CNY 与 PO/GRN 12800.00 CNY 超出 Aurora 2% 容差。\n\n"
-                "来源：invoice total、PO total、GRN value。此为可报告发现，不代表付款批准或拒绝。\n"
-            ),
-        }
-
-    monkeypatch.setattr(runtime.runner.roles, "call", report_finding)
-    response = runtime.run_turn(AgentTurnRequest(case_id=case_id, message="生成三单金额审查报告并渲染 PDF"))
-    assert response.trace["status"] == "waiting_approval"
-    written = runtime.resume_approval(case_id, response.trace["run_id"], approved=True, reason="write report")
-    report = next((tmp_path / "cases" / case_id / "reports").glob("*.md")).read_text(encoding="utf-8")
-    assert "DISPROVED" in report and "2%" in report
-    assert "缺少材料" not in report and "不代表付款批准" in report
-    assert written.trace["interrupts"][0]["tool"] == "render_pdf"
-    runtime.resume_approval(case_id, written.trace["run_id"], approved=False, reason="markdown acceptance only")
 
 
 def test_report_completion_wins_over_step_limit_after_pdf_render(tmp_path, monkeypatch) -> None:

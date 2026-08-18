@@ -8,6 +8,8 @@ __pycache__/
 .pytest_cache/
 .pytest_tmp_*/
 .pytest_tmp_*.xml
+.test-tmp/
+.tmp/
 .tmp_tau_inspect*/
 tmp/
 *.pyc

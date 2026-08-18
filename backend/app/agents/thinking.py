@@ -14,11 +14,9 @@ def manager_tool_loop_thinking_type(model_name: str, configured: str | None) -> 
 
 
 def role_thinking_type(role: str, payload: dict[str, Any] | None, configured: str | None) -> str:
+    _ = payload
     normalized_role = str(role or "").lower()
-    mode = str((payload or {}).get("mode") or "").lower()
     if normalized_role == "planner":
-        return _normalized_thinking_type(configured)
-    if normalized_role == "evidence_reviewer" and mode == "review":
         return _normalized_thinking_type(configured)
     return "disabled"
 

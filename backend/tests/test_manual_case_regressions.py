@@ -9,7 +9,7 @@ from app.tools.catalog import ToolCatalog
 from app.tools.file_workspace import FileWorkspace
 
 
-def test_case_385104_superseded_png_repair_releases_amount_and_source_traceability(tmp_path) -> None:
+def test_case_385104_superseded_png_repair_waits_for_compiler_projection(tmp_path) -> None:
     store = CaseStore(tmp_path)
     case_id = "case_20260530_172740_385104_regression"
     store.apply_patch(
@@ -111,9 +111,11 @@ def test_case_385104_superseded_png_repair_releases_amount_and_source_traceabili
 
     statuses = {item.id: item.status for item in updated.requirements}
     old_evidence = next(item for item in updated.evidence_items if item.id == "ev_001")
-    assert statuses == {"amount_total": "accepted", "source_traceability": "accepted"}
+    assert statuses == {"amount_total": "missing", "source_traceability": "missing"}
     assert updated.conflict_materials == []
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
+    assert updated.review_artifact is None
+    assert updated.compiled_proof is None
     assert old_evidence.metadata["review_stage"] == "superseded"
     assert old_evidence.metadata["superseded_by_evidence_id"] == "ev_004"
     _assert_timestamped_report_generated(store, case_id, started_at="2026-05-30T17:27:40+00:00")
@@ -274,10 +276,16 @@ def test_case_486266_ap_supplements_bind_manifest_and_keep_real_conflicts(tmp_pa
     assert evidence_by_ref["attachments/originals/03_goods_receipt.md"] == ["ev_003"]
     assert evidence_by_ref["attachments/originals/04_vendor_record.md"] == ["ev_004"]
     assert evidence_by_ref["attachments/originals/05_duplicate_payment_check.md"] == ["ev_005"]
-    assert "purchase_order" in updated.satisfied_materials
-    assert "vendor_identity" in updated.satisfied_materials
-    assert "goods_receipt_or_service_acceptance" in updated.weak_materials
-    assert "duplicate_payment_screen" in updated.weak_materials
+    assert updated.satisfied_materials == []
+    assert set(updated.missing_materials) >= {
+        "invoice",
+        "purchase_order",
+        "goods_receipt_or_service_acceptance",
+        "vendor_identity",
+        "duplicate_payment_screen",
+    }
+    assert updated.review_artifact is None
+    assert updated.compiled_proof is None
     assert updated.conflict_materials == []
     _assert_timestamped_report_generated(store, case_id, started_at="2026-05-30T14:40:19+00:00")
 

@@ -39,11 +39,12 @@ def test_case_creation_and_patch(tmp_path) -> None:
     )
     assert updated.evidence_items[0].type == "invoice"
     assert "purchase_order" in updated.missing_materials
-    assert "invoice" not in updated.missing_materials
-    assert "invoice" in updated.weak_materials
+    assert "invoice" in updated.missing_materials
+    assert "invoice" not in updated.weak_materials
     assert "invoice" not in updated.satisfied_materials
     invoice_requirement = next(item for item in updated.requirements if item.id == "invoice")
-    assert invoice_requirement.status == "weak"
+    assert invoice_requirement.status == "missing"
+    assert updated.compiled_proof is None
 
 
 def test_case_store_rejects_duplicate_evidence_ids(tmp_path) -> None:
@@ -240,7 +241,7 @@ def test_evidence_support_requirement_aliases_are_canonicalized(tmp_path) -> Non
     assert "duplicate_payment_screen" in supports
 
 
-def test_cross_evidence_amount_mismatch_is_a_reportable_proof_finding(tmp_path) -> None:
+def test_patch_amount_data_does_not_compile_a_finding_without_review_artifact(tmp_path) -> None:
     store = CaseStore(tmp_path)
     case_id = "case_amount_mismatch"
     canonical_requirements = [
@@ -296,50 +297,6 @@ def test_cross_evidence_amount_mismatch_is_a_reportable_proof_finding(tmp_path) 
                                     "tax_basis": {"value": "gross", "source_quote": "Gross total", "source_locator": "invoice total", "confidence": "high"},
                                     "coverage": {"value": "full", "source_quote": "Invoice total", "source_locator": "invoice total", "confidence": "high"},
                                 },
-                                "claim_to_source_refs": [
-                                    {
-                                        "id": "CLM_INVOICE_PAYABLE_IDENTITY",
-                                        "subject": "invoice",
-                                        "predicate": "payable_identity",
-                                        "value_type": "string",
-                                        "typed_value": "payable:INV-9001",
-                                        "source_quote": "Invoice INV-9001 remains payable",
-                                        "source_locator": "invoice header",
-                                        "confidence": "high",
-                                    },
-                                    {
-                                        "id": "CLM_INVOICE_ORDER_SCOPE_IDENTITY",
-                                        "subject": "invoice",
-                                        "predicate": "order_scope_identity",
-                                        "value_type": "string",
-                                        "typed_value": "PO-9001",
-                                        "source_quote": "Order reference PO-9001",
-                                        "source_locator": "invoice order reference",
-                                        "confidence": "high",
-                                    },
-                                ],
-                                "semantic_judgments": [{
-                                    "id": "JDG_AMOUNT_SCOPE_COMPARABLE",
-                                    "verdict": "SUPPORTED",
-                                    "input_refs": [
-                                        {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
-                                        {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
-                                        {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
-                                        {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "order_scope_identity"},
-                                        {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "order_scope_identity"},
-                                        {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "order_scope_identity"},
-                                    ],
-                                    "supporting_refs": [
-                                        {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "amount"},
-                                        {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "amount"},
-                                        {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "amount"},
-                                        {"evidence_id": "ev_invoice", "subject": "invoice", "predicate": "order_scope_identity"},
-                                        {"evidence_id": "ev_po", "subject": "purchase_order", "predicate": "order_scope_identity"},
-                                        {"evidence_id": "ev_grn", "subject": "goods_receipt", "predicate": "order_scope_identity"},
-                                    ],
-                                    "confidence": "high",
-                                    "reason": "The totals use the same gross, full-document economic scope.",
-                                }],
                             },
                     },
                     {
@@ -359,16 +316,6 @@ def test_cross_evidence_amount_mismatch_is_a_reportable_proof_finding(tmp_path) 
                                 "tax_basis": {"value": "gross", "source_quote": "Gross total", "source_locator": "PO total", "confidence": "high"},
                                 "coverage": {"value": "full", "source_quote": "PO total", "source_locator": "PO total", "confidence": "high"},
                             },
-                            "claim_to_source_refs": [{
-                                "id": "CLM_PO_ORDER_SCOPE_IDENTITY",
-                                "subject": "purchase_order",
-                                "predicate": "order_scope_identity",
-                                "value_type": "string",
-                                "typed_value": "PO-9001",
-                                "source_quote": "Order reference PO-9001",
-                                "source_locator": "PO header",
-                                "confidence": "high",
-                            }],
                         },
                     },
                     {
@@ -388,16 +335,6 @@ def test_cross_evidence_amount_mismatch_is_a_reportable_proof_finding(tmp_path) 
                                 "tax_basis": {"value": "gross", "source_quote": "Gross received value", "source_locator": "GRN value", "confidence": "high"},
                                 "coverage": {"value": "full", "source_quote": "Received complete", "source_locator": "GRN status", "confidence": "high"},
                             },
-                            "claim_to_source_refs": [{
-                                "id": "CLM_GRN_ORDER_SCOPE_IDENTITY",
-                                "subject": "goods_receipt",
-                                "predicate": "order_scope_identity",
-                                "value_type": "string",
-                                "typed_value": "PO-9001",
-                                "source_quote": "Order reference PO-9001",
-                                "source_locator": "GRN header",
-                                "confidence": "high",
-                            }],
                         },
                     },
                     {
@@ -421,58 +358,6 @@ def test_cross_evidence_amount_mismatch_is_a_reportable_proof_finding(tmp_path) 
                         "metadata": {
                             "classification": "business_evidence",
                             "original_ref": "attachments/originals/ev_dup.md",
-                            "claim_to_source_refs": [
-                                {
-                                    "id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY",
-                                    "subject": "duplicate_search",
-                                    "predicate": "payable_identity",
-                                    "value_type": "string",
-                                    "typed_value": "payable:INV-9001",
-                                    "source_quote": "Search target INV-9001",
-                                    "source_locator": "search header",
-                                    "confidence": "high",
-                                },
-                                {
-                                    "id": "CLM_DUPLICATE_SEARCH_COVERAGE",
-                                    "subject": "duplicate_search",
-                                    "predicate": "coverage",
-                                    "value_type": "enum",
-                                    "typed_value": "complete",
-                                    "source_quote": "Search covers posted and cleared payments",
-                                    "source_locator": "search header",
-                                    "confidence": "high",
-                                },
-                                {
-                                    "id": "CLM_DUPLICATE_SEARCH_RESULT",
-                                    "subject": "duplicate_search",
-                                    "predicate": "result",
-                                    "value_type": "enum",
-                                    "typed_value": "no_candidate",
-                                    "source_quote": "Search found no candidate payment",
-                                    "source_locator": "search result",
-                                    "confidence": "high",
-                                },
-                            ],
-                            "semantic_judgments": [{
-                                "id": "JDG_NO_ACTIVE_DUPLICATE",
-                                "verdict": "SUPPORTED",
-                                "input_refs": [
-                                    {"evidence_id": "ev_invoice", "claim_id": "CLM_INVOICE_PAYABLE_IDENTITY", "subject": "invoice", "predicate": "payable_identity"},
-                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY", "subject": "duplicate_search", "predicate": "payable_identity"},
-                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_COVERAGE", "subject": "duplicate_search", "predicate": "coverage"},
-                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_RESULT", "subject": "duplicate_search", "predicate": "result"},
-                                ],
-                                "supporting_refs": [
-                                    {"evidence_id": "ev_invoice", "claim_id": "CLM_INVOICE_PAYABLE_IDENTITY", "subject": "invoice", "predicate": "payable_identity"},
-                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_PAYABLE_IDENTITY", "subject": "duplicate_search", "predicate": "payable_identity"},
-                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_COVERAGE", "subject": "duplicate_search", "predicate": "coverage"},
-                                    {"evidence_id": "ev_dup", "claim_id": "CLM_DUPLICATE_SEARCH_RESULT", "subject": "duplicate_search", "predicate": "result"},
-                                ],
-                                "opposing_refs": [],
-                                "open_questions": [],
-                                "confidence": "high",
-                                "reason": "The complete search found no candidate payment.",
-                            }],
                         },
                     },
                 ],
@@ -482,15 +367,14 @@ def test_cross_evidence_amount_mismatch_is_a_reportable_proof_finding(tmp_path) 
     )
 
     assert updated.status == "collecting_materials"
-    assert "purchase_order" in updated.satisfied_materials
-    assert "goods_receipt_or_service_acceptance" in updated.satisfied_materials
+    assert "purchase_order" in updated.missing_materials
+    assert "goods_receipt_or_service_acceptance" in updated.missing_materials
     assert updated.conflict_materials == []
-    assert updated.compiled_proof.decision_for("three_way_amount_match").proof_status == "INCOMPLETE"
-    assert updated.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
+    assert updated.compiled_proof is None
     assert all(not item.conflicts for item in updated.evidence_items[:3])
 
 
-def test_accepted_core_documents_do_not_invent_or_upgrade_support(tmp_path) -> None:
+def test_accepted_core_documents_remain_unprojected_without_review_artifact(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_core_support_backfill",
@@ -549,8 +433,8 @@ def test_accepted_core_documents_do_not_invent_or_upgrade_support(tmp_path) -> N
         for support in evidence.supports
     }
     assert updated.status == "collecting_materials"
-    assert any(item.proof_status == "INCOMPLETE" for item in updated.compiled_proof.decisions)
-    assert statuses["invoice"] == "weak"
+    assert updated.compiled_proof is None
+    assert statuses["invoice"] == "missing"
     assert statuses["purchase_order"] == "missing"
     assert statuses["goods_receipt_or_service_acceptance"] == "missing"
     assert statuses["vendor_identity"] == "missing"
@@ -630,11 +514,10 @@ def test_negative_duplicate_text_does_not_bypass_semantic_proof(tmp_path) -> Non
     requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_screen")
     evidence = updated.evidence_items[0]
     assert evidence.conflicts == []
-    assert requirement.status == "accepted"
+    assert requirement.status == "missing"
     assert updated.status == "collecting_materials"
-    assert updated.compiled_proof is not None
-    assert updated.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
-    assert "no_active_duplicate" in updated.weak_materials
+    assert updated.compiled_proof is None
+    assert all(item.id != "no_active_duplicate" for item in updated.requirements)
 
 
 def test_no_field_conflict_chinese_note_is_not_derived_as_conflict(tmp_path) -> None:
@@ -665,7 +548,7 @@ def test_no_field_conflict_chinese_note_is_not_derived_as_conflict(tmp_path) -> 
 
     invoice = next(item for item in updated.requirements if item.id == "invoice")
     assert updated.evidence_items[0].conflicts == []
-    assert invoice.status == "accepted"
+    assert invoice.status == "missing"
     assert updated.conflict_materials == []
 
 
@@ -741,7 +624,7 @@ def test_prompt_injection_self_check_pass_does_not_quarantine_business_evidence(
     assert evidence.metadata["classification"] == "business_evidence"
 
 
-def test_business_invoice_self_check_boundary_text_satisfies_field_requirements(tmp_path) -> None:
+def test_business_invoice_self_check_boundary_text_is_recorded_without_projection(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_business_invoice_self_check",
@@ -800,11 +683,12 @@ def test_business_invoice_self_check_boundary_text_satisfies_field_requirements(
     assert evidence.credibility == "high"
     assert evidence.metadata["classification"] == "business_evidence"
     assert evidence.conflicts == []
-    assert requirements["invoice_number"].status == "accepted"
-    assert requirements["supplier"].status == "accepted"
-    assert requirements["buyer"].status == "accepted"
-    assert updated.missing_materials == []
-    assert updated.status == "ready_for_report"
+    assert requirements["invoice_number"].status == "missing"
+    assert requirements["supplier"].status == "missing"
+    assert requirements["buyer"].status == "missing"
+    assert updated.missing_materials == ["invoice_number", "supplier", "buyer"]
+    assert updated.status == "collecting_materials"
+    assert updated.compiled_proof is None
 
 
 def test_file_boundary_rejects_parent_escape(tmp_path) -> None:
@@ -813,7 +697,7 @@ def test_file_boundary_rejects_parent_escape(tmp_path) -> None:
         store.resolve_case_path("case_001", "../escape.txt")
 
 
-def test_requirement_status_uses_review_details(tmp_path) -> None:
+def test_requirement_status_is_not_derived_from_review_details(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_002",
@@ -835,10 +719,11 @@ def test_requirement_status_uses_review_details(tmp_path) -> None:
         },
     )
     invoice_requirement = next(item for item in updated.requirements if item.id == "invoice")
-    assert invoice_requirement.status == "accepted"
+    assert invoice_requirement.status == "missing"
+    assert updated.compiled_proof is None
 
 
-def test_requirement_conflict_is_scoped_to_matching_requirement(tmp_path) -> None:
+def test_patch_conflict_does_not_project_requirement_status(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_scoped_conflict",
@@ -872,11 +757,12 @@ def test_requirement_conflict_is_scoped_to_matching_requirement(tmp_path) -> Non
     )
 
     statuses = {item.id: item.status for item in updated.requirements}
-    assert statuses["invoice_number"] == "accepted"
-    assert statuses["supplier"] == "accepted"
-    assert statuses["amount_total"] == "accepted"
+    assert statuses["invoice_number"] == "missing"
+    assert statuses["supplier"] == "missing"
+    assert statuses["amount_total"] == "missing"
     assert updated.conflict_materials == []
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
+    assert updated.compiled_proof is None
 
 
 def test_superseded_conflicting_evidence_no_longer_blocks_requirement(tmp_path) -> None:
@@ -956,9 +842,9 @@ def test_superseded_conflicting_evidence_no_longer_blocks_requirement(tmp_path) 
 
     requirement = next(item for item in updated.requirements if item.id == "amount_total")
     old_evidence = next(item for item in updated.evidence_items if item.id == "ev_001")
-    assert requirement.status == "accepted"
+    assert requirement.status == "missing"
     assert updated.conflict_materials == []
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
     assert old_evidence.metadata["review_stage"] == "superseded"
     assert old_evidence.metadata["superseded_by_evidence_id"] == "ev_002"
 
@@ -1043,7 +929,7 @@ def test_legacy_conflict_cannot_override_full_canonical_support(tmp_path) -> Non
     )
 
     requirement = next(item for item in updated.requirements if item.id == "amount_total")
-    assert requirement.status == "accepted"
+    assert requirement.status == "missing"
     assert updated.conflict_materials == []
 
 
@@ -1093,11 +979,11 @@ def test_source_traceability_ignores_generic_original_word_in_amount_conflict(tm
     )
 
     requirement = next(item for item in updated.requirements if item.id == "source_traceability")
-    assert requirement.status == "accepted"
+    assert requirement.status == "missing"
     assert updated.conflict_materials == []
 
 
-def test_single_invoice_case_can_use_field_requirements_without_ap_materials(tmp_path) -> None:
+def test_single_invoice_case_keeps_only_requested_field_requirements(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_single_invoice",
@@ -1132,9 +1018,9 @@ def test_single_invoice_case_can_use_field_requirements_without_ap_materials(tmp
     )
 
     statuses = {item.id: item.status for item in updated.requirements}
-    assert statuses["invoice_number"] == "accepted"
-    assert statuses["supplier"] == "accepted"
-    assert statuses["signature_or_authorized_signatory"] == "weak"
+    assert statuses["invoice_number"] == "missing"
+    assert statuses["supplier"] == "missing"
+    assert statuses["signature_or_authorized_signatory"] == "missing"
     assert "purchase_order" not in updated.missing_materials
     assert "goods_receipt" not in updated.missing_materials
 
@@ -1243,7 +1129,7 @@ def test_field_inventory_does_not_create_unreviewed_supports(tmp_path) -> None:
     evidence_ids = {item.id: item.evidence_ids for item in updated.requirements}
     assert statuses["line_items_product_title"] == "missing"
     assert statuses["signature_or_authorized_signatory"] == "missing"
-    assert statuses["invoice_date"] == "weak"
+    assert statuses["invoice_date"] == "missing"
     assert evidence_ids["line_items_product_title"] == []
     assert evidence_ids["signature_or_authorized_signatory"] == []
 
@@ -1414,9 +1300,9 @@ def test_existing_case_adds_safe_dynamic_field_supports_as_optional(tmp_path) ->
     assert requirements["po_number"].required is False
     assert requirements["po_ref"].required is False
     assert requirements["po_amount"].required is False
-    assert requirements["po_number"].status == "accepted"
-    assert requirements["po_ref"].status == "accepted"
-    assert requirements["po_amount"].status == "accepted"
+    assert requirements["po_number"].status == "missing"
+    assert requirements["po_ref"].status == "missing"
+    assert requirements["po_amount"].status == "missing"
 
 
 def test_case_patch_accepts_common_requirement_shapes(tmp_path) -> None:
@@ -1475,7 +1361,7 @@ def test_rejects_removing_requirement_with_evidence(tmp_path) -> None:
         )
 
 
-def test_full_support_overrides_prior_partial_mentions(tmp_path) -> None:
+def test_support_strength_does_not_project_requirement_status(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_full_support",
@@ -1522,12 +1408,11 @@ def test_full_support_overrides_prior_partial_mentions(tmp_path) -> None:
     )
 
     statuses = {item.id: item.status for item in updated.requirements}
-    assert statuses["purchase_order"] == "accepted"
-    assert statuses["vendor_identity"] == "accepted"
-    assert "purchase_order" not in updated.missing_materials
-    assert "vendor_identity" not in updated.missing_materials
-    assert "purchase_order" in updated.satisfied_materials
-    assert "vendor_identity" in updated.satisfied_materials
+    assert statuses["purchase_order"] == "missing"
+    assert statuses["vendor_identity"] == "missing"
+    assert "purchase_order" in updated.missing_materials
+    assert "vendor_identity" in updated.missing_materials
+    assert updated.satisfied_materials == []
 
 
 def test_case_patch_schema_rejects_llm_status_and_missing_materials() -> None:
@@ -1575,8 +1460,8 @@ def test_raw_conflict_cannot_override_document_evidence_proof(tmp_path) -> None:
     )
 
     invoice_requirement = next(item for item in updated.requirements if item.id == "invoice")
-    assert invoice_requirement.status == "accepted"
-    assert "invoice" not in updated.missing_materials
+    assert invoice_requirement.status == "missing"
+    assert "invoice" in updated.missing_materials
     assert "invoice" not in updated.conflict_materials
 
 
@@ -1608,9 +1493,9 @@ def test_reviewer_note_alone_does_not_become_truth_conflict(tmp_path) -> None:
     po_requirement = next(item for item in updated.requirements if item.id == "purchase_order")
     assert updated.evidence_items[0].id == "ev_001"
     assert updated.evidence_items[0].conflicts == []
-    assert po_requirement.status == "accepted"
-    assert "purchase_order" not in updated.missing_materials
-    assert "purchase_order" in updated.satisfied_materials
+    assert po_requirement.status == "missing"
+    assert "purchase_order" in updated.missing_materials
+    assert "purchase_order" not in updated.satisfied_materials
 
 
 def test_resolved_conflict_note_is_not_derived_or_counted_as_active_conflict(tmp_path) -> None:
@@ -1665,12 +1550,12 @@ def test_resolved_conflict_note_is_not_derived_or_counted_as_active_conflict(tmp
     )
 
     requirements = {item.id: item.status for item in updated.requirements}
-    assert requirements["signature_or_authorized_signatory"] == "accepted"
+    assert requirements["signature_or_authorized_signatory"] == "missing"
     assert updated.conflict_materials == []
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
 
 
-def test_duplicate_candidate_source_stays_satisfied_while_semantic_proof_is_incomplete(tmp_path) -> None:
+def test_duplicate_candidate_source_does_not_create_semantic_proof_from_patch(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_duplicate_hit",
@@ -1704,15 +1589,11 @@ def test_duplicate_candidate_source_stays_satisfied_while_semantic_proof_is_inco
     )
 
     source_requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_screen")
-    semantic_requirement = next(item for item in updated.requirements if item.id == "no_active_duplicate")
     assert updated.evidence_items[0].conflicts == []
-    assert source_requirement.status == "accepted"
-    assert semantic_requirement.status == "weak"
-    assert updated.compiled_proof is not None
-    assert updated.compiled_proof.decision_for("no_active_duplicate").proof_status == "INCOMPLETE"
-    assert updated.compiled_proof.decision_for("no_active_duplicate").outcome == "HOLD_FOR_EVIDENCE"
+    assert source_requirement.status == "missing"
+    assert updated.compiled_proof is None
+    assert all(item.id != "no_active_duplicate" for item in updated.requirements)
     assert "duplicate_payment_screen" not in updated.conflict_materials
-    assert "no_active_duplicate" in updated.weak_materials
     assert updated.status == "collecting_materials"
 
 
@@ -1928,7 +1809,7 @@ def test_duplicate_negative_check_is_not_derived_into_conflict(tmp_path) -> None
 
     duplicate_requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_check")
     assert updated.evidence_items[0].conflicts == []
-    assert duplicate_requirement.status == "accepted"
+    assert duplicate_requirement.status == "missing"
 
 
 def test_structured_metadata_conflict_keys_do_not_create_conflict(tmp_path) -> None:
@@ -1978,11 +1859,11 @@ def test_structured_metadata_conflict_keys_do_not_create_conflict(tmp_path) -> N
     invoice_number = next(item for item in updated.requirements if item.id == "invoice_number")
     template_match = next(item for item in updated.requirements if item.id == "template_match")
     assert updated.evidence_items[0].conflicts == []
-    assert invoice_number.status == "accepted"
-    assert template_match.status == "weak"
+    assert invoice_number.status == "missing"
+    assert template_match.status == "missing"
 
 
-def test_optional_invoice_requirements_do_not_block_ready_state(tmp_path) -> None:
+def test_optional_invoice_requirements_stay_out_of_blocking_buckets_without_proof(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_invoice_optional_ready",
@@ -2021,7 +1902,7 @@ def test_optional_invoice_requirements_do_not_block_ready_state(tmp_path) -> Non
     assert "signature_or_authorized_signatory" not in updated.missing_materials
     assert "template_match" not in updated.missing_materials
     assert updated.conflict_materials == []
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
 
 
 def test_optional_raw_conflict_remains_a_non_blocking_annotation(tmp_path) -> None:
@@ -2072,12 +1953,12 @@ def test_optional_raw_conflict_remains_a_non_blocking_annotation(tmp_path) -> No
         },
     )
 
-    assert next(item for item in updated.requirements if item.id == "template_match").status == "weak"
+    assert next(item for item in updated.requirements if item.id == "template_match").status == "missing"
     assert updated.conflict_materials == []
-    assert updated.status == "ready_for_report"
+    assert updated.status == "collecting_materials"
 
 
-def test_ap_lite_requirements_are_distinct_from_legacy_five(tmp_path) -> None:
+def test_ap_lite_patch_stores_only_explicit_requirements_before_compile(tmp_path) -> None:
     store = CaseStore(tmp_path)
     updated = store.apply_patch(
         "case_ap_lite_profile",
@@ -2103,8 +1984,6 @@ def test_ap_lite_requirements_are_distinct_from_legacy_five(tmp_path) -> None:
         "goods_receipt_or_service_acceptance",
         "vendor_identity",
         "duplicate_payment_screen",
-        "no_active_duplicate",
-        "three_way_amount_match",
     ]
     assert "goods_receipt" not in ids
     assert "vendor_record" not in ids
@@ -2152,7 +2031,6 @@ def test_existing_requirement_scope_is_not_expanded_by_ap_evidence(tmp_path) -> 
         "invoice",
         "purchase_order",
         "goods_receipt_or_service_acceptance",
-        "three_way_amount_match",
     ]
 
 
@@ -2195,7 +2073,7 @@ def test_patch_cannot_create_compiler_requirement_or_support_it_directly(tmp_pat
     assert updated.evidence_items[0].supports == []
 
 
-def test_compiler_requirement_definition_and_projection_ignore_patch_updates(tmp_path) -> None:
+def test_patch_cannot_materialize_derived_requirements_without_artifact(tmp_path) -> None:
     store = CaseStore(tmp_path)
     base_requirements = [
         {"id": "invoice"},
@@ -2236,11 +2114,8 @@ def test_compiler_requirement_definition_and_projection_ignore_patch_updates(tmp
         for item in updated.requirements
         if item.id in {"three_way_amount_match", "no_active_duplicate"}
     }
-    assert set(derived) == {"three_way_amount_match", "no_active_duplicate"}
-    assert all(item.kind == "cross_check" for item in derived.values())
-    assert all(item.required is True for item in derived.values())
-    assert all(item.status == "missing" for item in derived.values())
-    assert all(item.evidence_ids == [] for item in derived.values())
+    assert derived == {}
+    assert updated.compiled_proof is None
 
 
 def test_removing_source_requirement_deactivates_derived_proof(tmp_path) -> None:
@@ -2294,7 +2169,7 @@ def test_duplicate_negative_chinese_notes_are_not_derived_into_conflict(tmp_path
 
     duplicate_requirement = next(item for item in updated.requirements if item.id == "duplicate_payment_check")
     assert updated.evidence_items[0].conflicts == []
-    assert duplicate_requirement.status == "accepted"
+    assert duplicate_requirement.status == "missing"
 
 
 def test_no_quantity_conflict_note_is_not_derived_into_conflict(tmp_path) -> None:
@@ -2332,7 +2207,7 @@ def test_no_quantity_conflict_note_is_not_derived_into_conflict(tmp_path) -> Non
 
     grn_requirement = next(item for item in updated.requirements if item.id == "goods_receipt")
     assert updated.evidence_items[0].conflicts == []
-    assert grn_requirement.status == "accepted"
+    assert grn_requirement.status == "missing"
 
 
 def test_cross_case_evidence_does_not_satisfy_active_requirements(tmp_path) -> None:
@@ -2398,7 +2273,7 @@ def test_cross_case_evidence_does_not_satisfy_active_requirements(tmp_path) -> N
     assert len(updated.evidence_items) == 2
     assert updated.evidence_items[1].supports == []
     assert updated.evidence_items[1].conflicts
-    assert statuses["currency_tax"] == "weak"
+    assert statuses["currency_tax"] == "missing"
     assert updated.status == "collecting_materials"
 
 
@@ -2431,7 +2306,7 @@ def test_cross_case_self_check_pass_does_not_strip_valid_supports(tmp_path) -> N
     )
 
     assert updated.evidence_items[0].supports
-    assert updated.requirements[0].status == "accepted"
+    assert updated.requirements[0].status == "missing"
 
 
 def test_patch_normalizes_conflict_objects(tmp_path) -> None:
@@ -2510,7 +2385,8 @@ def test_structured_conflict_scope_respects_explicit_requirement(tmp_path) -> No
     )
 
     statuses = {item.id: item.status for item in updated.requirements}
-    assert statuses == {"invoice": "weak", "purchase_order": "accepted"}
+    assert statuses == {"invoice": "missing", "purchase_order": "missing"}
+    assert updated.compiled_proof is None
 
 
 def test_compiler_does_not_mutate_recorded_amount_conflicts(tmp_path) -> None:

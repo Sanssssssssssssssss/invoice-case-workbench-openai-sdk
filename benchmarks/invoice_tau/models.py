@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -31,6 +31,8 @@ class ScenarioSpec(BaseModel):
 
 
 class ExpectedSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     case_status: str = ""
     min_evidence_count: int | None = None
     max_evidence_count: int | None = None
@@ -39,12 +41,10 @@ class ExpectedSpec(BaseModel):
     reply_must_not_contain: list[str] = Field(default_factory=list)
     encoding_must_be_clean: bool = True
     requirements: dict[str, str] = Field(default_factory=dict)
-    proof_status: str = ""
-    proof_outcome: str = ""
-    proof_policy_version: str = ""
     proof_requirement_id: str = "three_way_amount_match"
-    proof_checks: dict[str, str] = Field(default_factory=dict)
-    proof_obligation_ids: list[str] = Field(default_factory=list)
+    decision_status: str = ""
+    proof_min_source_count: int | None = None
+    proof_has_blocking_obligations: bool | None = None
     must_have_risk_flags: list[str] = Field(default_factory=list)
     must_not_have_risk_flags: list[str] = Field(default_factory=list)
     must_have_evidence_types: list[str] = Field(default_factory=list)

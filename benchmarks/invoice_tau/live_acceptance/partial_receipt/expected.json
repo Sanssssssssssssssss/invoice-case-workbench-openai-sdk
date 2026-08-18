@@ -9,11 +9,8 @@
     "three_way_amount_match": "weak"
   },
   "proof_requirement_id": "three_way_amount_match",
-  "proof_status": "INCOMPLETE",
-  "proof_outcome": "HOLD_FOR_EVIDENCE",
-  "proof_policy_version": "aurora_ap_lite_v1",
-  "proof_checks": {"CHK_COVERAGE_COMPATIBLE": "INCOMPLETE"},
-  "proof_obligation_ids": ["OBL_DOCUMENT_COVERAGE"],
+  "decision_status": "NOT_FOUND",
+  "proof_has_blocking_obligations": true,
   "must_have_evidence_types": ["invoice", "purchase_order", "goods_receipt"],
   "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
   "trace_must_not_call": ["materials_advisor", "report_writer", "write_case_file", "render_pdf"],

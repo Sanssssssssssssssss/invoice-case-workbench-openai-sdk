@@ -6,20 +6,17 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.compiler_runtime.models import (
+    CompiledProof as RuntimeCompiledProof,
+    ReviewArtifact,
+)
 from app.domain.invoice_requirements import CORE_REQUIREMENTS, DEFAULT_REQUIREMENT_LABELS
 
 
 CaseStatus = Literal["new", "collecting_materials", "ready_for_report", "report_generated"]
 RequirementStatus = Literal["missing", "submitted", "accepted", "weak", "rejected", "conflict", "satisfied"]
-ProofStatus = Literal["PROVED", "DISPROVED", "INCOMPLETE", "NOT_APPLICABLE"]
-JudgmentVerdict = Literal["SUPPORTED", "REFUTED", "UNKNOWN"]
-ProofTemplate = Literal["evidence_support", "semantic_gate", "reconciliation", "entity_lifecycle"]
-ContractActivation = Literal["explicit", "derived"]
-HoleKind = Literal["source", "claim", "relation", "judgment", "policy"]
-BindingMode = Literal["global", "singleton_by_role", "same_entity", "per_entity"]
 RequirementId = str
 FieldStatus = Literal["present", "missing", "conflict", "unclear"]
-ReviewMode = Literal["extract", "review", "repair"]
 EvidenceType = Literal[
     "invoice",
     "purchase_order",
@@ -198,86 +195,6 @@ class ConflictRecord(BaseModel):
         return self.description or self.details or self.conflict_type or self.type
 
 
-class ClaimSource(BaseModel):
-    source_quote: str
-    source_locator: str
-
-
-class SemanticClaimCandidate(BaseModel):
-    """Reviewer source language; the Compiler assigns canonical Claim identity."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    handle: str
-    hole_id: str
-    typed_value: Any
-    source_quote: str
-    source_locator: str
-    confidence: Credibility = "medium"
-    entity_handle: str = ""
-    attributes: dict[str, Any] = Field(default_factory=dict)
-    attribute_sources: dict[str, ClaimSource] = Field(default_factory=dict)
-
-
-class SemanticProposalCandidate(BaseModel):
-    """Semantic verdict over Contract slots; refs are linked locally by the Compiler."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    handle: str
-    hole_id: str
-    verdict: JudgmentVerdict = "UNKNOWN"
-    input_handles: list[str] = Field(default_factory=list)
-    supporting_handles: list[str] = Field(default_factory=list)
-    opposing_handles: list[str] = Field(default_factory=list)
-    entity_handle: str = ""
-    open_questions: list[str] = Field(default_factory=list)
-    confidence: Credibility = "medium"
-    reason: str = ""
-
-
-class ReviewedSourceCandidate(BaseModel):
-    """Sparse Reviewer output; the Runtime owns EvidenceItem construction."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    local_source_handle: str
-    attachment_id: str
-    type: EvidenceType
-    credibility: Credibility = "medium"
-    classification: Literal["business_evidence", "process_only", "cross_case_sample", "quarantined"]
-    should_accept: bool = False
-    summary: str = ""
-    source_traceability: SourceTraceability = "unclear"
-    supports: list[SupportRecord] = Field(default_factory=list)
-    conflicts: list[ConflictRecord] = Field(default_factory=list)
-    semantic_claims: list[SemanticClaimCandidate] = Field(default_factory=list)
-    semantic_proposals: list[SemanticProposalCandidate] = Field(default_factory=list)
-    reviewer_notes: str = ""
-
-    @field_validator("type", mode="before")
-    @classmethod
-    def normalize_requirement_role_alias(cls, value: Any) -> Any:
-        return {
-            "goods_receipt_or_service_acceptance": "goods_receipt",
-            "vendor_identity": "vendor_record",
-            "duplicate_payment_screen": "duplicate_payment_check",
-        }.get(str(value or "").strip(), value)
-
-
-class EvidenceReviewerOutput(BaseModel):
-    """Model-facing evidence language, deliberately smaller than CaseUpdates."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    mode: ReviewMode = "review"
-    sources: list[ReviewedSourceCandidate] = Field(default_factory=list)
-    extracted_fields: dict[str, ExtractedField] = Field(default_factory=dict)
-    risk_flags: list[str] = Field(default_factory=list)
-    next_questions: list[str] = Field(default_factory=list)
-    reply_to_user: str = ""
-
-
 class EvidencePatchItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -297,8 +214,6 @@ class EvidencePatchItem(BaseModel):
     reviewer_notes: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
     local_source_handle: str = ""
-    semantic_claims: list[SemanticClaimCandidate] = Field(default_factory=list)
-    semantic_proposals: list[SemanticProposalCandidate] = Field(default_factory=list)
 
     @field_validator("quoted_text", mode="before")
     @classmethod
@@ -332,224 +247,6 @@ class EvidenceItem(BaseModel):
     reviewer_notes: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
     local_source_handle: str = ""
-    semantic_claims: list[SemanticClaimCandidate] = Field(default_factory=list)
-    semantic_proposals: list[SemanticProposalCandidate] = Field(default_factory=list)
-
-
-class Claim(BaseModel):
-    id: str
-    subject: str
-    predicate: str
-    entity_key: str | None = None
-    value_type: str
-    typed_value: Any
-    unit: str | None = None
-    currency: str | None = None
-    basis: str | None = None
-    tax_basis: str | None = None
-    coverage: str | None = None
-    evidence_id: str
-    source_quote: str
-    source_locator: str
-    confidence: Credibility = "medium"
-    attributes: dict[str, Any] = Field(default_factory=dict)
-    attribute_sources: dict[str, ClaimSource] = Field(default_factory=dict)
-
-
-class SourceBinding(BaseModel):
-    evidence_id: str
-    evidence_type: EvidenceType
-    source: EvidenceSource
-    credibility: Credibility = "medium"
-    trusted: bool = False
-    accepted: bool = False
-    source_ref: str = ""
-    source_fingerprint: str = ""
-    supports: list[str] = Field(default_factory=list)
-    support_levels: dict[str, Literal["none", "partial", "full"]] = Field(default_factory=dict)
-
-
-class CaseEvidenceIR(BaseModel):
-    schema_version: str = "1"
-    source_snapshot_hash: str = ""
-    catalog_version: str = ""
-    catalog_hash: str = ""
-    requested_predicates: list[str] = Field(default_factory=list)
-    source_bindings: list[SourceBinding] = Field(default_factory=list)
-    claims: list[Claim] = Field(default_factory=list)
-
-
-class CompilationDiagnostic(BaseModel):
-    stage: Literal["planning", "lowering", "admission", "verification", "shadow"]
-    code: str
-    category: Literal["source", "binding", "policy", "proof", "internal"] = "proof"
-    retry_owner: Literal["reviewer", "advisor", "policy_admin", "none"] = "none"
-    requirement_id: str = ""
-    blocking: bool = True
-    candidate_id: str = ""
-    evidence_id: str = ""
-    contract_id: str = ""
-    hole_id: str = ""
-    details: dict[str, Any] = Field(default_factory=dict)
-
-
-class ContractInput(BaseModel):
-    slot_id: str = ""
-    predicate: str
-    subject: str = ""
-    role: str = ""
-    hole_kind: HoleKind = "claim"
-    required: bool = True
-    value_type: str = ""
-    allowed_values: list[str] = Field(default_factory=list)
-    required_attributes: list[str] = Field(default_factory=list)
-    binding_mode: BindingMode = "global"
-    binding_group: str = ""
-    group_required: bool = False
-
-
-class RequirementContract(BaseModel):
-    contract_id: str
-    version: str
-    contract_hash: str
-    requirement_id: str
-    proof_template: ProofTemplate
-    target_predicate: str
-    inputs: list[ContractInput] = Field(default_factory=list)
-    evidence_roles: list[str] = Field(default_factory=list)
-    policy_inputs: list[str] = Field(default_factory=list)
-    capability: str = ""
-    activation: ContractActivation = "explicit"
-    candidate_actions: list[str] = Field(default_factory=list)
-
-
-class TypedHole(BaseModel):
-    id: str
-    kind: HoleKind
-    semantic_key: str
-    slot_ids: list[str] = Field(default_factory=list)
-    contract_ids: list[str] = Field(default_factory=list)
-    requirement_ids: list[str] = Field(default_factory=list)
-    predicate: str = ""
-    subject: str = ""
-    policy_key: str = ""
-    evidence_roles: list[str] = Field(default_factory=list)
-    value_type: str = ""
-    allowed_values: list[str] = Field(default_factory=list)
-    required_attributes: list[str] = Field(default_factory=list)
-    binding_mode: BindingMode = "global"
-    binding_group: str = ""
-    reason: str = ""
-
-
-class ProposalRef(BaseModel):
-    claim_id: str = ""
-    evidence_id: str = ""
-    source_quote: str = ""
-    source_locator: str = ""
-
-
-class ProofProposal(BaseModel):
-    id: str
-    contract_id: str
-    contract_hash: str
-    target_predicate: str
-    entity_scope: dict[str, str] = Field(default_factory=dict)
-    verdict: JudgmentVerdict = "UNKNOWN"
-    input_refs: list[ProposalRef] = Field(default_factory=list)
-    supporting_refs: list[ProposalRef] = Field(default_factory=list)
-    opposing_refs: list[ProposalRef] = Field(default_factory=list)
-    open_questions: list[str] = Field(default_factory=list)
-    confidence: Credibility = "medium"
-    reason: str = ""
-    proposed_by_evidence_id: str = ""
-    evidence_snapshot_hash: str = ""
-    valid: bool = True
-    validation_errors: list[str] = Field(default_factory=list)
-
-    @property
-    def input_claim_ids(self) -> list[str]:
-        return [item.claim_id for item in self.input_refs]
-
-    @property
-    def supporting_claim_ids(self) -> list[str]:
-        return [item.claim_id for item in self.supporting_refs]
-
-    @property
-    def opposing_claim_ids(self) -> list[str]:
-        return [item.claim_id for item in self.opposing_refs]
-
-
-class CheckResult(BaseModel):
-    id: str
-    program_id: str = ""
-    requirement_id: str
-    status: ProofStatus
-    input_claim_ids: list[str] = Field(default_factory=list)
-    input_evidence_ids: list[str] = Field(default_factory=list)
-    depends_on_check_ids: list[str] = Field(default_factory=list)
-    rule_id: str
-    reason: str
-    executor: Literal["llm", "deterministic"] = "deterministic"
-    operator: str = ""
-
-
-class VerificationActionHint(BaseModel):
-    id: str
-    kind: str
-    target: str
-    resolvability: Literal["low", "medium", "high"] = "high"
-    cost: Literal["low", "medium", "high"] = "low"
-
-
-class ProofObligation(BaseModel):
-    id: str
-    check_id: str
-    missing_premise: str
-    blocking: bool = True
-    decision_impact: Literal["low", "medium", "high"] = "high"
-    uncertainty: Literal["low", "medium", "high"] = "high"
-    candidate_actions: list[VerificationActionHint] = Field(default_factory=list)
-    priority_shadow: float = 0.0
-
-
-class DecisionProof(BaseModel):
-    program_id: str = ""
-    requirement_id: str = ""
-    root_check_id: str = ""
-    outcome: Literal["EVIDENCE_SUFFICIENT_FOR_REPORT", "HOLD_FOR_EVIDENCE", "ABSTAIN_OR_ESCALATE"]
-    proof_status: ProofStatus
-    supporting_check_ids: list[str] = Field(default_factory=list)
-    failing_check_ids: list[str] = Field(default_factory=list)
-    incomplete_check_ids: list[str] = Field(default_factory=list)
-    obligation_ids: list[str] = Field(default_factory=list)
-    policy_version: str
-    compiler_version: str
-    evidence_snapshot_hash: str
-    stop_reason: str
-
-
-class CompiledProof(BaseModel):
-    evidence_ir: CaseEvidenceIR = Field(default_factory=CaseEvidenceIR)
-    contracts: list[RequirementContract] = Field(default_factory=list)
-    holes: list[TypedHole] = Field(default_factory=list)
-    proposals: list[ProofProposal] = Field(default_factory=list)
-    diagnostics: list[CompilationDiagnostic] = Field(default_factory=list)
-    checks: list[CheckResult] = Field(default_factory=list)
-    obligations: list[ProofObligation] = Field(default_factory=list)
-    decisions: list[DecisionProof] = Field(default_factory=list)
-
-    def decision_for(self, requirement_id: str) -> DecisionProof | None:
-        return next((item for item in self.decisions if item.requirement_id == requirement_id), None)
-
-
-class VerificationRecord(BaseModel):
-    obligation_id: str
-    action_id: str
-    proof_hash_before: str
-    result: str = ""
-    new_admissible_claim: bool = False
-    retry_allowed: bool = True
 
 
 class CaseUpdates(BaseModel):
@@ -611,8 +308,8 @@ class CaseState(BaseModel):
     next_questions: list[str] = Field(default_factory=list)
     next_action_hint: str = ""
     reply_brief: str = ""
-    compiled_proof: CompiledProof | None = None
-    verification_records: list[VerificationRecord] = Field(default_factory=list)
+    review_artifact: ReviewArtifact | None = None
+    compiled_proof: RuntimeCompiledProof | None = None
 
 
 class Attachment(BaseModel):
@@ -701,7 +398,7 @@ class PolicyCheck(BaseModel):
 class EvidenceReviewResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: ReviewMode = "review"
+    mode: Literal["review"] = "review"
     source_doc_id: str = ""
     evidence_type: EvidenceType = "unknown"
     credibility: Credibility = "medium"

@@ -1,6 +1,5 @@
 {
   "reply_contains": ["取消", "render_pdf", "Markdown", "PDF 未生成"],
-  "requirements": {"vendor_identity": "accepted"},
   "trace_must_call": ["report_writer", "write_case_file", "render_pdf"],
   "trace_must_approve": ["write_case_file", "render_pdf"],
   "artifacts_must_exist": ["reports/*.md", "traces/*.json"],

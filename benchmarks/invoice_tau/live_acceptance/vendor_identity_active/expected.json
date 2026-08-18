@@ -7,9 +7,9 @@
     "vendor_identity_active": "satisfied"
   },
   "proof_requirement_id": "vendor_identity_active",
-  "proof_status": "PROVED",
-  "proof_outcome": "EVIDENCE_SUFFICIENT_FOR_REPORT",
-  "proof_policy_version": "aurora_ap_lite_v1",
+  "decision_status": "SUPPORTED",
+  "proof_min_source_count": 1,
+  "proof_has_blocking_obligations": false,
   "must_have_evidence_types": ["vendor_record"],
   "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
   "trace_must_not_call": ["materials_advisor", "report_writer", "write_case_file", "render_pdf"],

@@ -2,11 +2,20 @@
 
 import json
 
+from app.compiler_runtime import (
+    CheckAssessment,
+    Claim,
+    EvidenceIR,
+    ProofNode,
+    ProofPlan,
+    ReviewArtifact,
+    compile_review_artifact,
+)
 from app.context import ContextCompiler
 from app.harness import HarnessRuntime
 from app.llm import LlmClient
 from app.state.case_store import CaseStore
-from app.state.schemas import Attachment, CaseEvidenceIR, Claim, CompiledProof, EvidenceItem, RequirementContract, SourceBinding, TypedHole
+from app.state.schemas import Attachment, EvidenceItem, Requirement
 from app.tools.file_workspace import FileWorkspace
 
 
@@ -52,6 +61,57 @@ class _NoSummaryLlm:
         raise AssertionError("short artifacts should not call the LLM summarizer")
 
 
+def _runtime_artifact(
+    *,
+    requirement_id: str,
+    source_id: str,
+    claims: list[Claim],
+    status: str,
+    missing_fact: str = "",
+):
+    check_id = f"check.{requirement_id}"
+    plan = ProofPlan(
+        plan_id=f"plan.{requirement_id}",
+        objective=f"Establish {requirement_id} from grounded case evidence.",
+        active_requirement_ids=[requirement_id],
+        roots={requirement_id: check_id},
+        nodes=[ProofNode(
+            id=check_id,
+            kind="CHECK",
+            statement=f"The evidence supports {requirement_id}.",
+            requirement_refs=[requirement_id],
+        )],
+    )
+    source_ids = sorted({source_id, *(claim.source_id for claim in claims)})
+    evidence_ir = EvidenceIR(
+        source_ids=source_ids,
+        source_fingerprints={item: f"sha256:{item}" for item in source_ids},
+        claims=claims,
+    )
+    relevant = [claim for claim in claims if claim.source_id == source_id and claim.subject != "unrelated"]
+    assessment = CheckAssessment(
+        check_id=check_id,
+        status=status,
+        claim_ids=[claim.id for claim in relevant],
+        source_ids=[source_id] if relevant else [],
+        examined_source_ids=source_ids,
+        reason="fixture verifier assessment",
+        missing_fact=missing_fact,
+    )
+    artifact = ReviewArtifact(
+        plan=plan,
+        plan_hash=plan.content_hash(),
+        evidence_ir=evidence_ir,
+        evidence_snapshot_hash=evidence_ir.content_hash(),
+        assessments=[assessment],
+        submitted_claim_refs={check_id: [claim.id for claim in relevant]},
+        policy_hash="sha256:policy",
+        compiler_version="test",
+        model="fixture",
+    )
+    return artifact
+
+
 def test_context_compiler_stores_raw_artifact_but_planner_gets_summary(tmp_path) -> None:
     store = CaseStore(tmp_path / "cases")
     state = HarnessRuntime(store).begin_run("case_ctx", "review attachments")
@@ -91,20 +151,23 @@ def test_planner_gets_versioned_explicit_requirement_profiles(tmp_path) -> None:
     )
 
     catalog = context["requirement_catalog"]
-    assert catalog["version"] == "aurora_proof_contracts_v2"
+    assert catalog["version"] == "aurora_requirement_pack_v1"
     assert catalog["profiles"]["duplicate_control"] == ["invoice", "duplicate_payment_screen"]
     assert "three_way_amount_match" not in catalog["profiles"]["three_way_control"]
 
 
-def test_planner_sees_all_candidate_actions_for_ranked_obligation(tmp_path) -> None:
+def test_planner_sees_runtime_obligation_actions(tmp_path) -> None:
     store = CaseStore(tmp_path / "cases")
-    case_state = store.apply_patch("case_obligation_actions", {
-        "case_updates": {"requirements": [
-            {"id": "invoice"},
-            {"id": "purchase_order"},
-            {"id": "goods_receipt_or_service_acceptance"},
-        ]},
-    })
+    case_state = store.load("case_obligation_actions")
+    case_state.requirements = [Requirement(id="invoice", label="Invoice", status="missing")]
+    case_state.review_artifact = _runtime_artifact(
+        requirement_id="invoice",
+        source_id="ev_invoice",
+        claims=[],
+        status="NOT_FOUND",
+        missing_fact="a grounded invoice source",
+    )
+    case_state.compiled_proof = compile_review_artifact(case_state.review_artifact)
     state = HarnessRuntime(store).begin_run("case_obligation_actions", "continue review")
 
     context = ContextCompiler(store, LlmClient()).build_planner_context(
@@ -113,8 +176,9 @@ def test_planner_sees_all_candidate_actions_for_ranked_obligation(tmp_path) -> N
         attachments=[],
     )
 
-    assert "inspect_amount_basis" in context["case_brief"]
-    assert "request_missing_amount_source" in context["case_brief"]
+    assert "invoice=NOT_FOUND" in context["case_brief"]
+    assert "read_source|bind_claim|submit_check" in context["case_brief"]
+    assert "a grounded invoice source" in context["case_brief"]
 
 
 def test_planner_context_filters_recent_turn_and_observation_raw_details(tmp_path) -> None:
@@ -509,29 +573,22 @@ def test_report_writer_receives_only_compiler_admitted_claims(tmp_path) -> None:
         conflicts=[{"requirement": "vendor_identity", "description": "legacy raw conflict"}],
         metadata={"claim_to_source_refs": [{"id": "CLM_REJECTED", "typed_value": "invented"}]},
     )]
-    case_state.compiled_proof = CompiledProof(evidence_ir=CaseEvidenceIR(
-        source_bindings=[SourceBinding(
-            evidence_id="ev_vendor",
-            evidence_type="vendor_record",
-            source="attachment",
-            credibility="high",
-            source_ref="vendor.md",
-            source_fingerprint="sha256:vendor",
-            trusted=True,
-            accepted=True,
-        )],
+    case_state.review_artifact = _runtime_artifact(
+        requirement_id="vendor_identity",
+        source_id="ev_vendor",
         claims=[Claim(
             id="CLM_ADMITTED",
             subject="vendor",
             predicate="status",
-            value_type="enum",
-            typed_value="active",
-            evidence_id="ev_vendor",
-            source_quote="Status: Active",
-            source_locator="vendor.md:4",
+            value="active",
+            source_id="ev_vendor",
+            quote="Status: Active",
+            locator="vendor.md:4",
             confidence="high",
         )],
-    ))
+        status="SUPPORTED",
+    )
+    case_state.compiled_proof = compile_review_artifact(case_state.review_artifact)
 
     context = ContextCompiler(store, LlmClient()).build_role_context(
         role="report_writer",
@@ -547,335 +604,6 @@ def test_report_writer_receives_only_compiler_admitted_claims(tmp_path) -> None:
     assert "conflicts" not in row
     assert "claim_to_source_refs" not in row
     assert "CLM_REJECTED" not in json.dumps(context, ensure_ascii=False)
-
-
-def test_reviewer_review_context_includes_previous_extraction_result(tmp_path) -> None:
-    store = CaseStore(tmp_path / "cases")
-    state = HarnessRuntime(store).begin_run("case_review_context", "review pdf")
-    compiler = ContextCompiler(store, LlmClient())
-    attachment_observation = compiler.record_result(
-        state,
-        kind="tool",
-        name="read_attachment",
-        result={
-            "attachment_count": 1,
-            "attachments": [
-                {
-                    "attachment_id": "att_ctx_001",
-                    "name": "invoice.pdf",
-                    "content": "RAW_ATTACHMENT_TEXT_SHOULD_NOT_REPEAT_IN_REVIEW",
-                    "body_markdown": "Invoice INV-CTX-900 total 319.00",
-                    "field_inventory": [{"field": "invoice_number", "value": "INV-CTX-900"}],
-                    "extraction_ref": "evidence/extractions/att_ctx_001.json",
-                }
-            ],
-        },
-    )
-    state.observations.append(attachment_observation)
-    extraction_result = {
-        "source_docs": [
-            {
-                "doc_id": "doc_001",
-                "doc_type": "invoice",
-                "extracted_summary": "INV-CTX-900 total 319.00",
-            }
-        ],
-        "field_inventory": [{"field": "invoice_number", "value": "INV-CTX-900"}],
-    }
-    observation = compiler.record_result(
-        state,
-        kind="role",
-        name="evidence_reviewer",
-        result={
-            "mode": "extract",
-            "source_doc_id": "doc_001",
-            "evidence_type": "invoice",
-            "credibility": "medium",
-            "extraction_result": extraction_result,
-            "source_traceability": "original_document",
-            "support_level": "none",
-            "risk_flags": [],
-            "should_accept": False,
-            "reason": "extracted only",
-            "supports": [],
-            "conflicts": [],
-            "suggested_patch": {},
-            "reply_to_user": "",
-        },
-    )
-    state.observations.append(observation)
-
-    context = compiler.build_role_context(
-        role="evidence_reviewer",
-        state=state,
-        payload={"mode": "review"},
-        user_message="请审核",
-        case_state=store.load("case_review_context"),
-    )
-
-    assert context["mode"] == "review"
-    assert context["extraction_result"]["source_docs"][0]["doc_id"] == "doc_001"
-    context_text = json.dumps(context, ensure_ascii=False)
-    assert "RAW_ATTACHMENT_TEXT_SHOULD_NOT_REPEAT_IN_REVIEW" not in context_text
-    assert context["attachment_context"][0]["body_markdown"] == "Invoice INV-CTX-900 total 319.00"
-
-
-def test_reviewer_direct_review_uses_compact_attachment_context(tmp_path) -> None:
-    store = CaseStore(tmp_path / "cases")
-    state = HarnessRuntime(store).begin_run("case_direct_review_context", "review text batch")
-    compiler = ContextCompiler(store, LlmClient())
-    raw_text = "RAW_DIRECT_REVIEW_TEXT_SHOULD_NOT_REPEAT " * 200
-    observation = compiler.record_result(
-        state,
-        kind="tool",
-        name="read_attachment",
-        result={
-            "attachment_count": 2,
-            "attachments": [
-                {
-                    "attachment_id": "att_direct_001",
-                    "name": "invoice.md",
-                    "content": raw_text,
-                    "body_markdown": "Invoice INV-DIRECT-001 total 9900.00",
-                    "field_inventory": [{"field": "invoice_number", "value": "INV-DIRECT-001"}],
-                    "extraction_ref": "evidence/extractions/att_direct_001.json",
-                },
-                {
-                    "attachment_id": "att_direct_002",
-                    "name": "duplicate_check.md",
-                    "content": raw_text,
-                    "body_markdown": "Duplicate check hit PAY-2026-4431 and CLR-2026-4431",
-                    "field_inventory": [{"field": "duplicate_payment_screen", "value": "hit"}],
-                    "extraction_ref": "evidence/extractions/att_direct_002.json",
-                },
-            ],
-        },
-    )
-    state.observations.append(observation)
-
-    context = compiler.build_role_context(
-        role="evidence_reviewer",
-        state=state,
-        payload={"mode": "review"},
-        user_message="请审核重复付款",
-        case_state=store.load("case_direct_review_context"),
-    )
-
-    context_text = json.dumps(context, ensure_ascii=False)
-    assert "RAW_DIRECT_REVIEW_TEXT_SHOULD_NOT_REPEAT" not in context_text
-    assert "PAY-2026-4431" in context_text
-    assert "extraction_result" not in context or context["extraction_result"] == {}
-    assert context["extraction_context"] == []
-    manifest_text = json.dumps(context["attachment_manifest"], ensure_ascii=False)
-    assert "block_crops" not in manifest_text
-    assert "visual_regions" not in manifest_text
-    assert "proof_label" not in context_text
-    assert len(manifest_text) < 3000
-    assert len(context_text) < 14000
-
-
-def test_reviewer_context_overwrites_and_batches_local_contract_holes(tmp_path) -> None:
-    store = CaseStore(tmp_path / "cases")
-    state = HarnessRuntime(store).begin_run("case_contract_context", "review vendor evidence")
-    case_state = store.load("case_contract_context")
-    contract = RequirementContract(
-        contract_id="CTR_vendor_identity_active",
-        version="1",
-        contract_hash="hash-local",
-        requirement_id="vendor_identity_active",
-        proof_template="semantic_gate",
-        target_predicate="vendor.identity_active",
-        inputs=[{
-            "subject": "vendor",
-            "predicate": "status",
-            "role": "vendor_identity",
-            "hole_kind": "claim",
-            "value_type": "enum",
-        }],
-        capability="master_data_status",
-    )
-    case_state.compiled_proof = CompiledProof(
-        evidence_ir=CaseEvidenceIR(claims=[
-            Claim(
-                id="CLM_VENDOR_STATUS",
-                subject="vendor",
-                predicate="status",
-                value_type="enum",
-                typed_value="active",
-                evidence_id="ev_vendor",
-                source_quote="Vendor V-42 active",
-                source_locator="vendor row 42",
-                confidence="high",
-            ),
-            Claim(
-                id="CLM_UNRELATED_PAYMENT",
-                subject="payment",
-                predicate="status",
-                value_type="enum",
-                typed_value="settled",
-                evidence_id="ev_payment",
-                source_quote="Payment settled",
-                source_locator="payment row 7",
-                confidence="high",
-            ),
-        ]),
-        contracts=[contract],
-        holes=[
-            TypedHole(
-                id="HOL_vendor_status",
-                kind="claim",
-                semantic_key="vendor:status",
-                contract_ids=[contract.contract_id],
-                requirement_ids=[contract.requirement_id],
-                predicate="status",
-                subject="vendor",
-                reason="missing source-bound status",
-            ),
-            TypedHole(
-                id="HOL_vendor_judgment",
-                kind="judgment",
-                semantic_key="vendor:identity_active",
-                contract_ids=[contract.contract_id],
-                requirement_ids=[contract.requirement_id],
-                predicate=contract.target_predicate,
-                subject="vendor",
-                reason="semantic decision required",
-            ),
-        ],
-    )
-
-    context = ContextCompiler(store, LlmClient()).build_role_context(
-        role="evidence_reviewer",
-        state=state,
-        payload={
-            "mode": "review",
-            "active_requirement_contracts": [{"contract_id": "injected"}],
-            "typed_holes": [{"id": "injected"}],
-        },
-        user_message="review vendor evidence",
-        case_state=case_state,
-    )
-
-    assert context["active_requirement_contracts"][0]["contract_id"] == contract.contract_id
-    assert context["active_requirement_contracts"][0]["contract_hash"] == contract.contract_hash
-    assert "inputs" not in context["active_requirement_contracts"][0]
-    assert context["active_requirement_contracts"][0]["input_slots"] == [
-        {
-            "hole_kind": "claim",
-            "subject": "vendor",
-            "predicate": "status",
-            "role": "vendor_identity",
-            "value_type": "enum",
-            "required": True,
-            "binding_mode": "global",
-        }
-    ]
-    assert [item["id"] for item in context["typed_holes"]] == ["HOL_vendor_status", "HOL_vendor_judgment"]
-    assert [
-        item["id"]
-        for item in context["case_state"]["compiled_proof"]["evidence_ir"]["claims"]
-    ] == ["CLM_VENDOR_STATUS"]
-    assert set(context["case_state"]["compiled_proof"]) == {"evidence_ir"}
-
-
-def test_reviewer_judgment_only_hole_keeps_existing_contract_claims(tmp_path) -> None:
-    store = CaseStore(tmp_path / "cases")
-    state = HarnessRuntime(store).begin_run("case_judgment_only_context", "judge vendor status")
-    case_state = store.load("case_judgment_only_context")
-    contract = RequirementContract(
-        contract_id="CTR_vendor_identity_active",
-        version="1",
-        contract_hash="hash-local",
-        requirement_id="vendor_identity_active",
-        proof_template="semantic_gate",
-        target_predicate="vendor.identity_active",
-        inputs=[{
-            "subject": "vendor",
-            "predicate": "status",
-            "role": "vendor_identity",
-            "hole_kind": "claim",
-            "value_type": "enum",
-        }],
-        capability="master_data_status",
-    )
-    case_state.compiled_proof = CompiledProof(
-        evidence_ir=CaseEvidenceIR(claims=[Claim(
-            id="CLM_VENDOR_STATUS",
-            subject="vendor",
-            predicate="status",
-            value_type="enum",
-            typed_value="active",
-            evidence_id="ev_vendor",
-            source_quote="Vendor V-42 active",
-            source_locator="vendor row 42",
-            confidence="high",
-        )]),
-        contracts=[contract],
-        holes=[TypedHole(
-            id="HOL_vendor_judgment",
-            kind="judgment",
-            semantic_key="vendor:identity_active",
-            contract_ids=[contract.contract_id],
-            requirement_ids=[contract.requirement_id],
-            predicate=contract.target_predicate,
-            subject="vendor",
-            reason="semantic decision required",
-        )],
-    )
-
-    context = ContextCompiler(store, LlmClient()).build_role_context(
-        role="evidence_reviewer",
-        state=state,
-        payload={"mode": "review"},
-        user_message="judge vendor status",
-        case_state=case_state,
-    )
-
-    assert [
-        item["id"]
-        for item in context["case_state"]["compiled_proof"]["evidence_ir"]["claims"]
-    ] == ["CLM_VENDOR_STATUS"]
-    assert context["active_requirement_contracts"][0]["input_slots"][0]["predicate"] == "status"
-
-
-def test_reviewer_context_builds_manager_selected_contracts_before_first_patch(tmp_path) -> None:
-    store = CaseStore(tmp_path / "cases")
-    state = HarnessRuntime(store).begin_run("case_manager_scope", "review AP packet")
-
-    context = ContextCompiler(store, LlmClient()).build_role_context(
-        role="evidence_reviewer",
-        state=state,
-        payload={
-            "mode": "review",
-            "active_requirement_ids": [
-                "invoice",
-                "purchase_order",
-                "goods_receipt_or_service_acceptance",
-                "vendor_identity",
-                "duplicate_payment_screen",
-            ],
-        },
-        user_message="review AP packet",
-        case_state=store.load("case_manager_scope"),
-    )
-
-    requirements = {item["requirement_id"] for item in context["active_requirement_contracts"]}
-    assert {"three_way_amount_match", "no_active_duplicate"} <= requirements
-    amount_contract = next(
-        item
-        for item in context["active_requirement_contracts"]
-        if item["requirement_id"] == "three_way_amount_match"
-    )
-    assert amount_contract["policy_excerpt"]["amount_tolerance_percent"] == "2"
-    assert amount_contract["policy_excerpt"]["allowed_amount_basis_by_subject"]["invoice"] == ["invoice_total"]
-    assert amount_contract["policy_excerpt"]["comparable_tax_bases"] == ["gross", "net"]
-    assert amount_contract["policy_excerpt"]["comparable_coverages"] == ["full"]
-    assert "numeric variance and tolerance" in amount_contract["proposal_boundary"]
-    assert any(
-        item["kind"] == "policy" and item["policy_key"] == "duplicate_search_window"
-        for item in context["typed_holes"]
-    )
-    assert any(item["kind"] == "judgment" for item in context["typed_holes"])
 
 
 def test_report_content_ref_preserves_explicit_report_feedback(tmp_path) -> None:

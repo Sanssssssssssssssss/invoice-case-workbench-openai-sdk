@@ -28,29 +28,31 @@ def complete_claim_consistency_errors(case_state: Any) -> list[str]:
         errors.append(f"complete claim conflicts with unsatisfied requirements: {unsatisfied}")
     evidence_items = list(getattr(case_state, "evidence_items", []) or [])
     compiled_proof = getattr(case_state, "compiled_proof", None)
+    review_artifact = getattr(case_state, "review_artifact", None)
     evidence_ids = {str(getattr(item, "id", "") or "") for item in evidence_items}
-    evidence_ir = getattr(compiled_proof, "evidence_ir", None)
+    evidence_ir = getattr(review_artifact, "evidence_ir", None)
     sourced_claim_ids = {
         str(getattr(claim, "id", "") or "")
         for claim in list(getattr(evidence_ir, "claims", []) or [])
-        if str(getattr(claim, "evidence_id", "") or "") in evidence_ids
-        and bool(getattr(claim, "source_quote", ""))
-        and bool(getattr(claim, "source_locator", ""))
+        if str(getattr(claim, "source_id", "") or "") in evidence_ids
+        and bool(getattr(claim, "quote", ""))
+        and bool(getattr(claim, "locator", ""))
     }
-    roots = {
-        (str(getattr(decision, "program_id", "") or ""), str(getattr(decision, "root_check_id", "") or ""))
-        for decision in list(getattr(compiled_proof, "decisions", []) or [])
+    results = {
+        str(getattr(item, "node_id", "") or ""): item
+        for item in list(getattr(compiled_proof, "node_results", []) or [])
     }
     supported_requirements = {
-        str(getattr(check, "requirement_id", "") or "")
-        for check in list(getattr(compiled_proof, "checks", []) or [])
-        if (str(getattr(check, "program_id", "") or ""), str(getattr(check, "id", "") or "")) in roots
-        and str(getattr(check, "status", "")) == "PROVED"
+        str(getattr(decision, "requirement_id", "") or "")
+        for decision in list(getattr(compiled_proof, "decisions", []) or [])
+        if str(getattr(decision, "status", "")) == "SUPPORTED"
+        and (root := results.get(str(getattr(decision, "root_node_id", "") or ""))) is not None
+        and str(getattr(root, "status", "")) == "SUPPORTED"
         and (
-            bool(getattr(check, "input_claim_ids", []))
-            and set(getattr(check, "input_claim_ids", [])) <= sourced_claim_ids
-            or bool(getattr(check, "input_evidence_ids", []))
-            and set(getattr(check, "input_evidence_ids", [])) <= evidence_ids
+            bool(getattr(root, "claim_ids", []))
+            and set(getattr(root, "claim_ids", [])) <= sourced_claim_ids
+            or bool(getattr(root, "source_ids", []))
+            and set(getattr(root, "source_ids", [])) <= evidence_ids
         )
     }
     missing_support = sorted(set(requirement_ids) - supported_requirements)

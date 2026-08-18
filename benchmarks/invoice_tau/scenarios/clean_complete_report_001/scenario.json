@@ -137,7 +137,7 @@
     },
     "report_writer": {
       "title": "INV-5001 发票付款审查报告",
-      "markdown": "# INV-5001 发票付款审查报告\n\n## 结论\n五项来源材料均已满足；三单金额检查为 PROVED。该结论仅表示证据足以形成报告，不代表付款批准。\n\n## 编译证明\n- Policy: Aurora AP Lite v1（含 2% 包容性容差）。\n- Invoice / PO / GRN 均为 12800.00 CNY，金额口径、税基与覆盖范围可比。\n\n## 来源链\n- invoice.md:7-10：金额、币种、invoice_total、gross、full。\n- po.md:5-8：金额、币种、order_total、gross、full。\n- grn.md:7-10：收货金额、币种、received_value、gross、full。\n- vendor.md:11：供应商名称和账户尾号匹配。\n- duplicate_check.md:7：未发现历史付款。\n"
+      "markdown": "# INV-5001 发票付款审查报告\n\n## 结论\n五项来源材料均已满足；三单金额检查为 SUPPORTED。该结论仅表示证据足以形成报告，不代表付款批准。\n\n## 编译证明\n- Policy: Aurora AP Lite v1（含 2% 包容性容差）。\n- Invoice / PO / GRN 均为 12800.00 CNY，金额口径、税基与覆盖范围可比。\n\n## 来源链\n- invoice.md:7-10：金额、币种、invoice_total、gross、full。\n- po.md:5-8：金额、币种、order_total、gross、full。\n- grn.md:7-10：收货金额、币种、received_value、gross、full。\n- vendor.md:11：供应商名称和账户尾号匹配。\n- duplicate_check.md:7：未发现历史付款。\n"
     }
   },
   "budgets": {"max_model_calls": 8, "max_tool_calls": 5, "max_role_calls": 3, "max_wall_time_ms": 600000}

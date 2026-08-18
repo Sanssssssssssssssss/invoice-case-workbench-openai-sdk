@@ -137,7 +137,7 @@ Scenario checks cover:
 - Required and forbidden reply text.
 - Case status and evidence counts.
 - Requirement statuses and risk flags.
-- Compiled proof status, outcome, policy version, and required proof obligations.
+- Requirement-scoped DecisionProof status, source coverage, and blocking obligations.
 - Evidence types.
 - Required and forbidden tool/role calls.
 - Approval interrupts and decisions.
@@ -147,7 +147,7 @@ Scenario checks cover:
 - Encoding cleanliness: benchmark outputs must not contain `???`, replacement characters, `undefined`, `not valid JSON`, streaming failure text, or generic manager failure text.
 - Budgets for model calls, tool calls, role calls, tokens, and wall time.
 
-`semantic_duplicate_reversal_001` is the evidence-language Compiler acceptance case. It seeds the stable `duplicate_payment_screen` input Requirement and requires a source-bound `candidate_found` lifecycle IR plus a validated LLM judgment. The formal Aurora demo Pack intentionally leaves `duplicate_search_window` unconfigured, so the canonical result remains `INCOMPLETE`; the configured-policy offline fixture covers the positive `PROVED` lifecycle branch.
+`semantic_duplicate_reversal_001` is the duplicate-lifecycle Compiler acceptance case. The model must create the plan and source-grounded Claims at runtime; the scenario stores only input materials and business expectations. The Aurora demo Pack intentionally leaves `duplicate_search_window` unconfigured, so the canonical result remains `NOT_FOUND`; a configured-policy offline fixture covers the `SUPPORTED` branch.
 
 ## Adding A Scenario
 

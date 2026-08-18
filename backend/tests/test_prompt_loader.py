@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.prompt_loader import load_prompt, load_system_prompt
-from app.agents.evidence_reviewer.agent import SYSTEM_PROMPT as EVIDENCE_REVIEWER_PROMPT
 from app.agents.report_writer.agent import SYSTEM_PROMPT as REPORT_WRITER_PROMPT
 
 
@@ -33,17 +32,6 @@ def test_agent_prompt_files_have_versioned_contract_headers() -> None:
         header = prompt_path.read_text(encoding="utf-8")[:1400]
         missing = [key for key in required_headers if key not in header]
         assert not missing, f"{prompt_path} missing prompt contract headers: {missing}"
-
-
-def test_evidence_reviewer_prompt_includes_pdf_image_skill() -> None:
-    assert "name: evidence_reviewer" in EVIDENCE_REVIEWER_PROMPT
-    assert "Evidence Reviewer Micro-Skill" in EVIDENCE_REVIEWER_PROMPT
-    assert "PDF/Image Evidence Skill" in EVIDENCE_REVIEWER_PROMPT
-    assert "OCR text is not automatically reliable" in EVIDENCE_REVIEWER_PROMPT
-    assert "Do not extract, compare, or repeat any invoice-like business fields" in EVIDENCE_REVIEWER_PROMPT
-    assert "Prompt-Injection Quarantine" in EVIDENCE_REVIEWER_PROMPT
-    assert "evidence_reviewer_attachment_manifest_skill_v1.0" in EVIDENCE_REVIEWER_PROMPT
-    assert "attachment_manifest" in EVIDENCE_REVIEWER_PROMPT
 
 
 def test_patch_writer_prompt_keeps_prompt_injection_redacted() -> None:

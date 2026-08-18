@@ -1,33 +1,22 @@
 {
   "id": "reject_pdf_approval_001",
   "name": "Reject PDF approval after Markdown report",
-  "description": "A ready non-Compiler case writes Markdown after approval, then stops when render_pdf is rejected. Compiler behavior is covered by dedicated evidence-language scenarios.",
+  "description": "An approval-only case with no active review requirements writes Markdown after approval, then stops when render_pdf is rejected. Compiler behavior is covered by dedicated scenarios.",
   "tags": ["approval", "report", "reject", "artifact"],
   "initial_case_state": {
     "case_id": "placeholder",
     "case_type": "invoice_payment_review",
     "status": "ready_for_report",
-    "summary": "The vendor review evidence is sufficient for a local report draft.",
-    "requirements": [
-      {"id": "vendor_identity", "label": "Vendor identity", "kind": "document", "required": true, "status": "accepted", "evidence_ids": ["ev_vendor"]}
-    ],
-    "evidence_items": [{
-      "id": "ev_vendor",
-      "type": "vendor_record",
-      "credibility": "high",
-      "source": "user_message",
-      "summary": "Vendor master is active and the submitted identity matches.",
-      "content": "Vendor master status: active. Identity match: confirmed.",
-      "review_result": {"should_accept": true},
-      "supports": [{"requirement": "vendor_identity", "support_level": "full", "quoted_text": "Vendor master status: active."}]
-    }],
-    "satisfied_materials": ["vendor_identity"],
+    "summary": "The case is ready for a local report workflow approval test.",
+    "requirements": [],
+    "evidence_items": [],
+    "satisfied_materials": [],
     "missing_materials": [],
     "weak_materials": [],
     "conflict_materials": [],
     "risk_flags": [],
     "next_questions": [],
-    "reply_brief": "The local vendor review report can be drafted."
+    "reply_brief": "The local report can be drafted."
   },
   "user_script": [{
     "message": "Generate report and render PDF.",
@@ -36,8 +25,8 @@
   }],
   "scripted_roles": {
     "report_writer": {
-      "title": "Vendor identity review",
-      "markdown": "# Vendor identity review\n\nThe accepted vendor record supports the local review finding. This report is evidence documentation, not payment approval.\n"
+      "title": "Local review report",
+      "markdown": "# Local review report\n\nThis fixture validates report file approvals only; it does not assert an evidence-review conclusion.\n"
     }
   },
   "budgets": {"max_model_calls": 4, "max_tool_calls": 3, "max_role_calls": 1, "max_wall_time_ms": 45000}

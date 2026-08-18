@@ -9,6 +9,40 @@ from app.guards import CaseStateConsistencyError, NoExecutionWordingError, enfor
 from app.state.schemas import SupervisorDecision, new_case_state
 
 
+def _supported_runtime_proof(requirement_id: str, *, source_id: str, claim_id: str) -> SimpleNamespace:
+    root_id = f"check.{requirement_id}"
+    artifact = SimpleNamespace(
+        evidence_ir=SimpleNamespace(
+            claims=[
+                SimpleNamespace(
+                    id=claim_id,
+                    source_id=source_id,
+                    quote="grounded source quote",
+                    locator="line 1",
+                )
+            ]
+        )
+    )
+    proof = SimpleNamespace(
+        node_results=[
+            SimpleNamespace(
+                node_id=root_id,
+                status="SUPPORTED",
+                claim_ids=[claim_id],
+                source_ids=[source_id],
+            )
+        ],
+        decisions=[
+            SimpleNamespace(
+                requirement_id=requirement_id,
+                root_node_id=root_id,
+                status="SUPPORTED",
+            )
+        ],
+    )
+    return SimpleNamespace(artifact=artifact, proof=proof)
+
+
 def test_no_execution_wording_blocks_direct_execution_claims() -> None:
     for text in ("approved and paid", "I have paid the invoice.", "invoice has been paid.", "I can submit to ERP."):
         with pytest.raises(NoExecutionWordingError):
@@ -78,16 +112,16 @@ def test_case_state_consistency_allows_capability_introduction_without_case_trut
 
 
 def test_case_state_consistency_accepts_compiler_derived_requirement_support() -> None:
+    compiled = _supported_runtime_proof(
+        "three_way_amount_match",
+        source_id="ev_001",
+        claim_id="claim_001",
+    )
     state = SimpleNamespace(
         requirements=[SimpleNamespace(id="three_way_amount_match", status="satisfied", required=True)],
         evidence_items=[SimpleNamespace(id="ev_001", supports=[])],
-        compiled_proof=SimpleNamespace(
-            evidence_ir=SimpleNamespace(
-                claims=[SimpleNamespace(id="claim_001", evidence_id="ev_001", source_quote="Total GBP 100", source_locator="page 1")]
-            ),
-            checks=[SimpleNamespace(id="REQ_THREE_WAY_AMOUNT_MATCH", program_id="amount", requirement_id="three_way_amount_match", status="PROVED", input_claim_ids=["claim_001"], input_evidence_ids=[])],
-            decisions=[SimpleNamespace(program_id="amount", root_check_id="REQ_THREE_WAY_AMOUNT_MATCH")],
-        ),
+        review_artifact=compiled.artifact,
+        compiled_proof=compiled.proof,
     )
 
     assert enforce_case_state_consistency("status = ready_for_report", state) == "status = ready_for_report"
@@ -95,17 +129,19 @@ def test_case_state_consistency_accepts_compiler_derived_requirement_support() -
 
 def test_case_state_consistency_ignores_optional_weak_but_blocks_optional_conflict() -> None:
     text = "status = ready_for_report"
+    compiled = _supported_runtime_proof(
+        "invoice_number",
+        source_id="ev_invoice",
+        claim_id="claim_invoice_number",
+    )
     ok_state = SimpleNamespace(
         requirements=[
             SimpleNamespace(id="invoice_number", status="satisfied", required=True),
             SimpleNamespace(id="signature_or_authorized_signatory", status="weak", required=False),
         ],
         evidence_items=[SimpleNamespace(id="ev_invoice", supports=[SimpleNamespace(requirement="invoice_number")])],
-        compiled_proof=SimpleNamespace(
-            evidence_ir=SimpleNamespace(claims=[]),
-            checks=[SimpleNamespace(id="REQ_INVOICE_NUMBER", program_id="invoice_number", requirement_id="invoice_number", status="PROVED", input_claim_ids=[], input_evidence_ids=["ev_invoice"])],
-            decisions=[SimpleNamespace(program_id="invoice_number", root_check_id="REQ_INVOICE_NUMBER")],
-        ),
+        review_artifact=compiled.artifact,
+        compiled_proof=compiled.proof,
     )
     assert enforce_case_state_consistency(text, ok_state) == text
 
@@ -115,6 +151,7 @@ def test_case_state_consistency_ignores_optional_weak_but_blocks_optional_confli
             SimpleNamespace(id="template_match", status="conflict", required=False),
         ],
         evidence_items=[SimpleNamespace(id="ev_invoice", supports=[SimpleNamespace(requirement="invoice_number"), SimpleNamespace(requirement="template_match")])],
+        review_artifact=ok_state.review_artifact,
         compiled_proof=ok_state.compiled_proof,
     )
     with pytest.raises(CaseStateConsistencyError, match="optional requirement conflicts"):

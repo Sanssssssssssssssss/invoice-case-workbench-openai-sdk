@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.state.schemas import RequirementId, ReviewMode
+from app.state.schemas import RequirementId
 
 
 class _SupervisorToolInput(BaseModel):
@@ -14,14 +16,11 @@ class MaterialsAdvisorInput(_SupervisorToolInput):
 
 
 class EvidenceReviewerInput(_SupervisorToolInput):
-    mode: ReviewMode = Field(default="review", description="extract, review, or repair")
+    mode: Literal["review"] = Field(default="review", description="Run the Evidence Compiler review loop.")
     active_requirement_ids: list[RequirementId] = Field(
         default_factory=list,
         description="Policy-catalog requirement ids selected for this review scope; omit when the case already defines its scope.",
     )
-    target_evidence_id: str = Field(default="", description="Evidence id for repair/recheck, if known.")
-    target_attachment_id: str = Field(default="", description="Attachment id for repair/recheck, if known.")
-    user_correction: str = Field(default="", description="User correction text for repair mode.")
 
 
 class CasePatchWriterInput(_SupervisorToolInput):
@@ -39,7 +38,7 @@ class WriteCasePatchInput(_SupervisorToolInput):
 CAPABILITY_CARDS = {
     "specialists": {
         "materials_advisor": "Generate material-gap tasks, explain rules/templates, and answer what to submit next. It may use RAG guidance internally.",
-        "evidence_reviewer": "Extract/review/repair evidence. For a new case, pass exact active_requirement_ids from the policy catalog; use mode=extract for PDF/image extraction, mode=review for evidence acceptance, and mode=repair for corrections.",
+        "evidence_reviewer": "Compile active requirements into a ProofPlan, inspect evidence in a read-only tool sandbox, and verify every atomic check. Pass exact active_requirement_ids for a new scope; mode is always review.",
         "case_patch_writer": "Convert reviewer/advisor structured results into a CasePatch. It does not re-review evidence.",
         "report_writer": "Draft Chinese Markdown report content from case_state and evidence chain. It does not write files.",
     },

@@ -8,11 +8,8 @@
     "no_active_duplicate": "weak"
   },
   "proof_requirement_id": "no_active_duplicate",
-  "proof_status": "INCOMPLETE",
-  "proof_outcome": "HOLD_FOR_EVIDENCE",
-  "proof_policy_version": "aurora_ap_lite_v1",
-  "proof_checks": {"JDG_NO_ACTIVE_DUPLICATE": "PROVED"},
-  "proof_obligation_ids": ["OBL_DUPLICATE_SEARCH_WINDOW_POLICY"],
+  "decision_status": "NOT_FOUND",
+  "proof_has_blocking_obligations": true,
   "must_have_evidence_types": ["invoice", "duplicate_payment_check"],
   "trace_must_call": ["read_attachment", "evidence_reviewer", "case_patch_writer", "write_case_patch"],
   "trace_must_not_call": ["materials_advisor", "report_writer", "write_case_file", "render_pdf"],

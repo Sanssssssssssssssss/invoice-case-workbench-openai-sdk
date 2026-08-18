@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -60,9 +60,7 @@ DYNAMIC_CONTEXT_KEYS = (
     "case_state",
     "evidence",
     "conversation_summary",
-    "active_requirement_contracts",
     "active_requirement_ids",
-    "typed_holes",
 )
 VOLATILE_TAIL_KEYS = (
     "current_goal",
@@ -479,6 +477,12 @@ def _model_dump(value: Any) -> dict[str, Any]:
         try:
             return value.model_dump()
         except Exception:
+            return {}
+    if is_dataclass(value) and not isinstance(value, type):
+        try:
+            data = asdict(value)
+            return data if isinstance(data, dict) else {}
+        except (TypeError, ValueError):
             return {}
     return value if isinstance(value, dict) else {}
 

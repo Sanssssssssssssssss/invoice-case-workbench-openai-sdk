@@ -13,7 +13,6 @@ from agents.tool_context import ToolContext
 from app.agents.capabilities import ROLE_CAPABILITIES, RoleCapability, role_capability
 from app.agents.thinking import model_extra_body_for_thinking, role_thinking_type, temperature_for_thinking
 from app.agents.patch_builder.agent import SYSTEM_PROMPT as CASE_PATCH_WRITER_PROMPT
-from app.agents.evidence_reviewer.agent import SYSTEM_PROMPT as EVIDENCE_REVIEWER_PROMPT
 from app.agents.materials_advisor.agent import SYSTEM_PROMPT as MATERIALS_ADVISOR_PROMPT
 from app.agents.report_writer.agent import SYSTEM_PROMPT as REPORT_WRITER_PROMPT
 from app.llm import LlmClient, ModelCallRecord
@@ -36,7 +35,6 @@ from app.runtime.reasoning_capture import extract_reasoning_from_result
 
 _ROLE_PROMPTS = {
     "materials_advisor": MATERIALS_ADVISOR_PROMPT,
-    "evidence_reviewer": EVIDENCE_REVIEWER_PROMPT,
     "case_patch_writer": CASE_PATCH_WRITER_PROMPT,
     "report_writer": REPORT_WRITER_PROMPT,
 }
@@ -53,6 +51,7 @@ class RoleRegistry:
         *,
         on_stream: Any | None = None,
         prompt_partition: dict[str, Any] | None = None,
+        hooks: Any | None = None,
     ) -> dict[str, Any]:
         capability = self.capability(role)
         system_prompt = self.prompt(role)
@@ -151,6 +150,7 @@ class RoleRegistry:
                     thinking_type=thinking_type,
                     on_stream=on_stream,
                     prompt_partition=packet_metadata,
+                    hooks=hooks,
                 )
                 raw_tool_input = json.dumps({"input": input_text}, ensure_ascii=False)
                 tool_context = (
@@ -169,6 +169,8 @@ class RoleRegistry:
                 parsed = capability.output_model.model_validate(data)
                 return parsed.model_dump()
             except Exception as exc:
+                if hooks is not None and hasattr(hooks, "record_error"):
+                    hooks.record_error(exc)
                 record = ModelCallRecord(
                     role=role,
                     model=model,
@@ -211,6 +213,7 @@ class RoleRegistry:
         thinking_type: str | None = None,
         on_stream: Any | None = None,
         prompt_partition: dict[str, Any] | None = None,
+        hooks: Any | None = None,
     ) -> FunctionTool:
         capability = self.capability(role)
         agent = self.agent(role, thinking_type=thinking_type, prompt_partition=prompt_partition)
@@ -266,6 +269,7 @@ class RoleRegistry:
             max_turns=2,
             on_stream=on_stream,
             include_input_schema=False,
+            hooks=hooks,
         )
 
     def agent(self, role: str, *, thinking_type: str | None = None, prompt_partition: dict[str, Any] | None = None) -> Agent:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 from app.agents.capabilities import ROLE_CAPABILITIES, role_prompt_version
 from app.agents.registry import RoleRegistry
@@ -10,7 +10,6 @@ from app.context import ContextManager
 from app.harness import HarnessRuntime
 from app.llm import LlmClient
 from app.state.case_store import CaseStore
-from app.state.schemas import RoleName
 
 
 class _DummyGeneration:
@@ -19,7 +18,7 @@ class _DummyGeneration:
 
 
 def test_all_roles_have_capability_metadata() -> None:
-    assert set(ROLE_CAPABILITIES) == set(get_args(RoleName))
+    assert set(ROLE_CAPABILITIES) == {"materials_advisor", "case_patch_writer", "report_writer"}
     registry = RoleRegistry(LlmClient())
 
     assert set(registry.role_names) == set(ROLE_CAPABILITIES)
@@ -73,7 +72,7 @@ def test_role_agent_tools_raise_errors_to_runtime_recovery() -> None:
     registry = RoleRegistry(LlmClient())
 
     tool = registry.as_tool(
-        "evidence_reviewer",
+        "materials_advisor",
         run_config=None,
         started=0.0,
         input_preview="{}",
@@ -82,7 +81,7 @@ def test_role_agent_tools_raise_errors_to_runtime_recovery() -> None:
     )
 
     assert getattr(tool, "_is_agent_tool") is True
-    assert getattr(tool, "_agent_instance").name == "evidence_reviewer"
+    assert getattr(tool, "_agent_instance").name == "materials_advisor"
     assert getattr(tool, "_failure_error_function") is None
 
 

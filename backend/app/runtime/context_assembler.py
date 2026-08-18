@@ -32,6 +32,7 @@ class ContextAssembler:
         tool_catalog: ToolCatalog,
         planner_prompt: str,
         planner_prompt_file: str = "backend/app/agents/planner/prompt.md",
+        hooks_for_state: Any | None = None,
     ) -> None:
         self.store = store
         self.llm = llm
@@ -41,6 +42,7 @@ class ContextAssembler:
         self.tool_catalog = tool_catalog
         self.planner_prompt = planner_prompt
         self.planner_prompt_file = planner_prompt_file
+        self.hooks_for_state = hooks_for_state
 
     def load_context(self, request: AgentTurnRequest, run_id: str | None = None) -> HarnessRunState:
         case_id = self.store.validate_case_id(request.case_id)
@@ -155,6 +157,9 @@ class ContextAssembler:
             "total_turn_count": len(turns),
             "threshold_ratio": 0.6,
         }
+        hooks_token = None
+        if callable(self.hooks_for_state):
+            hooks_token = self.llm.bind_runtime_hooks(self.hooks_for_state(state))
         try:
             result = self.sessions.compact_before_run(
                 state.case_id,
@@ -166,6 +171,9 @@ class ContextAssembler:
         except Exception as exc:
             self.harness.record_observation(state, self.context.record_error(kind="session", name="pre_run_context_compaction", exc=exc))
             return False
+        finally:
+            if hooks_token is not None:
+                self.llm.reset_runtime_hooks(hooks_token)
         if not result:
             return False
         state.session_compacted = True

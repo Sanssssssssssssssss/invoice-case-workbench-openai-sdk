@@ -53,7 +53,6 @@ def test_specialists_are_native_agent_as_tool_runtime() -> None:
     assert "ReportWriter(" not in registry_text
     for path in (
         BACKEND_APP / "agents" / "materials_advisor" / "agent.py",
-        BACKEND_APP / "agents" / "evidence_reviewer" / "agent.py",
         BACKEND_APP / "agents" / "patch_builder" / "agent.py",
         BACKEND_APP / "agents" / "report_writer" / "agent.py",
     ):

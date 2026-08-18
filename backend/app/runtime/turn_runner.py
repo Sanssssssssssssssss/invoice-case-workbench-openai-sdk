@@ -16,6 +16,13 @@ from pydantic import BaseModel
 from app.agents.manager import CaseManagerAgentFactory, MANAGER_PROMPT
 from app.agents.patch_builder.deterministic import reduce_review_to_patch
 from app.agents.registry import RoleRegistry
+from app.compiler_runtime.runtime import (
+    EvidenceCompilerRuntime,
+    attachment_source_admission,
+    compiler_trace_metadata,
+    prepare_sources,
+)
+from app.compiler_runtime.transcript import ModelTranscriptHooks
 from app.config import Settings, get_settings
 from app.context import ContextManager
 from app.harness import HarnessRuntime, HarnessRunState
@@ -27,9 +34,8 @@ from app.runtime.agents_sdk import build_run_config, close_run_config_client, ru
 from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.runtime.context_assembler import ContextAssembler, context_budget
 from app.runtime.context_partition import build_context_packet, usage_from_result as extract_usage_from_result, with_usage_metrics
-from app.runtime.evidence_recovery import materialize_reviewer_output
 from app.runtime.patch_normalizer import PatchNormalizer
-from app.runtime.policy_gate import PolicyGate, infer_reviewer_mode, requires_materials_advice
+from app.runtime.policy_gate import PolicyGate, requires_materials_advice
 from app.runtime.reasoning_capture import append_reasoning_delta, extract_reasoning_from_result, extract_reasoning_from_stream_item, extract_stream_reasoning_delta
 from app.runtime.recovery_policy import RecoveryPolicy
 from app.runtime.retry import is_transient_llm_error
@@ -39,7 +45,14 @@ from app.runtime.trace_recorder import TraceRecorder
 from app.session_manager import SessionManager
 from app.skills import SkillRegistry
 from app.state.case_store import CaseStore
-from app.state.schemas import AgentTurnRequest, AgentTurnResponse, PolicyCheck, SupervisorDecision
+from app.state.attachment_manifest import trusted_sources_for_evidence
+from app.state.schemas import (
+    AgentTurnRequest,
+    AgentTurnResponse,
+    EvidenceReviewResult,
+    PolicyCheck,
+    SupervisorDecision,
+)
 from app.domain.invoice_requirements import (
     AUTO_DERIVED_COMPILER_REQUIREMENTS,
     default_requirement_required,
@@ -94,6 +107,7 @@ class SdkManagerRunner:
             json.dumps(manager_input, ensure_ascii=False, default=str),
             max_turns=max(1, state.max_steps - state.step_count + 2),
             run_config=runner.run_config(state),
+            hooks=_transcript_hooks_for(runner, state),
         )
         runner.record_manager_model_call(state, manager_input, result, latency_ms=_elapsed_ms(started))
         interruptions = list(getattr(result, "interruptions", []) or [])
@@ -125,6 +139,7 @@ class SdkManagerRunner:
                 json.dumps(manager_input, ensure_ascii=False, default=str),
                 max_turns=max(1, state.max_steps - state.step_count + 2),
                 run_config=run_config,
+                hooks=_transcript_hooks_for(runner, state),
             )
             mark_model_started(state.observability, "planner")
             runner.emit_stream_event(
@@ -167,6 +182,7 @@ class SdkManagerRunner:
             run_state,
             max_turns=max(1, state.max_steps - state.step_count + 2),
             run_config=runner.run_config(state),
+            hooks=_transcript_hooks_for(runner, state),
         )
         runner.record_manager_model_call(
             state,
@@ -213,6 +229,7 @@ class SdkManagerRunner:
                 run_state,
                 max_turns=max(1, state.max_steps - state.step_count + 2),
                 run_config=run_config,
+                hooks=_transcript_hooks_for(runner, state),
             )
             mark_model_started(state.observability, "planner")
             runner.emit_stream_event(
@@ -241,6 +258,11 @@ def _manager_metadata(runner: TurnRunner, state: HarnessRunState) -> dict[str, A
         "run_id": state.run_id,
         "prompt_partition": partition,
     }
+
+
+def _transcript_hooks_for(runner: Any, state: HarnessRunState) -> Any | None:
+    factory = getattr(runner, "transcript_hooks", None)
+    return factory(state) if callable(factory) else None
 
 
 class AgentRuntime:
@@ -315,6 +337,7 @@ class TurnRunner:
             tool_catalog=self.tools,
             planner_prompt=MANAGER_PROMPT,
             planner_prompt_file="backend/app/agents/planner/prompt.md",
+            hooks_for_state=self.transcript_hooks,
         )
         self.policy_gate = PolicyGate(store=self.store, context=self.context, tool_catalog=self.tools)
         self.recovery = RecoveryPolicy(store=self.store, harness=self.harness, context=self.context)
@@ -327,6 +350,7 @@ class TurnRunner:
         self._stream_emit: Any | None = None
         self._run_lock_guard = threading.Lock()
         self._run_locks: dict[str, threading.RLock] = {}
+        self._transcript_hooks: dict[str, ModelTranscriptHooks] = {}
 
     def run_turn(self, request: AgentTurnRequest) -> AgentTurnResponse:
         if not request.message.strip():
@@ -346,10 +370,15 @@ class TurnRunner:
         ) as turn:
             state = self.context_assembler.load_context(request, run_id=run_id)
             state.observability.update(turn.to_dict())
+            hooks_token = self.llm.bind_runtime_hooks(self.transcript_hooks(state))
             try:
                 return self._run_until_final(request, state)
             finally:
-                self.harness.write_trace(state)
+                try:
+                    self._flush_transcript(state)
+                    self.harness.write_trace(state)
+                finally:
+                    self.llm.reset_runtime_hooks(hooks_token)
 
     async def run_turn_streamed(
         self,
@@ -381,6 +410,7 @@ class TurnRunner:
                 started = time.perf_counter()
                 state = await asyncio.to_thread(self.context_assembler.load_context, request, run_id=run_id)
                 state.observability.update(turn.to_dict())
+                hooks_token = self.llm.bind_runtime_hooks(self.transcript_hooks(state))
                 self._record_timing(state, "context_loaded", started)
                 self._init_event_loop_lag(state)
                 lag_stop = asyncio.Event()
@@ -403,41 +433,54 @@ class TurnRunner:
                         lag_stop.set()
                     if lag_task is not None:
                         await lag_task
+                    if state is not None:
+                        self._flush_transcript(state)
                     if state is not None and not state.completed_at and state.phase != "waiting_approval":
                         started = time.perf_counter()
                         self.harness.write_trace(state)
                         self._record_timing(state, "trace_write_finally", started)
                 finally:
+                    if state is not None:
+                        if "hooks_token" in locals():
+                            self.llm.reset_runtime_hooks(hooks_token)
                     self._stream_emit = prior_emit
 
     def resume_approval(self, case_id: str, run_id: str, approved: bool, reason: str = "") -> AgentTurnResponse:
         state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
-        with self.observability.start_turn(
-            case_id=state.case_id,
-            run_id=state.run_id,
-            session_id=state.session_id or f"{state.case_id}:main",
-            turn_id=state.turn_id,
-            message_summary=f"approval_resume approved={approved}",
-            attachments=request.attachments,
-            max_steps=self.harness.max_steps,
-            model=self.llm.settings.llm_model,
-            workspace_root_hash=_workspace_root_hash(self.store),
-        ) as turn:
-            state.observability.update(turn.to_dict())
-            self._record_approval_decision(state, interruptions, approved=approved, reason=reason)
-            if not sdk_state:
-                return self._resume_runtime_policy_approval(request, state, approved=approved, reason=reason)
-            if hasattr(self.manager_runner, "resume"):
-                outcome = self.manager_runner.resume(  # type: ignore[attr-defined]
-                    runner=self,
-                    request=request,
-                    state=state,
-                    sdk_state=sdk_state,
-                    approved=approved,
-                    reason=reason,
-                )
-                return self._handle_manager_outcome(request, state, outcome)
-            return self._run_until_final(request, state)
+        hooks_token = self.llm.bind_runtime_hooks(self.transcript_hooks(state))
+        try:
+            with self.observability.start_turn(
+                case_id=state.case_id,
+                run_id=state.run_id,
+                session_id=state.session_id or f"{state.case_id}:main",
+                turn_id=state.turn_id,
+                message_summary=f"approval_resume approved={approved}",
+                attachments=request.attachments,
+                max_steps=self.harness.max_steps,
+                model=self.llm.settings.llm_model,
+                workspace_root_hash=_workspace_root_hash(self.store),
+            ) as turn:
+                state.observability.update(turn.to_dict())
+                self._record_approval_decision(state, interruptions, approved=approved, reason=reason)
+                if not sdk_state:
+                    return self._resume_runtime_policy_approval(request, state, approved=approved, reason=reason)
+                if hasattr(self.manager_runner, "resume"):
+                    outcome = self.manager_runner.resume(  # type: ignore[attr-defined]
+                        runner=self,
+                        request=request,
+                        state=state,
+                        sdk_state=sdk_state,
+                        approved=approved,
+                        reason=reason,
+                    )
+                    return self._handle_manager_outcome(request, state, outcome)
+                return self._run_until_final(request, state)
+        finally:
+            try:
+                self._flush_transcript(state)
+                self.harness.write_trace(state)
+            finally:
+                self.llm.reset_runtime_hooks(hooks_token)
 
     async def resume_approval_streamed(
         self,
@@ -453,6 +496,7 @@ class TurnRunner:
         lag_stop: asyncio.Event | None = None
         lag_task: asyncio.Task[None] | None = None
         state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
+        hooks_token = self.llm.bind_runtime_hooks(self.transcript_hooks(state))
         with self.observability.start_turn(
             case_id=state.case_id,
             run_id=state.run_id,
@@ -489,11 +533,16 @@ class TurnRunner:
                     return self._handle_manager_outcome(request, state, outcome)
                 return await self._run_until_final_streamed(request, state)
             finally:
-                if lag_stop is not None:
-                    lag_stop.set()
-                if lag_task is not None:
-                    await lag_task
-                self._stream_emit = prior_emit
+                try:
+                    if lag_stop is not None:
+                        lag_stop.set()
+                    if lag_task is not None:
+                        await lag_task
+                    self._flush_transcript(state)
+                    self.harness.write_trace(state)
+                finally:
+                    self.llm.reset_runtime_hooks(hooks_token)
+                    self._stream_emit = prior_emit
 
     def _resume_runtime_policy_approval(
         self,
@@ -674,7 +723,7 @@ class TurnRunner:
         if request.attachments and not _latest_observation(state, kind="tool", name="read_attachment"):
             return "read_attachment", {}
         if _latest_observation(state, kind="tool", name="read_attachment") or _latest_attachment_batch_artifact_ref(state, self.store):
-            if not self.context.last_evidence_reviewer_result(state, mode=("review", "repair")):
+            if not self.context.last_evidence_reviewer_result(state, mode="review"):
                 if not _latest_observation_error(state, kind="role", name="evidence_reviewer"):
                     selected = list(state.observability.get("active_requirement_ids") or [])
                     if not selected:
@@ -693,10 +742,6 @@ class TurnRunner:
             return "case_patch_writer", {}
         if writer_index > write_index:
             return "write_case_patch", {}
-        if write_index >= 0 and not self.context.last_evidence_reviewer_result(state, mode="repair"):
-            repair = _binding_repair_payload(self.store.load(state.case_id))
-            if repair:
-                return "evidence_reviewer", repair
         if _report_requested_message(request.message) and self.store.load(state.case_id).status == "ready_for_report":
             if not self.context.last_role_result(state, name="report_writer"):
                 return "report_writer", {"report_instructions": request.message}
@@ -966,6 +1011,23 @@ class TurnRunner:
             },
             timeout_seconds=self.settings.timeout_for_role("planner"),
         )
+
+    def transcript_hooks(self, state: HarnessRunState) -> ModelTranscriptHooks:
+        hook = self._transcript_hooks.get(state.run_id)
+        if hook is None:
+            hook = ModelTranscriptHooks(
+                self.harness,
+                state,
+                prompt_version="invoice_agent_run_v1",
+                secret_values=[self.settings.llm_api_key or ""],
+            )
+            self._transcript_hooks[state.run_id] = hook
+        return hook
+
+    def _flush_transcript(self, state: HarnessRunState) -> None:
+        hook = self._transcript_hooks.get(state.run_id)
+        if hook is not None:
+            hook.flush()
 
     def record_manager_model_call(
         self,
@@ -1253,7 +1315,7 @@ class TurnRunner:
         if role == "materials_advisor" and payload.get("question_focus"):
             payload["user_question"] = payload.get("question_focus")
         if role == "evidence_reviewer":
-            payload["mode"] = infer_reviewer_mode(payload, state)
+            payload["mode"] = "review"
             selected = list(dict.fromkeys(str(item or "").strip() for item in payload.get("active_requirement_ids") or [] if str(item or "").strip()))
             if not selected:
                 selected = list(state.observability.get("active_requirement_ids") or [])
@@ -1264,7 +1326,7 @@ class TurnRunner:
                 payload["active_requirement_ids"] = selected
                 state.observability["active_requirement_ids"] = selected
         if role == "case_patch_writer":
-            reviewer_result = self.context.last_evidence_reviewer_result(state, mode=("review", "repair"))
+            reviewer_result = self.context.last_evidence_reviewer_result(state, mode="review")
             if not reviewer_result:
                 return {"status": "error", "role": role, "error": {"type": "ValueError", "message": "No reviewed evidence is available."}}
             result = reduce_review_to_patch(reviewer_result)
@@ -1294,6 +1356,8 @@ class TurnRunner:
             self.harness.record_observation(state, observation)
             self._update_phase_after_role(state, role, result)
             return _manager_success("role", role, observation=observation)
+        if role == "evidence_reviewer":
+            return self._call_evidence_compiler(state, request, payload, decision)
         role_capability = self.roles.trace_metadata(role)
         role_input = self.context_assembler.hydrate_role_input(state, role, payload, request.message)
         role_input["supervisor_task"] = supervisor_task(decision, state)
@@ -1336,16 +1400,20 @@ class TurnRunner:
             try:
                 stream_handler = self._specialist_stream_handler(state, role)
                 if stream_handler is None:
-                    result = self.roles.call(role, role_input, prompt_partition=role_partition_metadata)
+                    result = self.roles.call(
+                        role,
+                        role_input,
+                        prompt_partition=role_partition_metadata,
+                        hooks=self.transcript_hooks(state),
+                    )
                 else:
                     result = self.roles.call(
                         role,
                         role_input,
                         on_stream=stream_handler,
                         prompt_partition=role_partition_metadata,
+                        hooks=self.transcript_hooks(state),
                     )
-                if role == "evidence_reviewer":
-                    result = materialize_reviewer_output(result, role_input)
                 _mark_prior_specialist_errors_recovered(
                     state,
                     self.llm.calls,
@@ -1384,6 +1452,185 @@ class TurnRunner:
                 span.update(output=safe_role_output({}, error=f"{type(exc).__name__}: {exc}"), level="ERROR", status_message=str(exc))
                 return {"status": "error", "role": role, "error": {"type": type(exc).__name__, "message": str(exc)}}
 
+    def _call_evidence_compiler(
+        self,
+        state: HarnessRunState,
+        request: AgentTurnRequest,
+        payload: dict[str, Any],
+        decision: SupervisorDecision,
+    ) -> dict[str, Any]:
+        role = "evidence_reviewer"
+        state.observability.pop("_pending_review_artifact", None)
+        case_state = self.store.load(state.case_id)
+        requested = list(payload.get("active_requirement_ids") or [])
+        existing = [
+            item.id
+            for item in case_state.requirements
+            if item.id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
+        ]
+        selected = list(dict.fromkeys([*existing, *requested]))
+        if not selected:
+            exc = ValueError("evidence_reviewer requires at least one active requirement")
+            self.harness.record_observation(
+                state,
+                self.context.record_error(kind="role", name=role, exc=exc),
+            )
+            return {
+                "status": "error",
+                "role": role,
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            }
+        state.observability["active_requirement_ids"] = selected
+
+        attachment_items = self.context.last_attachment_items(state)
+        admitted_attachments: list[dict[str, Any]] = []
+        rejected_attachments: list[dict[str, Any]] = []
+        for index, item in enumerate(attachment_items):
+            admitted, reason = attachment_source_admission(item)
+            if admitted:
+                admitted_attachments.append(dict(item))
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            rejected_attachments.append(
+                {
+                    "index": index,
+                    "attachment_id": str(item.get("attachment_id") or ""),
+                    "name": str(item.get("name") or ""),
+                    "reason": reason,
+                    "status": str(item.get("status") or ""),
+                    "manifest_status": str(item.get("manifest_status") or ""),
+                    "classification": str(item.get("classification") or metadata.get("classification") or ""),
+                }
+            )
+        source_inputs = list(admitted_attachments)
+        trusted_ids = set(
+            trusted_sources_for_evidence(
+                self.store,
+                state.case_id,
+                case_state.evidence_items,
+            )
+        )
+        source_inputs.extend(
+            _persisted_evidence_sources(
+                [item for item in case_state.evidence_items if item.id in trusted_ids]
+            )
+        )
+        prepared_sources = prepare_sources(source_inputs)
+        extraction_summary = _compiler_extraction_summary(admitted_attachments)
+        source_admission = {
+            "attachment_count": len(attachment_items),
+            "admitted_attachment_count": len(admitted_attachments),
+            "rejected_attachment_count": len(rejected_attachments),
+            "prepared_source_count": len(prepared_sources),
+            "rejected": rejected_attachments,
+        }
+        state.observability["compiler_source_admission"] = source_admission
+        if rejected_attachments:
+            self.harness.append_debug_event(
+                state,
+                kind="compiler_source_admission",
+                name="evidence_compiler_runtime",
+                payload=source_admission,
+                summary=f"Rejected {len(rejected_attachments)} of {len(attachment_items)} new attachment source(s).",
+                parent_event_id=state.last_action_event_id,
+                caused_by_event_id=state.last_action_event_id,
+            )
+        role_input = {
+            "active_requirement_ids": selected,
+            "source_catalog": [
+                {
+                    "source_id": item.record.source_id,
+                    "title": item.record.title,
+                    "kind": item.record.kind,
+                    "characters": len(item.record.content),
+                    "already_persisted": bool(item.metadata.get("already_persisted")),
+                }
+                for item in prepared_sources
+            ],
+            "extraction_summary": extraction_summary,
+            "supervisor_task": supervisor_task(decision, state),
+        }
+        capability = compiler_trace_metadata()
+        self.context.write_context_manifest(
+            state,
+            target=f"role:{role}",
+            context_payload=role_input,
+            included=list(role_input),
+            excluded=["old contracts", "typed holes", "legacy semantic graph", "expected golden labels"],
+            blocked_raw_content=False,
+            model=self.llm.settings.llm_model,
+            prompt_file="backend/app/compiler_runtime/prompts/",
+            system_prompt="Task Compiler + sandbox Executor + Fine Verifier",
+            budget=context_budget(state),
+            raw_leak_checks=["expected_golden_labels"],
+            compact_triggered=state.session_compacted,
+            metadata={"role_capability": capability},
+        )
+        with self.observability.span(
+            "agent.evidence_compiler_runtime",
+            input=safe_role_input(role, role_input),
+            metadata={"role_capability": capability, "step_count": state.step_count},
+            as_type="agent",
+        ) as span:
+            try:
+                runtime = EvidenceCompilerRuntime(
+                    self.llm,
+                    hooks=self.transcript_hooks(state),
+                    settings=self.settings,
+                )
+                compiled = runtime.run(
+                    active_requirement_ids=selected,
+                    prepared_sources=prepared_sources,
+                    extraction_summary=extraction_summary,
+                )
+                result = EvidenceReviewResult.model_validate(compiled.review_result).model_dump(mode="json")
+                state.observability["_pending_review_artifact"] = compiled.artifact.model_dump(mode="json")
+                state.observability["compiler_run"] = {
+                    "plan_id": compiled.artifact.plan.plan_id,
+                    "plan_hash": compiled.artifact.plan_hash,
+                    "evidence_snapshot_hash": compiled.artifact.evidence_snapshot_hash,
+                    "checks": len(compiled.artifact.assessments),
+                    "claims": len(compiled.artifact.evidence_ir.claims),
+                    "retry_count": compiled.retry_count,
+                }
+                _mark_prior_specialist_errors_recovered(
+                    state,
+                    self.llm.calls,
+                    role=role,
+                    recovered_by="compiler_runtime_success",
+                )
+                self.trace_recorder.record_model_call_debug(state)
+                self.harness.record_role_call(state, role, role_input, result, capability=capability)
+                observation = self.context.record_result(state, kind="role", name=role, result=result)
+                self.harness.record_observation(state, observation)
+                self._update_phase_after_role(state, role, result)
+                span.update(output=safe_role_output(result))
+                return _manager_success("role", role, observation=observation)
+            except Exception as exc:
+                state.observability.pop("_pending_review_artifact", None)
+                self.harness.record_role_call(
+                    state,
+                    role,
+                    role_input,
+                    {},
+                    error=f"{type(exc).__name__}: {exc}",
+                    capability=capability,
+                )
+                self.harness.record_observation(
+                    state,
+                    self.context.record_error(kind="role", name=role, exc=exc),
+                )
+                span.update(
+                    output=safe_role_output({}, error=f"{type(exc).__name__}: {exc}"),
+                    level="ERROR",
+                    status_message=str(exc),
+                )
+                return {
+                    "status": "error",
+                    "role": role,
+                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                }
+
     def _specialist_stream_handler(self, state: HarnessRunState, role: str) -> Any | None:
         if not callable(self._stream_emit):
             return None
@@ -1417,11 +1664,12 @@ class TurnRunner:
             return {"status": "error", "tool": "write_case_patch", "error": {"type": type(exc).__name__, "message": str(exc)}}
         patch = self.patch_normalizer.preserve_reviewer_quote_fields(
             writer_patch,
-            self.context.last_evidence_reviewer_result(state, mode=("review", "repair")),
+            self.context.last_evidence_reviewer_result(state, mode="review"),
         )
         patch = self.patch_normalizer.compact_for_write(patch)
         try:
             result = self.tool_runtime.call(state, "write_case_patch", {"patch": patch}, internal=True)
+            state.observability.pop("_pending_review_artifact", None)
             observation = _latest_observation(state, kind="tool", name="write_case_patch")
             return _manager_success("tool", "write_case_patch", observation=observation, result=result)
         except Exception as exc:
@@ -1752,34 +2000,62 @@ def _latest_observation_index(state: HarnessRunState, *, kind: str, name: str) -
     )
 
 
-def _binding_repair_payload(case_state: Any) -> dict[str, Any]:
-    proof = getattr(case_state, "compiled_proof", None)
-    diagnostics = [
-        item
-        for item in list(getattr(proof, "diagnostics", []) or [])
-        if getattr(item, "category", "") == "binding"
-        and getattr(item, "retry_owner", "") == "reviewer"
-        and getattr(item, "blocking", True)
-    ]
-    if not diagnostics:
-        return {}
-    payload = {
-        "mode": "repair",
-        "active_requirement_ids": sorted({
-            str(getattr(item, "requirement_id", "") or "")
-            for item in diagnostics
-            if str(getattr(item, "requirement_id", "") or "")
-        }),
-        "compilation_diagnostics": [item.model_dump(mode="json") for item in diagnostics],
-    }
-    evidence_ids = sorted({
-        str(getattr(item, "evidence_id", "") or "")
-        for item in diagnostics
-        if str(getattr(item, "evidence_id", "") or "")
-    })
-    if len(evidence_ids) == 1:
-        payload["target_evidence_id"] = evidence_ids[0]
-    return payload
+def _persisted_evidence_sources(evidence_items: list[Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for evidence in evidence_items:
+        metadata = getattr(evidence, "metadata", {}) or {}
+        review_result = getattr(evidence, "review_result", {}) or {}
+        content = str(getattr(evidence, "content", "") or "")
+        if not content:
+            content = "\n".join(str(item) for item in getattr(evidence, "quoted_text", []) or [])
+        if not content.strip():
+            continue
+        evidence_id = str(getattr(evidence, "id", "") or "").strip()
+        if not evidence_id:
+            continue
+        result.append(
+            {
+                "source_id": evidence_id,
+                "source_content": content,
+                "name": str(metadata.get("source_filename") or evidence_id),
+                "evidence_type": str(getattr(evidence, "type", "") or "unknown"),
+                "attachment_id": str(metadata.get("attachment_id") or ""),
+                "original_ref": str(metadata.get("original_ref") or ""),
+                "preview_paths": list(metadata.get("preview_paths") or []),
+                "extraction_ref": str(metadata.get("extraction_ref") or ""),
+                "classification": str(metadata.get("classification") or "unclear"),
+                "credibility": str(getattr(evidence, "credibility", "") or "medium"),
+                "should_accept": review_result.get("should_accept") if isinstance(review_result, dict) else None,
+                "source": str(getattr(evidence, "source", "") or "attachment"),
+                "already_persisted": True,
+                "source_fingerprint": str(metadata.get("compiler_source_sha256") or ""),
+            }
+        )
+    return result
+
+
+def _compiler_extraction_summary(attachment_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expose document shape to planning, not case answers or golden expectations."""
+
+    result: list[dict[str, Any]] = []
+    for item in attachment_items:
+        fields = []
+        for field in item.get("field_inventory") or []:
+            if not isinstance(field, dict):
+                continue
+            name = str(field.get("field") or field.get("name") or "").strip()
+            if name:
+                fields.append(name)
+        result.append(
+            {
+                "attachment_id": str(item.get("attachment_id") or ""),
+                "name": str(item.get("name") or ""),
+                "content_kind": str(item.get("content_kind") or item.get("type") or ""),
+                "available_fields": list(dict.fromkeys(fields)),
+                "warnings": [str(value) for value in (item.get("warnings") or []) if str(value).strip()],
+            }
+        )
+    return result
 
 
 def _latest_attachment_batch_artifact_ref(state: HarnessRunState, store: CaseStore) -> str:
@@ -2007,26 +2283,14 @@ def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
     weak_ids = _requirement_ids(case_state, "weak")
     satisfied_ids = _requirement_ids(case_state, "satisfied") + _requirement_ids(case_state, "accepted")
     status = str(getattr(case_state, "status", "") or "")
-    diagnostics = list(getattr(proof, "diagnostics", []) or [])
-    binding_errors = [
-        item
-        for item in diagnostics
-        if getattr(item, "category", "") == "binding" and getattr(item, "blocking", True)
-    ]
 
     if decisions:
-        lines = ["本轮材料审查已经记录到案卷，以下状态来自 canonical compiled proof。"]
+        lines = ["本轮 Evidence Compiler 结果已经写入案卷。"]
         for decision in decisions:
-            subject = (
-                str(getattr(decision, "requirement_id", "") or "")
-                or str(getattr(decision, "program_id", "") or "")
-                or str(getattr(decision, "root_check_id", "") or "")
-                or "unnamed_decision"
-            )
-            lines.append(
-                f"- {subject}={getattr(decision, 'proof_status', '') or '-'}；"
-                f"outcome={getattr(decision, 'outcome', '') or '-'}。"
-            )
+            subject = str(getattr(decision, "requirement_id", "") or "unnamed_requirement")
+            decision_status = str(getattr(decision, "status", "") or "NOT_FOUND")
+            reason = _safe_text(str(getattr(decision, "stop_reason", "") or ""), max_chars=220)
+            lines.append(f"- {subject}={decision_status}；{reason or '无补充说明'}。")
 
         blocking = [
             item
@@ -2034,13 +2298,13 @@ def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
             if bool(getattr(item, "blocking", False))
         ]
         if blocking:
-            lines.append("- Blocking proof obligations：")
+            lines.append("- 尚未完成的核查：")
             for obligation in blocking:
                 identity = str(getattr(obligation, "id", "") or getattr(obligation, "check_id", "") or "unnamed_obligation")
-                premise = _safe_text(str(getattr(obligation, "missing_premise", "") or "未说明缺失前提"), max_chars=260)
+                premise = _safe_text(str(getattr(obligation, "missing_fact", "") or "未说明缺失事实"), max_chars=260)
                 lines.append(f"  - {identity}：{premise}")
         else:
-            lines.append("- Blocking proof obligations：无。")
+            lines.append("- 尚未完成的核查：无。")
     else:
         lines = ["本轮本地材料审查已经记录到案卷，下面是当前案卷状态。"]
 
@@ -2061,15 +2325,6 @@ def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
         lines.append(f"- 待核对问题：{_safe_text(questions[0], max_chars=260)}")
 
     if decisions:
-        if binding_errors:
-            lines.append(
-                "- Binding diagnostics: "
-                + _csv([
-                    str(getattr(item, "code", "BINDING_ERROR") or "BINDING_ERROR")
-                    for item in binding_errors
-                ])
-            )
-        outcomes = {str(getattr(item, "outcome", "") or "") for item in decisions}
         decision_requirements = {
             str(getattr(item, "requirement_id", "") or "")
             for item in decisions
@@ -2081,35 +2336,26 @@ def _runtime_final_answer(case_state: Any, state: HarnessRunState) -> str:
             "conflict": [item for item in conflict_ids if item not in decision_requirements],
         }
         reportable_findings = [
-            str(getattr(item, "requirement_id", "") or getattr(item, "program_id", "") or "unnamed_decision")
+            str(getattr(item, "requirement_id", "") or "unnamed_requirement")
             for item in decisions
-            if str(getattr(item, "outcome", "") or "") == "EVIDENCE_SUFFICIENT_FOR_REPORT"
-            and str(getattr(item, "proof_status", "") or "") == "DISPROVED"
+            if str(getattr(item, "status", "") or "") == "CONTRADICTED"
         ]
         if reportable_findings:
             lines.append(f"可进入报告的已证实发现：{_csv(reportable_findings)}。")
-        if (
-            outcomes == {"EVIDENCE_SUFFICIENT_FOR_REPORT"}
-            and status == "ready_for_report"
-            and not any(ordinary_blockers.values())
-        ):
-            lines.append("结论：所有 canonical decisions 均为 EVIDENCE_SUFFICIENT_FOR_REPORT，且案卷已 ready_for_report；可进入报告。")
-        elif "ABSTAIN_OR_ESCALATE" in outcomes:
-            lines.append("结论：至少一个 canonical decision 为 ABSTAIN_OR_ESCALATE；应升级处理。")
-        elif binding_errors:
-            lines.append("结论：当前阻塞是 Reviewer 语义包与 Contract 的绑定失败，不是缺少业务材料；系统应修复语义包，不能调用材料顾问或要求用户重复补交已有来源。")
-        elif "HOLD_FOR_EVIDENCE" in outcomes:
-            lines.append("结论：至少一个 canonical decision 为 HOLD_FOR_EVIDENCE；应先处理 blocking proof obligations。")
+        if status == "ready_for_report" and not any(ordinary_blockers.values()):
+            lines.append("结论：所有活动 Requirement 已得到强结论，可进入报告。")
+        elif any(str(getattr(item, "status", "") or "") == "NOT_FOUND" for item in decisions):
+            lines.append("结论：仍有 NOT_FOUND 原子检查；应按未决核查继续取证，不能写成强结论。")
         elif any(ordinary_blockers.values()):
             lines.append(
-                "结论：canonical decisions 已可报告，但仍有非编译 requirements 未完成："
+                "结论：仍有未完成 Requirements："
                 f"missing={_csv(ordinary_blockers['missing'])}；"
                 f"weak={_csv(ordinary_blockers['weak'])}；"
                 f"conflict={_csv(ordinary_blockers['conflict'])}。"
             )
         else:
-            lines.append(f"结论：canonical decisions 已可报告，但 case_state={status or '-'}，尚未 ready_for_report。")
-        lines.append("PROVED、DISPROVED 与 INCOMPLETE 表示证据证明状态，不代表业务批准或拒绝。")
+            lines.append(f"结论：当前 case_state={status or '-'}，尚未 ready_for_report。")
+        lines.append("SUPPORTED、CONTRADICTED、NOT_FOUND 仅表示证据状态，不代表业务批准或拒绝。")
     elif status == "ready_for_report" and not missing_ids and not weak_ids and not conflict_ids:
         lines.append("结论：case_state=ready_for_report；可继续生成本地报告草稿。")
     else:

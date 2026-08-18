@@ -1,212 +1,162 @@
-# Proof-Directed Shared Evidence IR
+# Lightweight Evidence Compiler
 
-The Compiler is a derived business-state projection inside `CaseStore`. It is not a new Agent, runtime phase, scheduler, graph database, rule DSL, or source of truth. Agents may propose source-bound Claims and `ProofProposal`s; they cannot patch `compiled_proof`.
+这个项目里的 Compiler 不是规则引擎，也不是把 Reviewer 的判断换成 Python。
 
-The core shape is **one case-level `CaseEvidenceIR`, with multiple Contract-scoped Proof Views generated on demand**. We do not build a new independent DAG for every case or teach the Runtime a growing list of invoice-specific prompts.
+它的职责只有一句话：
 
-## Current architecture
+> 把开放式企业审核任务编译成一份可执行、可核查、可停止的 LLM 工作程序。
+
+同一个 DeepSeek Worker 可以处理金额核对、供应商状态、重复付款或其他 ERP Requirement；变化的是本轮 `ProofPlan` 和证据上下文，不是 Agent 数量，也不是一张新的手写业务 DAG。
+
+## 运行链路
 
 ```mermaid
-flowchart TD
-    U["User review intent"] --> MG["Manager: choose Policy profile or explicit Requirements"]
-    P["Versioned company Policy Pack"] --> CAT["Compact Requirement catalog"]
-    CAT --> MG
-    MG --> Q["Active explicit Requirements"]
-    A["Attachments and existing evidence"] --> R["Runtime source boundary: manifest, hashes, extraction dossier"]
-    Q --> B["RequirementContract builder plus derived activation"]
-    P --> B
-    B --> C["Active Requirement Contracts"]
-    C --> H["Unresolved typed holes"]
-    R --> L["Reviewer LLM: document understanding and semantic lowering"]
-    C --> L
-    H --> L
-    L --> X["Source-bound Claims and Contract-scoped ProofProposals"]
-    X --> W["Existing deterministic Patch Builder"]
-    W --> S["CaseStore: normalize, supersede, select active trusted evidence"]
-    R --> S
-    S --> IR["One CaseEvidenceIR: source bindings plus reusable Claims"]
-    C --> V["Contract-scoped Proof Views"]
+flowchart LR
+    A["附件抽取结果"] --> B["Task Compiler"]
+    R["Active Requirement + Policy"] --> B
+    B --> C["ProofPlan<br/>CHECK / ALL / ANY / NOT"]
+    C --> D["LLM Executor"]
+    D <-->|"4 个受限工具"| S["Evidence Sandbox"]
+    S --> IR["EvidenceIR<br/>Claims + 来源"]
+    C --> V["Fine Verifier"]
     IR --> V
-    X --> V
-    V --> E["evidence_support"]
-    V --> G["semantic_gate"]
-    V --> M["reconciliation"]
-    V --> Y["entity_lifecycle"]
-    E --> K["Proof Kernel: admission, policy, arithmetic, topology, propagation"]
-    G --> K
-    M --> K
-    Y --> K
-    K --> CR["CheckResult graphs"]
-    CR --> O["ProofObligations"]
-    CR --> D["One DecisionProof per active Requirement"]
-    D --> SP["CaseStore single Requirement projection"]
-    O --> MG["Manager ranks and chooses the next verification action"]
-    D --> RW["Report Writer consumes canonical proof"]
-    SP --> H
+    V --> K["Proof Kernel<br/>纯三值传播"]
+    K -->|"有可补事实的 NOT_FOUND"| D
+    K --> P["DecisionProof"]
+    P --> O["Requirement / Report / Manager"]
 ```
 
-The loop matters: a new source, correction, supersession, Requirement, Policy value, Claim, Proposal, or Compiler version causes a full recompile. `compiled_proof` is therefore a disposable snapshot, not a second truth store.
+一次显式 `evidence_reviewer` 调用完成这条链。对 Manager 而言工具名没有变化；工具内部已经不是旧 Reviewer，而是 `EvidenceCompilerRuntime`。
 
-## Canonical objects
+`CaseStore.load()` 和普通 Requirement 刷新永远不调用模型。Evidence、Requirement 或 Policy 变化后，旧 Artifact 会失效，Requirement 安全回落为 `missing/weak`，等待下一次显式审核。
 
-### `CaseEvidenceIR`
+## 四个核心对象
 
-Each case has one shared IR containing:
+### `ProofPlan`
 
-- trusted, accepted source bindings;
-- a source snapshot hash and Predicate Catalog version/hash;
-- the predicates requested by active Contracts;
-- globally reusable descriptive Claims with typed values, evidence ids, exact quotes, locators, confidence, and optional entity grouping.
+Task Compiler 接收当前活动 Requirement、版本化 Policy 摘要，以及按文档类型聚合后的来源/抽取形状，一次生成本轮计划。规划输入不包含 `source_id`、文件名或附件名，因此 Plan 不会提前选择证据，也不会因为运行期来源 ID 改名而改变语义。
 
-The same admitted Claim is lowered once and may be selected by several Proof Views. A Proof View sees only the Claims and Proposals relevant to its Contract, so an unrelated Claim cannot change another Requirement's proof hash.
+计划只有四种节点：
 
-`CaseEvidenceIR.claims` is the only shared Claim representation exposed by `CompiledProof`; the old top-level Claim/Judgment mirrors have been removed.
+- `CHECK`：一个可以单独核查的命题；
+- `ALL`：全部子命题成立；
+- `ANY`：至少一个子命题成立；
+- `NOT`：对子命题取三值否定。
 
-### `RequirementContract`
+本地代码只验证唯一 ID、引用完整、Requirement/Policy 覆盖、根节点完整和无环。它不替模型决定应该如何拆业务问题，也不在代码中按金额、供应商或重复付款 ID 建专用 DAG。
 
-The versioned Policy Pack compiles each active Requirement into a Contract containing its id/hash, proof template, target predicate, required inputs, evidence roles, policy inputs, semantic capability, activation mode, and candidate verification actions. Typed inputs carry an exact source role, value type, optional enum vocabulary, required source-grounded attributes, and entity-scoping semantics. Configured values are injected as a compact read-only `policy_excerpt`; unconfigured values remain policy holes.
+`ProofPlan` 的价值是把“审核一下有没有重复付款”变成一组带完成条件的工作问题。计划错了，可以只调 Task Compiler；不需要同时猜 Worker、Verifier 或 CaseStore 哪里错了。
 
-Manager chooses the review scope through active Requirements. The local builder validates and instantiates Contracts; neither Manager nor Reviewer may invent a Contract or hard company rule.
+### `EvidenceIR`
 
-Activation is explicit for ordinary Requirements and derived only where the Policy Pack declares stable premises, such as an amount-match or duplicate-control conclusion.
+Executor 在证据沙箱中自主列来源、读材料、理解实体和经济语义，再绑定 Claim：
 
-### `TypedHole`
+```text
+subject / predicate / value
++ source_id / exact quote / locator / confidence
+```
 
-Unresolved Contract inputs are deduplicated by semantic key and exposed to Reviewer as one batch:
+第一版沙箱只开放：
 
-- `source`: a trusted supporting source is absent;
-- `claim`: a descriptive typed fact is absent;
-- `relation`: an entity or economic relationship is unresolved;
-- `judgment`: a bounded semantic conclusion is unresolved;
-- `policy`: an approved enterprise policy value is not configured.
+- `list_sources`
+- `read_source`
+- `bind_claim`
+- `submit_check`
 
-A policy hole must remain unresolved. Reviewer cannot fill it from RAG, memory, a local session database, or general knowledge.
+来源未读、quote 不是原文子串、locator 无效、Claim 引用悬空时，工具返回可修复错误，模型可以在同一小循环中改正。沙箱不提供 Shell、Python、任意文件、Policy 写入、CaseStore 写入或 DecisionProof 修改能力。
 
-### Reviewer source language and `ProofProposal`
+Claim 只能追加，不能原地改写。同一来源正文和 SHA-256 必须一致；重放时正文被截断或变化会使 Artifact 失效。
 
-Reviewer emits `SemanticClaimCandidate` and `SemanticProposalCandidate`. It refers only to Runtime-provided hole ids, packet-local Claim handles, and canonical Claim ids already supplied from the IR. It does not invent Claim ids, Contract ids/hashes, source snapshot hashes, Requirement status, `PROVED`/`DISPROVED`, or repeated full source references.
+### `CheckAssessment`
 
-The model-facing `EvidenceReviewerOutput` is intentionally sparse: one attachment id, source admission judgment, direct supports, Claims, and Proposals per physical document. It cannot emit `EvidenceItem`, metadata, evidence cards, or `CasePatch`. Runtime code binds the attachment id to the manifest/extraction dossier and constructs those storage objects, so the model does not echo OCR bodies or duplicate Runtime-owned provenance.
+Fine Verifier 独立核查每个 `CHECK`，只输出：
 
-Reviewer receives compact Contract identity/capability summaries, typed input slots, relevant existing IR Claims, and the complete Typed Holes. A Contract with only a judgment hole therefore still carries the facts needed to repair that judgment. RAG is capped to short guidance excerpts. One call handles the whole current packet; a provider/schema failure may use the SDK's single schema retry, but Manager cannot start another Reviewer call in the same turn.
+- `SUPPORTED`
+- `CONTRADICTED`
+- `NOT_FOUND`
 
-The Binder resolves `input_handles`, `supporting_handles`, and `opposing_handles` independently against the active Contract, validates quote/locator grounding, assigns canonical Claim ids, and applies `global`, `singleton_by_role`, `same_entity`, or `per_entity` binding. Strong Proposals must explicitly carry their complete input set and polarity; empty, dangling, duplicated, ambiguous, overlapping, or out-of-scope references fail closed. The Kernel consumes canonical `ProofProposal`s directly; there is no second `SemanticJudgment` mirror or legacy Reviewer verdict projection.
+Verifier 看原子问题、该检查已提交的 Claims、全部准入来源正文、精确引用和 Policy，不看 Worker 的最终 verdict。Claim 的 predicate/value 只是 Worker 提议；Verifier 必须重新检查 quote 是否真的蕴含该语义。相关但不充分的事实不能形成强结论。
 
-### `CompilationDiagnostic`
+强结论必须引用已进入 IR 且由 Executor 提交给该检查的 Claim，并明确检查完整个准入来源快照。缺失、部分、歧义、低置信度、来源漏读、互相冲突或 Policy 未配置都只能是 `NOT_FOUND`。
 
-Rejected candidates are not silently discarded. Diagnostics explain source-binding failures, missing or ungrounded quotes/locators, invalid values or ids, stale Contract/Proposal snapshots, missing entity keys or Policy, blocked dependencies, and shadow mismatches. They reuse Harness tracing and do not create another logging store.
+文档类型只能证明“这是一份发票/采购订单等文档”，不能自动证明原件、真实性、审批、授权或生命周期状态。比如 `invoice` 表示“发票文档”；若要证明原件可追溯性，必须单独激活 `source_traceability` 并提供直接证据。
 
-## Four reusable Proof Views
+### `ReviewArtifact` 与 `DecisionProof`
 
-| Proof template | Typical Requirements | LLM-owned work | Kernel-owned work |
-|---|---|---|---|
-| `evidence_support` | documents, fields, visual checks, risk-check sources | identify the document/field and quote it accurately | trusted-source admission, accepted/full support, provenance |
-| `semantic_gate` | field validity, vendor status, bank authorization, approval, SOD, release, tax coding, audit chain | interpret entities, authorization meaning, economic scope, ambiguity | premise coverage, Policy presence, Proposal admission, dependency propagation |
-| `reconciliation` | three-way amount/quantity and non-PO contract matching | determine whether records refer to comparable entities, periods, basis, coverage and units | currency/unit/basis gates, configured tolerances, arithmetic, aggregation |
-| `entity_lifecycle` | duplicate-payment and payment-hold conclusions | relate candidates, payments, reversals, holds and lifecycle events | candidate isolation, identity constraints, `all/any/none` quantification, propagation |
+`ReviewArtifact` 保存本轮可重放的模型工作：Plan、EvidenceIR、Assessments、Policy hash、Evidence snapshot hash、Compiler/模型/Prompt 版本。
 
-Amount, quantity, and non-PO controls use the reusable reconciliation builder. Duplicate-payment and payment-Hold controls use the same grouped-lifecycle builder. The authoritative path has no specialized amount or duplicate DAG.
+它不是第二套 Requirement 状态。`Proof Kernel` 从 Artifact 纯计算得到 `DecisionProof`；派生结果只保存节点、决定、义务和诊断，不再复制 Plan、IR 或 Assessments：
 
-Lifecycle subjects are conditional groups: if a payment or reversal branch appears, all required facts for that branch must be present; an absent optional reversal branch is not itself missing evidence. Policy completeness gates a positive universal claim such as “no active duplicate found”, but cannot erase a source-grounded counterexample. Thus a direct active duplicate may be `DISPROVED` while the search-window Policy is unconfigured, whereas a clean search remains `INCOMPLETE` until that Policy is configured.
+- `ALL`：任一反驳即反驳；全部支持才支持；其他为未知；
+- `ANY`：任一支持即支持；全部反驳才反驳；其他为未知；
+- `NOT`：支持与反驳互换，未知仍未知；
+- 引用、来源或哈希不完整时一律降为 `NOT_FOUND`。
 
-These are view shapes, not four Agents. The same Reviewer handles all current holes in one call using a stable protocol plus dynamic Contracts. Adding a Requirement within an existing capability should normally change only the Policy Pack, guidance, and golden cases—not `CaseStore`, Runtime, or the global Reviewer prompt.
+CaseStore 只投影根结论：
 
-## LLM and deterministic boundaries
-
-Reviewer owns work that requires language understanding:
-
-- document and entity recognition;
-- source-bound field and Claim extraction;
-- cross-document identity and economic-scope interpretation;
-- lifecycle, authorization, and ambiguity judgments;
-- choosing `UNKNOWN` when the submitted sources do not justify a strong conclusion.
-
-The deterministic layer owns safety and reproducibility:
-
-- source identity, SHA-256 and supersession admission;
-- Claim types, ids, quote/locator grounding and deduplication;
-- Contract and Policy versions;
-- arithmetic, equality, quantifiers, graph topology and three-valued propagation;
-- Proposal snapshot validation, diagnostics, proof hashes and Requirement projection.
-
-Deterministic code does not replace semantic reasoning. It prevents a fluent but unsupported model answer from becoming case truth.
-
-## Compilation and CaseStore projection
-
-`CaseStore` has one authoritative path:
-
-1. canonicalize Requirements and ensure declared premises;
-2. bind the manifest, verify trusted sources, apply supersession, and select active evidence;
-3. build active Contracts and unresolved holes;
-4. lower the active packet once into `CaseEvidenceIR`;
-5. admit Contract-scoped Proposals and generate one Proof View per active Contract;
-6. execute the Kernel and create one root `DecisionProof` per Requirement;
-7. derive final Typed Holes from the actual Checks and Decisions, then project only those canonical roots into Requirement status and workflow buckets.
-
-`CaseStore` never promotes a Reviewer's `partial` or absent support to `full`, and extracted-field metadata never creates support records by itself. Generic evidence roles such as approval matrices, SOD records, and audit trails are admitted through the active `evidence_support` Contracts rather than a second hard-coded document path.
-
-Projection is uniform:
-
-| Canonical proof | Requirement projection |
+| DecisionProof | Requirement 状态 |
 |---|---|
-| `PROVED` + `evidence_support` | `accepted` |
-| `PROVED` + semantic template | `satisfied` |
-| `DISPROVED` | `conflict` |
-| `INCOMPLETE` with admitted evidence | `weak` |
-| `INCOMPLETE` without admitted evidence | `missing` |
+| evidence owner + `SUPPORTED` | `accepted` |
+| other owner + `SUPPORTED` | `satisfied` |
+| `CONTRADICTED` | `conflict` |
+| `NOT_FOUND` 且有部分来源 | `weak` |
+| `NOT_FOUND` 且无来源 | `missing` |
 
-There is no separate Reviewer-status projection, compiler mode, or legacy per-program fallback.
+这些状态用于证据报告，不是企业正式 `APPROVE/REJECT`。
 
-Report Writer consumes `DecisionProof`, Checks, obligations, and the IR provenance chain. Manager consumes blocking obligations and ranked candidate actions. The obligation value surface may rank roughly by `Blocking × Impact × Uncertainty × Resolvability ÷ Cost`, but it never decides whether a Claim is true or executes an action without Manager and Policy Gate control.
+## 主动验证循环
 
-Binding diagnostics are routed to Reviewer for at most one repair pass in the same run. A repaired packet is patched and compiled again. A remaining binding failure is reported as an internal semantic-package problem, not converted into a material gap or sent to Materials Advisor. Invalid JSON, a terminal provider/schema failure, or a Reviewer timeout is fail-closed and cannot cause Manager to loop over the same Reviewer call. Runtime extraction never substitutes a regex-derived business review or duplicate-payment conclusion.
+首轮 Verifier 出现 `NOT_FOUND` 时，Runtime 只把可由现有来源继续解决的检查、缺失事实和 Hook 反馈交还 Executor。
 
-## Three-valued proof and outcome
+第二轮的停止条件是：本轮目标检查必须产生新的 `submit_check`；第一轮旧提交不能让 Completion Hook 提前结束。只有新增有效 Claim，或把已有 Claim 重新关联到未决检查时，才再次调用 Verifier。没有新的有效工作、Policy 本身未配置或达到预算时，保留 `NOT_FOUND`。
 
-| Proof status | Meaning | Outcome |
-|---|---|---|
-| `PROVED` | all required premises support the proposition | `EVIDENCE_SUFFICIENT_FOR_REPORT` |
-| `DISPROVED` | admissible evidence establishes a failed proposition | `EVIDENCE_SUFFICIENT_FOR_REPORT` |
-| `INCOMPLETE` | a required source, Claim, relation, judgment, or Policy value is unresolved | `HOLD_FOR_EVIDENCE` |
-| exhausted `INCOMPLETE` | registered verification attempts cannot add admissible Claims | `ABSTAIN_OR_ESCALATE` |
+当前固定最多一轮主动验证。以后贝叶斯校准器只替换“是否值得再跑一轮”的触发器，不参与事实真伪，也不改变 Kernel。
 
-`DISPROVED` is a reportable finding, not a request to keep collecting material until the result becomes a pass. `INCOMPLETE` is not evidence that the proposition is false.
+## LLM 与确定性代码的边界
 
-None of these outcomes means payment `APPROVE` or `REJECT`. Formal approval requires a separately versioned approval Policy Pack and an explicit authority model and is intentionally absent.
+LLM 负责：
 
-## Source and admission invariants
+- 如何把 Requirement 拆成可核查问题；
+- 阅读材料并识别文档、实体、关系和经济范围；
+- 金额口径、生命周期、授权语义和歧义判断；
+- 证据不足时明确保留未知。
 
-- Only active, accepted attachment evidence classified as `business_evidence` may ground Compiler Claims or Proposals.
-- RAG, advisory memory, rejected/prompt-injection/cross-case material, ordinary process logs, low-credibility evidence, and unconfigured Policy values cannot establish a strong semantic result. Accepted user-message evidence may support an evidence leaf, but it cannot lower Compiler Claims or Proposals.
-- Quotes must occur in the Runtime-owned trusted source corpus and keep a non-empty locator. Missing, mixed, duplicated, ambiguous, or hash-mismatched sources fail closed.
-- Claim ids are packet-unique. A Contract view admits a Claim only when its source role, value type, enum vocabulary, required attributes, and entity scope match. Attribute values need their own grounded source or must occur in the Claim quote. Entity keys are opaque grouping tokens, not hidden conclusions or payment-number parsers.
-- A strong Proposal requires an exact current Contract, complete relevant Claim coverage, valid supporting/opposing subsets, required confidence, and no open question. Conflicting, stale, source-free, partial, or malformed Proposals yield `INCOMPLETE`.
-- Narrative words such as "clarified" or "resolved" cannot clear a Conflict; only a structured `resolution_status` or trusted supersession can do so.
-- Supersession is accepted only from one trusted, accepted, same-type correction. Replacing evidence always triggers full recompilation.
-- Agents and patches cannot directly modify Contracts, holes, IR, Decisions, or Requirement-derived state.
+确定性代码只负责：
 
-## Acceptance focus
+- 来源可访问范围和 read-before-bind；
+- quote、locator、ID、hash 与引用完整性；
+- Plan schema、无环和覆盖；
+- 三值逻辑传播、预算、停止条件与状态投影；
+- Patch 的原子写入和权限边界。
 
-The Compiler is accepted on behavior, not on the number of framework objects:
+判断代码中不应出现按 `three_way_amount_match`、`no_active_duplicate`、供应商或银行 Requirement ID 分支构造业务结论。Requirement/Policy 数据可以拆卸，Agent 生命周期保持不变。
 
-- every active Requirement has exactly one root `DecisionProof`;
-- a shared Claim is lowered once and reused by multiple Contracts;
-- evidence, Claim, and Contract ordering does not change IR or proof;
-- an unrelated Claim does not change another Proof View hash;
-- every rejected candidate has a primary diagnostic and never enters the IR;
-- missing Policy, stale Contract/Proposal, dangling refs, low confidence, and conflicting proposals stay `INCOMPLETE`;
-- source-grounded `PROVED`/`DISPROVED` conclusions have complete quote, locator, and trusted-source coverage;
-- shadow mode adds no model call and produces no unexplained strong-result mismatch.
+## 调试方法
 
-Representative golden cases cover amount conflict, partial receipt, complete duplicate reversal, active duplicate, unresolved lifecycle, and the `vendor_identity_active` semantic-gate canary. Normal development uses offline fixtures; limited live-model acceptance is reserved for release gates.
+每次真实案件运行会生成：
 
-The four release canaries live under `benchmarks/invoice_tau/live_acceptance`, separate from routine scripted discovery. The duplicate-reversal canary remains `INCOMPLETE` in the formal Aurora demo Pack until `duplicate_search_window` is supplied by an approved policy source; its offline configured-policy fixture proves the positive lifecycle branch.
+```text
+workspace/cases/<case_id>/traces/<run_id>/deepseek_calls.txt
+```
 
-## Deliberate limits
+TXT 按真实 provider call 记录可见的 system prompt、输入、输出、工具参数/结果、usage、request id 和错误；隐藏思维链与密钥不会写入。`events.jsonl` 仍是 canonical trace，TXT 只是人读投影。
 
-- No graph database, universal ontology, arbitrary textual rule DSL, new Compiler Agent, second CaseStore, or incremental cache.
-- The Predicate Catalog remains small and tied to proven ERP capabilities; it grows only for a real Contract.
-- Full recompilation is preferred while case sizes are small because it keeps one derived truth path.
-- `CompiledProof.decisions`, `decision_for(requirement_id)`, and `evidence_ir.claims` are the only canonical proof surfaces.
-- Aurora remains a demo tenant. Values marked unconfigured remain policy holes until supplied by an approved enterprise source.
-- The system compiles proof-carrying evidence for reporting; it does not issue a corporate approval decision.
+排错顺序固定：
+
+1. Plan 是否漏问题、提前下结论或错误使用 Policy；
+2. Executor 是否真的读源，Claim quote/locator 是否落源；
+3. Source Hook 是否正确拒绝并把反馈交还模型；
+4. Verifier 是否独立核查 quote，而不是复述 Claim 标签；
+5. Kernel 是否只做引用与三值传播；
+6. CaseStore 的 source/policy/hash 是否与 Artifact 完全一致。
+
+开发时每层先跑离线测试，再只调用一个固定 canary。失败后不换案例，只改一个变量并查看 TXT。最终 holdout 的 expected 只包含业务真值、必要来源和目标状态，绝不能进入模型上下文。
+
+## 明确不做
+
+- 不增加业务 Agent、图数据库、万能 Ontology 或规则 DSL；
+- 不保留 legacy/shadow 双轨；
+- 不让 CaseStore 在读取时调用模型；
+- 不让 Manager、Patch 或 Agent 修改 Plan、IR、Assessment、Artifact 或 DecisionProof；
+- 不在第一版加入人工升级流、增量缓存或贝叶斯校准器；
+- 不把“测试通过”当作真实模型输出已经正确。

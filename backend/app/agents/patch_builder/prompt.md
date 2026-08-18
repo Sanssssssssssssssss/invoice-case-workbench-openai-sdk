@@ -56,7 +56,7 @@ Memory boundary: `memory_hints` are advisory only. Do not create evidence, suppo
 - acceptance_rubric under 120 chars.
 - source_quote must stay verbatim; if too long, drop the optional field object instead of rewriting the quote.
 - Drop missing extracted fields from metadata; keep present/conflict/unclear core fields.
-- Preserve compact evidence-chain metadata and the typed `semantic_claims` / `semantic_proposals` submitted by the reviewer.
+- Preserve compact evidence-chain metadata submitted by the reviewer.
 - Preserve `crop_path`, `block_id`, `proof_label`, `crop_status`, `locator`, `preview_path`, and source quotes exactly where present. Do not rewrite crop metadata or proof labels.
 - For `metadata.field_inventory` and `metadata.evidence_chain`, keep the first 8 highest-value rows. Keep source quotes verbatim.
 

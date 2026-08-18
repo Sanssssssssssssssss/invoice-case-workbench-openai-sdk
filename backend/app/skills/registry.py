@@ -57,27 +57,12 @@ def _default_manifests() -> list[SkillManifest]:
             description="Invoice payment review rules, required materials, BPI guidance, and report templates.",
             instruction_files=[
                 "backend/app/agents/materials_advisor/task_skill.md",
-                "backend/app/agents/evidence_reviewer/review_skill.md",
             ],
             resource_roots=["knowledge/invoice_payment"],
             tools=[],
             side_effect="none",
-            allowed_roles=["materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"],
+            allowed_roles=["materials_advisor", "case_patch_writer", "report_writer"],
             artifact_policy="artifact_refs",
-        ),
-        SkillManifest(
-            name="pdf_review",
-            description="PDF/image/OCR attachment extraction and visual evidence review guidance.",
-            instruction_files=[
-                "backend/app/agents/evidence_reviewer/pdf_image_skill.md",
-                "backend/app/agents/evidence_reviewer/attachment_review_skill.md",
-            ],
-            resource_roots=[],
-            tools=["read_attachment"],
-            side_effect="file_extract",
-            idempotency="side_effectful",
-            allowed_roles=["evidence_reviewer"],
-            artifact_policy="local_files",
         ),
         SkillManifest(
             name="report_generation",

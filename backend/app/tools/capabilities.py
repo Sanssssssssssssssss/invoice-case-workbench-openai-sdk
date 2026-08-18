@@ -109,7 +109,13 @@ def _read_attachment(context: ToolCallContext, payload: ToolInput) -> dict[str, 
 
 def _write_case_patch(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:
     data = _as(payload, WriteCasePatchInput)
-    return context.workspace.write_case_patch(context.case_id, data.patch)
+    observability = getattr(context.run_state, "observability", {})
+    artifact = observability.get("_pending_review_artifact") if isinstance(observability, dict) else None
+    return context.workspace.write_case_patch(
+        context.case_id,
+        data.patch,
+        review_artifact=artifact if isinstance(artifact, dict) else None,
+    )
 
 
 def _list_case_files(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:

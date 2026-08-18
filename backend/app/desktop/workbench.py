@@ -13,7 +13,6 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any
 
 from app.agents.patch_builder.agent import SYSTEM_PROMPT as CASE_PATCH_WRITER_PROMPT
-from app.agents.evidence_reviewer.agent import SYSTEM_PROMPT as EVIDENCE_REVIEWER_PROMPT
 from app.agents.materials_advisor.agent import SYSTEM_PROMPT as MATERIALS_ADVISOR_PROMPT
 from app.agents.report_writer.agent import SYSTEM_PROMPT as REPORT_WRITER_PROMPT
 from app.runtime.turn_runner import AgentRuntime
@@ -3399,7 +3398,6 @@ class DesktopWorkbench:
         return [
             {"name": "planner", "label": "planner", "content": planner_prompt},
             {"name": "materials_advisor", "label": "materials", "content": MATERIALS_ADVISOR_PROMPT},
-            {"name": "evidence_reviewer", "label": "evidence", "content": EVIDENCE_REVIEWER_PROMPT},
             {"name": "case_patch_writer", "label": "patcher", "content": CASE_PATCH_WRITER_PROMPT},
             {"name": "report_writer", "label": "report", "content": REPORT_WRITER_PROMPT},
         ]

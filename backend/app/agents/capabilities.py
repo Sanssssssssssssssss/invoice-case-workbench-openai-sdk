@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from app.state.schemas import CasePatch, EvidenceReviewerOutput, MaterialsAdvisorResult, ReportWriterResult
+from app.state.schemas import CasePatch, MaterialsAdvisorResult, ReportWriterResult
 
 
 RoleOwner = Literal["planner", "route_policy"]
@@ -55,45 +55,6 @@ ROLE_CAPABILITIES: dict[str, RoleCapability] = {
         side_effects="none",
         owner="planner",
         guard_policy=("schema_retry", "rag_guidance_boundary"),
-        fallback_policy="schema_retry_once_then_runtime_error",
-    ),
-    "evidence_reviewer": RoleCapability(
-        name="evidence_reviewer",
-        input_keys=(
-            "mode",
-            "active_requirement_ids",
-            "user_message",
-            "case_state",
-            "rag_context",
-            "attachment_context",
-            "attachment_manifest",
-            "extraction_context",
-            "extraction_result",
-            "active_requirement_contracts",
-            "typed_holes",
-            "target_evidence_id",
-            "target_attachment_id",
-            "user_correction",
-            "memory_hints",
-            "supervisor_task",
-        ),
-        output_model=EvidenceReviewerOutput,
-        prompt_version="evidence_reviewer_v8.0+sparse_source_language_v1+global_policy_v1.2+review_skill_v3.0+pdf_image_skill_v2.1+attachment_skill_v1.0+supervisor_task",
-        prompt_file="backend/app/agents/evidence_reviewer/prompt.md",
-        context_policy=(
-            "case_state_summary",
-            "current_attachment_or_manifest",
-            "extraction_result",
-            "active_requirement_contracts",
-            "typed_holes",
-            "rag_guidance",
-            "memory_hints",
-        ),
-        max_retries=1,
-        allowed_tools=(),
-        side_effects="none",
-        owner="route_policy",
-        guard_policy=("schema_retry", "source_boundary", "prompt_injection_boundary"),
         fallback_policy="schema_retry_once_then_runtime_error",
     ),
     "case_patch_writer": RoleCapability(

@@ -54,7 +54,7 @@ def _packet(role: str, *, context_payload: dict[str, Any] | None = None) -> Any:
 def test_prompt_prefix_hash_snapshots_are_stable() -> None:
     expected = json.loads(Path("backend/tests/fixtures/prompt_prefix_hashes.json").read_text(encoding="utf-8"))
     actual = {}
-    for role in ("planner", "materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"):
+    for role in ("planner", "materials_advisor", "case_patch_writer", "report_writer"):
         packet = _packet(role)
         actual[role] = {
             "stable_prefix_hash": packet.stable_prefix_hash,
@@ -151,19 +151,20 @@ def test_prompt_cache_settings_only_for_openai_responses() -> None:
     assert prompt_cache_model_settings_kwargs(moonshot_settings, packet) == {}
 
 
-def test_reviewer_contract_context_is_a_known_dynamic_partition() -> None:
-    partitioned = partition_context_payload(
-        {
-            "active_requirement_contracts": [{"contract_id": "CTR_1"}],
-            "typed_holes": [{"id": "HOL_1"}, {"id": "HOL_2"}],
-            "mode": "review",
-        },
-        strict=True,
-    )
-
-    assert partitioned.dynamic_context["active_requirement_contracts"][0]["contract_id"] == "CTR_1"
-    assert [item["id"] for item in partitioned.dynamic_context["typed_holes"]] == ["HOL_1", "HOL_2"]
-    assert partitioned.volatile_tail == {"mode": "review"}
+def test_retired_reviewer_contract_context_is_rejected() -> None:
+    try:
+        partition_context_payload(
+            {
+                "active_requirement_contracts": [{"contract_id": "CTR_1"}],
+                "typed_holes": [{"id": "HOL_1"}],
+            },
+            strict=True,
+        )
+    except ValueError as exc:
+        assert "active_requirement_contracts" in str(exc)
+        assert "typed_holes" in str(exc)
+    else:
+        raise AssertionError("Expected retired Reviewer context keys to be rejected")
 
 
 def test_usage_cached_tokens_flow_into_partition_metadata() -> None:
@@ -436,7 +437,7 @@ def test_advisory_rag_or_memory_evidence_cannot_satisfy_requirements(tmp_path) -
 def test_evidence_review_extracted_fields_flatten_common_groups() -> None:
     result = EvidenceReviewResult.model_validate(
         {
-            "mode": "extract",
+            "mode": "review",
             "extracted_fields": {
                 "case_identity": {
                     "invoice_number": {

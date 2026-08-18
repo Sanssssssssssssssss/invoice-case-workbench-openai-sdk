@@ -137,19 +137,60 @@ def test_invoice_taubench_scripted_smoke_scenarios_pass(tmp_path, scenario_id: s
     assert result.passed, [check.name for check in result.checks if not check.passed]
 
 
-def test_invoice_taubench_duplicate_conflict_verifier_fields(tmp_path) -> None:
-    runner = InvoiceTauBenchRunner(report_dir=tmp_path / "reports", mode="scripted")
-    result = runner.run_path(SCENARIOS_ROOT / "duplicate_conflict_001")
-    assert result.passed, [check.name for check in result.checks if not check.passed]
+def test_invoice_taubench_duplicate_conflict_business_verifier() -> None:
+    result = ScenarioRunResult(
+        scenario_id="duplicate_conflict",
+        final_reply="Active duplicate payment conflict found.",
+        case_state={
+            "requirements": [
+                {"id": "invoice", "status": "accepted"},
+                {"id": "duplicate_payment_screen", "status": "accepted"},
+                {"id": "no_active_duplicate", "status": "conflict"},
+            ],
+            "evidence_items": [{"type": "duplicate_payment_check"}],
+            "risk_flags": ["duplicate_payment_hit"],
+            "compiled_proof": {
+                "decisions": [
+                    {
+                        "requirement_id": "no_active_duplicate",
+                        "root_node_id": "root.duplicate",
+                        "status": "CONTRADICTED",
+                    }
+                ],
+                "node_results": [
+                    {
+                        "node_id": "root.duplicate",
+                        "status": "CONTRADICTED",
+                        "source_ids": ["source.invoice", "source.duplicate_search"],
+                    }
+                ],
+                "obligations": [],
+            },
+        },
+    )
+    expected = ExpectedSpec(
+        reply_any_of=["duplicate", "conflict"],
+        requirements={
+            "invoice": "accepted",
+            "duplicate_payment_screen": "accepted",
+            "no_active_duplicate": "conflict",
+        },
+        forbidden_requirements={"duplicate_payment_screen": "conflict"},
+        proof_requirement_id="no_active_duplicate",
+        decision_status="CONTRADICTED",
+        proof_has_blocking_obligations=False,
+        must_have_risk_flags=["duplicate_payment_hit"],
+        must_have_evidence_types=["duplicate_payment_check"],
+    )
 
-    checks = {check.name: check for check in result.checks}
+    checks = {check.name: check for check in verify_run(result, expected, SCENARIOS_ROOT)}
     assert checks["requirement:duplicate_payment_screen"].passed
     assert checks["requirement:no_active_duplicate"].passed
     assert checks["forbidden_requirement:duplicate_payment_screen:conflict"].passed
-    assert checks["proof_status"].passed
-    assert checks["proof_outcome"].passed
+    assert checks["decision_status"].passed
+    assert checks["proof_has_blocking_obligations"].passed
     assert checks["risk_flag_contains:duplicate_payment_hit"].passed
-    assert checks["trace_must_not_call:render_pdf"].passed
+    assert checks["evidence_type:duplicate_payment_check"].passed
 
 
 def test_invoice_taubench_create_case_scenario_passes_scripted(tmp_path) -> None:
@@ -206,32 +247,48 @@ def test_invoice_taubench_does_not_fallback_when_target_proof_is_missing() -> No
         scenario_id="missing_target_proof",
         case_state={
             "compiled_proof": {
-                "decision": {"requirement_id": "other", "proof_status": "PROVED"},
-                "decisions": [{"requirement_id": "other", "proof_status": "PROVED"}],
+                "decisions": [{"requirement_id": "other", "status": "SUPPORTED"}],
             }
         },
     )
-    expected = ExpectedSpec(proof_requirement_id="target", proof_status="PROVED")
+    expected = ExpectedSpec(proof_requirement_id="target", decision_status="SUPPORTED")
 
     checks = {check.name: check for check in verify_run(result, expected, SCENARIOS_ROOT)}
 
-    assert not checks["proof_status"].passed
+    assert not checks["decision_status"].passed
 
 
-def test_invoice_taubench_can_assert_internal_proof_checks() -> None:
+def test_invoice_taubench_asserts_root_source_coverage_without_internal_check_ids() -> None:
     result = ScenarioRunResult(
-        scenario_id="proof_checks",
-        case_state={"compiled_proof": {"checks": [{"id": "CHK_TOLERANCE", "status": "DISPROVED"}]}},
+        scenario_id="proof_sources",
+        case_state={
+            "compiled_proof": {
+                "decisions": [
+                    {
+                        "requirement_id": "target",
+                        "root_node_id": "root.target",
+                        "status": "SUPPORTED",
+                    }
+                ],
+                "node_results": [
+                    {"node_id": "root.target", "source_ids": ["source.invoice", "source.po"]}
+                ],
+            }
+        },
     )
-    expected = ExpectedSpec(proof_checks={"CHK_TOLERANCE": "DISPROVED", "CHK_SCOPE": "PROVED"})
+    expected = ExpectedSpec(
+        proof_requirement_id="target",
+        decision_status="SUPPORTED",
+        proof_min_source_count=2,
+    )
 
     checks = {check.name: check for check in verify_run(result, expected, SCENARIOS_ROOT)}
 
-    assert checks["proof_check:CHK_TOLERANCE"].passed
-    assert not checks["proof_check:CHK_SCOPE"].passed
+    assert checks["decision_status"].passed
+    assert checks["proof_min_source_count"].passed
 
 
-def test_invoice_taubench_proof_details_are_scoped_to_target_view() -> None:
+def test_invoice_taubench_proof_details_are_scoped_to_target_requirement() -> None:
     result = ScenarioRunResult(
         scenario_id="proof_view_scope",
         case_state={
@@ -239,28 +296,32 @@ def test_invoice_taubench_proof_details_are_scoped_to_target_view() -> None:
                 "decisions": [
                     {
                         "requirement_id": "target",
-                        "program_id": "target-view",
-                        "proof_status": "INCOMPLETE",
-                        "obligation_ids": [],
+                        "root_node_id": "root.target",
+                        "status": "NOT_FOUND",
                     }
                 ],
-                "checks": [
-                    {"id": "CHK_SCOPE", "program_id": "foreign-view", "status": "PROVED"}
+                "node_results": [
+                    {"node_id": "root.target", "source_ids": ["source.target"]},
+                    {"node_id": "root.foreign", "source_ids": ["source.one", "source.two"]},
                 ],
-                "obligations": [{"id": "OBL_FOREIGN"}],
+                "obligations": [
+                    {"id": "obligation.foreign", "requirement_id": "foreign", "blocking": True}
+                ],
             }
         },
     )
     expected = ExpectedSpec(
         proof_requirement_id="target",
-        proof_checks={"CHK_SCOPE": "PROVED"},
-        proof_obligation_ids=["OBL_FOREIGN"],
+        decision_status="NOT_FOUND",
+        proof_min_source_count=2,
+        proof_has_blocking_obligations=False,
     )
 
     checks = {check.name: check for check in verify_run(result, expected, SCENARIOS_ROOT)}
 
-    assert not checks["proof_check:CHK_SCOPE"].passed
-    assert not checks["proof_obligation:OBL_FOREIGN"].passed
+    assert checks["decision_status"].passed
+    assert not checks["proof_min_source_count"].passed
+    assert checks["proof_has_blocking_obligations"].passed
 
 
 def test_invoice_taubench_risk_flag_aliases_accept_live_variants() -> None:

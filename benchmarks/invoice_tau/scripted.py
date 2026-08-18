@@ -117,9 +117,11 @@ class ScriptedRoleRegistry:
         *,
         on_stream: Any | None = None,
         prompt_partition: dict[str, Any] | None = None,
+        hooks: Any | None = None,
     ) -> dict[str, Any]:
         _ = on_stream
         _ = prompt_partition
+        _ = hooks
         items = self.outputs.get(role) or []
         if items:
             return dict(items.pop(0))

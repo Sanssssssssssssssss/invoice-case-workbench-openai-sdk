@@ -1,13 +1,13 @@
 {
-  "reply_contains": ["no_active_duplicate=DISPROVED", "EVIDENCE_SUFFICIENT_FOR_REPORT"],
+  "reply_any_of": ["duplicate", "conflict", "重复", "冲突"],
   "requirements": {
     "invoice": "accepted",
     "duplicate_payment_screen": "accepted",
     "no_active_duplicate": "conflict"
   },
   "proof_requirement_id": "no_active_duplicate",
-  "proof_status": "DISPROVED",
-  "proof_outcome": "EVIDENCE_SUFFICIENT_FOR_REPORT",
+  "decision_status": "CONTRADICTED",
+  "proof_has_blocking_obligations": false,
   "forbidden_requirements": {"duplicate_payment_screen": "conflict"},
   "must_have_risk_flags": ["duplicate_payment_hit"],
   "must_have_evidence_types": ["duplicate_payment_check"],

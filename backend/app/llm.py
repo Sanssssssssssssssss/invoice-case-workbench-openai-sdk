@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -135,9 +136,19 @@ class LlmClient:
         self.settings = settings or get_settings()
         self.calls: list[ModelCallRecord] = []
         self.tracer = LangfuseTracer.disabled()
+        self._runtime_hooks: ContextVar[Any | None] = ContextVar(
+            f"llm_runtime_hooks_{id(self)}",
+            default=None,
+        )
 
     def set_tracer(self, tracer: LangfuseTracer) -> None:
         self.tracer = tracer
+
+    def bind_runtime_hooks(self, hooks: Any | None) -> Token[Any | None]:
+        return self._runtime_hooks.set(hooks)
+
+    def reset_runtime_hooks(self, token: Token[Any | None]) -> None:
+        self._runtime_hooks.reset(token)
 
     @property
     def available(self) -> bool:
@@ -152,10 +163,12 @@ class LlmClient:
         model_type: type[BaseModel],
         prompt_version: str,
         model: str | None = None,
+        hooks: Any | None = None,
     ) -> BaseModel:
         from agents import Agent, ModelSettings
         from app.runtime.agents_sdk import FencedJsonOutputSchema
 
+        hooks = hooks if hooks is not None else self._runtime_hooks.get()
         input_preview = json.dumps(payload, ensure_ascii=False, default=str)[:1400]
         selected_model = model or self.settings.llm_model
         timeout_seconds = self.settings.timeout_for_role(role)
@@ -242,6 +255,7 @@ class LlmClient:
                 result = run_agent_sync(
                     agent,
                     json.dumps(payload, ensure_ascii=False, default=str),
+                    hooks=hooks,
                     run_config=self._run_config(
                         workflow_name=f"invoice_agent.{role}",
                         trace_metadata={
@@ -300,6 +314,8 @@ class LlmClient:
                 )
                 return parsed
             except Exception as exc:
+                if hooks is not None and hasattr(hooks, "record_error"):
+                    hooks.record_error(exc)
                 record = ModelCallRecord(
                     role=role,
                     model=selected_model,

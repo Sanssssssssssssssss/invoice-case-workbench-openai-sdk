@@ -684,7 +684,9 @@ def test_case_patch_normalizes_grn_support_alias(tmp_path) -> None:
     )
 
     assert state.evidence_items[0].supports[0].requirement == "goods_receipt_or_service_acceptance"
-    assert state.requirements[0].status == "accepted"
+    assert state.requirements[0].status == "missing"
+    assert state.review_artifact is None
+    assert state.compiled_proof is None
 
 
 def test_step_limit_answer_does_not_leak_guard_retry_instruction(tmp_path) -> None:

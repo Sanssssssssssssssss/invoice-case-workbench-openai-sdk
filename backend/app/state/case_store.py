@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from app.config import get_settings
+from app.compiler_runtime.kernel import compile_review_artifact
+from app.compiler_runtime.models import CompiledProof, ReviewArtifact
+from app.compiler_runtime.policy import expand_active_requirements, policy_excerpt_for, policy_hash
 from app.domain.invoice_requirements import (
     AP_LITE_REQUIREMENTS,
     AP_THREE_WAY_REQUIREMENTS,
@@ -21,17 +24,14 @@ from app.domain.invoice_requirements import (
     is_known_requirement,
     requirement_kind,
     requirement_label,
+    requirement_owner,
     requirement_premises,
-    requirement_proof_template,
 )
-from app.domain.invoice_proof_compiler import compile_evidence_proof
 from app.state.attachment_manifest import link_manifest_evidence, trusted_sources_for_evidence
 from app.state.persistence import PERSISTENCE_LOCK, append_text, atomic_write_text
 from app.state.schemas import (
     CasePatch,
     CaseState,
-    CompilationDiagnostic,
-    CompiledProof,
     ConflictRecord,
     EvidenceItem,
     Requirement,
@@ -151,7 +151,29 @@ class CaseStore:
         with PERSISTENCE_LOCK:
             return self._apply_patch(case_id, patch_data)
 
-    def _apply_patch(self, case_id: str, patch_data: dict[str, Any] | CasePatch) -> CaseState:
+    def apply_review_patch(
+        self,
+        case_id: str,
+        patch_data: dict[str, Any] | CasePatch,
+        review_artifact: dict[str, Any] | ReviewArtifact,
+    ) -> CaseState:
+        """Atomically persist the evidence patch and its validated model work."""
+
+        with PERSISTENCE_LOCK:
+            artifact = (
+                review_artifact
+                if isinstance(review_artifact, ReviewArtifact)
+                else ReviewArtifact.model_validate(review_artifact)
+            )
+            return self._apply_patch(case_id, patch_data, review_artifact=artifact)
+
+    def _apply_patch(
+        self,
+        case_id: str,
+        patch_data: dict[str, Any] | CasePatch,
+        *,
+        review_artifact: ReviewArtifact | None = None,
+    ) -> CaseState:
         patch = patch_data if isinstance(patch_data, CasePatch) else CasePatch.model_validate(patch_data)
         state = self.load(case_id)
         updates = patch.case_updates.model_dump(exclude_none=True)
@@ -177,7 +199,11 @@ class CaseStore:
             self._append_evidence_updates(state, updates.get("evidence_items") or [])
         if "add_evidence" in updates:
             self._append_evidence_updates(state, updates.get("add_evidence") or [])
+        if review_artifact is not None:
+            state.review_artifact = review_artifact
         self._refresh_requirements(state)
+        if review_artifact is not None and state.compiled_proof is None:
+            raise ValueError("ReviewArtifact does not match the post-patch case snapshot")
         self.save(state)
         self.append_audit(case_id, patch)
         return state
@@ -335,26 +361,20 @@ class CaseStore:
         trusted_sources = trusted_sources_for_evidence(self, state.case_id, state.evidence_items)
         trusted_evidence_ids = set(trusted_sources)
         _apply_supersession_metadata(state, trusted_evidence_ids)
-        state.requirements = [
-            item for item in state.requirements if item.id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
-        ]
+        state.requirements = [item for item in state.requirements if item.id not in AUTO_DERIVED_COMPILER_REQUIREMENTS]
         active_evidence = _active_evidence_items(state, trusted_evidence_ids)
-        active_ids = {item.id for item in state.requirements}
-        compiler_inputs = {
-            "active_requirement_ids": active_ids,
-            "trusted_sources": {
-                item.id: trusted_sources[item.id]
-                for item in active_evidence
-                if item.id in trusted_sources
-            },
-        }
-        compiled = compile_evidence_proof(
-            active_evidence,
-            state.verification_records,
-            **compiler_inputs,
-        )
-        state.compiled_proof = compiled if compiled.decisions else None
-        _ensure_compiled_requirements(state, compiled)
+        active_ids = expand_active_requirements([item.id for item in state.requirements])
+        artifact = state.review_artifact
+        compiled: CompiledProof | None = None
+        if artifact is not None and _artifact_matches_case(
+            artifact,
+            active_requirement_ids=active_ids,
+            active_source_fingerprints=_compiler_source_fingerprints(active_evidence),
+        ):
+            compiled = compile_review_artifact(artifact)
+        state.compiled_proof = compiled
+        if compiled is not None:
+            _ensure_compiled_requirements(state, compiled)
         reportable = _project_compiled_requirements(state, compiled)
         _refresh_workflow_status(state, reportable)
 
@@ -372,44 +392,53 @@ def _ensure_compiled_requirements(state: CaseState, compiled: CompiledProof) -> 
         )
 
 
-def _project_compiled_requirements(state: CaseState, compiled: CompiledProof) -> set[str]:
-    decisions: dict[str, list[Any]] = {}
-    for decision in compiled.decisions:
-        decisions.setdefault(decision.requirement_id, []).append(decision)
-    checks = {(item.program_id, item.id): item for item in compiled.checks}
-    templates = {item.requirement_id: item.proof_template for item in compiled.contracts}
+def _project_compiled_requirements(
+    state: CaseState,
+    compiled: CompiledProof | None,
+) -> set[str]:
+    decisions = {item.requirement_id: item for item in compiled.decisions} if compiled else {}
+    results = {item.node_id: item for item in compiled.node_results} if compiled else {}
     reportable: set[str] = set()
     for requirement in state.requirements:
-        candidates = decisions.get(requirement.id, [])
-        decision = candidates[0] if len(candidates) == 1 else None
-        root = checks.get((decision.program_id, decision.root_check_id)) if decision else None
+        decision = decisions.get(requirement.id)
+        root = results.get(decision.root_node_id) if decision else None
         if root is None:
             requirement.status = "missing"
             requirement.evidence_ids = []
-            compiled.diagnostics.append(
-                CompilationDiagnostic(
-                    stage="verification",
-                    code="ROOT_PROOF_MISSING",
-                    candidate_id=requirement.id,
-                    details={"decision_count": len(candidates)},
-                )
-            )
             continue
-        requirement.evidence_ids = _unique_strings(root.input_evidence_ids)
-        template = templates.get(requirement.id, requirement_proof_template(requirement.id))
+        requirement.evidence_ids = _unique_strings(root.source_ids)
+        evidence_leaf = requirement_owner(requirement.id) == "evidence"
         requirement.status = {
-            "PROVED": "accepted" if template == "evidence_support" else "satisfied",
-            "DISPROVED": "conflict",
-            "INCOMPLETE": "weak" if requirement.evidence_ids else "missing",
-            "NOT_APPLICABLE": "weak",
-        }[root.status]
-        if (
-            template != "evidence_support"
-            and decision.proof_status == "DISPROVED"
-            and decision.outcome == "EVIDENCE_SUFFICIENT_FOR_REPORT"
-        ):
+            "SUPPORTED": "accepted" if evidence_leaf else "satisfied",
+            "CONTRADICTED": "conflict",
+            "NOT_FOUND": "weak" if requirement.evidence_ids else "missing",
+        }[decision.status]
+        if not evidence_leaf and decision.status == "CONTRADICTED":
             reportable.add(requirement.id)
     return reportable
+
+
+def _artifact_matches_case(
+    artifact: ReviewArtifact,
+    *,
+    active_requirement_ids: list[str],
+    active_source_fingerprints: dict[str, str],
+) -> bool:
+    if artifact.plan_hash != artifact.plan.content_hash():
+        return False
+    if artifact.evidence_snapshot_hash != artifact.evidence_ir.content_hash():
+        return False
+    if set(artifact.plan.active_requirement_ids) != set(active_requirement_ids):
+        return False
+    active_evidence_ids = set(active_source_fingerprints)
+    if set(artifact.evidence_ir.source_ids) != active_evidence_ids:
+        return False
+    if set(artifact.evidence_ir.source_fingerprints) != active_evidence_ids:
+        return False
+    if artifact.evidence_ir.source_fingerprints != active_source_fingerprints:
+        return False
+    expected_policy = policy_excerpt_for(active_requirement_ids)
+    return artifact.policy_hash == policy_hash(expected_policy)
 
 
 def _refresh_workflow_status(state: CaseState, reportable_conflicts: set[str]) -> None:
@@ -497,7 +526,27 @@ def _material_buckets(state: CaseState) -> dict[str, list[str]]:
 
 def _active_evidence_items(state: CaseState, trusted_evidence_ids: set[str]) -> list[EvidenceItem]:
     superseded = _superseded_evidence_ids(state.evidence_items, trusted_evidence_ids)
-    return [item for item in state.evidence_items if item.id not in superseded]
+    return [
+        item
+        for item in state.evidence_items
+        if item.id in trusted_evidence_ids and item.id not in superseded
+    ]
+
+
+def _compiler_source_fingerprints(items: list[EvidenceItem]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in items:
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        declared = str(metadata.get("compiler_source_sha256") or "").strip()
+        content = str(item.content or "") or "\n".join(str(value) for value in item.quoted_text)
+        actual = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if not declared:
+            result[item.id] = actual
+        elif declared == actual:
+            result[item.id] = declared
+        else:
+            result[item.id] = hashlib.sha256(f"{declared}:{actual}".encode("utf-8")).hexdigest()
+    return result
 
 
 def _is_advisory_memory_evidence(item: EvidenceItem) -> bool:
@@ -1177,6 +1226,18 @@ def _migrate_case_state_data(data: Any) -> Any:
     evidence_items = migrated.get("evidence_items")
     if isinstance(evidence_items, list):
         migrated["evidence_items"] = [_migrate_evidence_data(item) for item in evidence_items]
+    compiled = migrated.get("compiled_proof")
+    if isinstance(compiled, dict):
+        if isinstance(compiled.get("node_results"), list) and isinstance(compiled.get("decisions"), list):
+            migrated["compiled_proof"] = {
+                key: compiled.get(key) if isinstance(compiled.get(key), list) else []
+                for key in ("node_results", "decisions", "obligations", "diagnostics")
+            }
+        else:
+            migrated["compiled_proof"] = None
+    artifact = migrated.get("review_artifact")
+    if isinstance(artifact, dict) and "plan" not in artifact:
+        migrated["review_artifact"] = None
     return migrated
 
 

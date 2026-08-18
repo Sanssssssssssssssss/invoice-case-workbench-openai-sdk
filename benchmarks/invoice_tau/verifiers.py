@@ -203,33 +203,53 @@ def _state_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[Che
         if expected.proof_requirement_id
         else proof.get("decision") or {}
     )
-    for name, expected_value in (
-        ("proof_status", expected.proof_status),
-        ("proof_outcome", expected.proof_outcome),
-        ("proof_policy_version", expected.proof_policy_version),
-    ):
-        if not expected_value:
-            continue
-        key = {"proof_status": "proof_status", "proof_outcome": "outcome", "proof_policy_version": "policy_version"}[name]
-        observed = str(decision.get(key) or "")
-        checks.append(CheckResult(name=name, passed=observed == expected_value, score=1.0 if observed == expected_value else 0.0, details={"expected": expected_value, "observed": observed}))
-    target_program_id = str(decision.get("program_id") or "")
-    proof_checks = {
-        str(item.get("id") or ""): str(item.get("status") or "")
-        for item in proof.get("checks") or []
-        if isinstance(item, dict)
-        and (not target_program_id or str(item.get("program_id") or "") == target_program_id)
-    }
-    for check_id, expected_status in expected.proof_checks.items():
-        observed = proof_checks.get(check_id, "")
-        checks.append(CheckResult(name=f"proof_check:{check_id}", passed=observed == expected_status, score=1.0 if observed == expected_status else 0.0, details={"expected": expected_status, "observed": observed}))
-    observed_obligations = {
-        str(item)
-        for item in decision.get("obligation_ids") or []
-        if str(item)
-    }
-    for obligation_id in expected.proof_obligation_ids:
-        checks.append(CheckResult(name=f"proof_obligation:{obligation_id}", passed=obligation_id in observed_obligations, score=1.0 if obligation_id in observed_obligations else 0.0, details={"observed": sorted(observed_obligations)}))
+    if expected.decision_status:
+        observed = str(decision.get("status") or "")
+        checks.append(
+            CheckResult(
+                name="decision_status",
+                passed=observed == expected.decision_status,
+                score=1.0 if observed == expected.decision_status else 0.0,
+                details={"expected": expected.decision_status, "observed": observed},
+            )
+        )
+    if expected.proof_min_source_count is not None:
+        root_id = str(decision.get("root_node_id") or "")
+        root = next(
+            (
+                item
+                for item in proof.get("node_results") or []
+                if isinstance(item, dict) and str(item.get("node_id") or "") == root_id
+            ),
+            {},
+        )
+        observed = len({str(item) for item in root.get("source_ids") or [] if str(item)})
+        checks.append(
+            CheckResult(
+                name="proof_min_source_count",
+                passed=observed >= expected.proof_min_source_count,
+                score=1.0 if observed >= expected.proof_min_source_count else 0.0,
+                details={"expected_min": expected.proof_min_source_count, "observed": observed},
+            )
+        )
+    if expected.proof_has_blocking_obligations is not None:
+        has_blocking = any(
+            isinstance(item, dict)
+            and item.get("requirement_id") == expected.proof_requirement_id
+            and bool(item.get("blocking", True))
+            for item in proof.get("obligations") or []
+        )
+        checks.append(
+            CheckResult(
+                name="proof_has_blocking_obligations",
+                passed=has_blocking is expected.proof_has_blocking_obligations,
+                score=1.0 if has_blocking is expected.proof_has_blocking_obligations else 0.0,
+                details={
+                    "expected": expected.proof_has_blocking_obligations,
+                    "observed": has_blocking,
+                },
+            )
+        )
     for flag in expected.must_not_have_risk_flags:
         checks.append(
             CheckResult(

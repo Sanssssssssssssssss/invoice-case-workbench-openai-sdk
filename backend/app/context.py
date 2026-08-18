@@ -11,13 +11,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.capabilities import role_input_keys
-from app.domain.invoice_contracts import build_requirement_contracts
 from app.domain.invoice_requirements import (
     AUTO_DERIVED_COMPILER_REQUIREMENTS,
-    PROOF_CONTRACT_VERSION,
-    REQUIREMENT_PACK,
+    REQUIREMENT_CATALOG_VERSION,
     REQUIREMENT_PROFILES,
-    is_known_requirement,
 )
 from app.state.attachment_manifest import attachment_manifest_for_context, update_manifest_summaries
 from app.state.artifact_store import ArtifactStore
@@ -35,7 +32,7 @@ from app.prompt_loader import load_prompt, load_system_prompt
 from app.state.session_repository import SessionRepository
 from app.state.case_store import CaseStore
 from app.tools.file_workspace import report_paths_for_run
-from app.tools.rag_guidance import advisor_guidance, review_guidance
+from app.tools.rag_guidance import advisor_guidance
 
 
 SUMMARY_THRESHOLD = 2000
@@ -151,7 +148,7 @@ class ContextManager:
         return {
             "case_brief": _case_brief(case_state),
             "requirement_catalog": {
-                "version": PROOF_CONTRACT_VERSION,
+                "version": REQUIREMENT_CATALOG_VERSION,
                 "profiles": {
                     profile_id: [
                         str(item["id"])
@@ -221,33 +218,6 @@ class ContextManager:
                     hydrated.get("attachment_manifest") if isinstance(hydrated.get("attachment_manifest"), dict) else {},
                 )
                 hydrated["rag_context"] = guidance.evidences
-                self._queue_rag_debug(state, role, guidance.debug)
-        elif role == "evidence_reviewer":
-            attachment_items = self.last_attachment_items(state)
-            hydrated.setdefault("user_message", self.user_message_for_role(state, user_message))
-            hydrated.setdefault("mode", route_policy.infer_reviewer_mode(hydrated, state))
-            contracts, holes = _reviewer_proof_context(case_state, hydrated.get("active_requirement_ids") or [])
-            hydrated["case_state"] = _reviewer_case_state(case_state, holes)
-            hydrated["active_requirement_contracts"] = contracts
-            hydrated["typed_holes"] = holes
-            hydrated["attachment_manifest"] = _reviewer_attachment_manifest(hydrated.get("attachment_manifest"))
-            if hydrated.get("mode") in {"review", "repair"}:
-                previous = self.last_evidence_reviewer_result(state, mode="extract")
-                if previous:
-                    hydrated.setdefault("extraction_result", previous.get("extraction_result") or previous)
-                hydrated.setdefault("attachment_context", _reviewer_compact_attachment_context(attachment_items))
-                hydrated.setdefault("extraction_context", [])
-            else:
-                hydrated.setdefault("extraction_context", _attachment_extraction_context(attachment_items))
-                hydrated.setdefault("attachment_context", attachment_items)
-            if not hydrated.get("rag_context"):
-                guidance = review_guidance(
-                    str(hydrated.get("user_message") or user_message),
-                    hydrated.get("attachment_context") if isinstance(hydrated.get("attachment_context"), list) else [],
-                    hydrated.get("attachment_manifest") if isinstance(hydrated.get("attachment_manifest"), dict) else {},
-                    hydrated.get("extraction_result") if isinstance(hydrated.get("extraction_result"), dict) else {},
-                )
-                hydrated["rag_context"] = _reviewer_rag_context(guidance.evidences)
                 self._queue_rag_debug(state, role, guidance.debug)
         elif role == "case_patch_writer":
             hydrated.setdefault("role_result", self.last_evidence_reviewer_result(state, mode=("review", "repair")) or self.last_role_result(state))
@@ -1070,19 +1040,16 @@ def _case_brief(case_state: Any) -> str:
     proof = getattr(case_state, "compiled_proof", None)
     proof_brief = ""
     if proof:
-        obligations = sorted(proof.obligations, key=lambda item: (-item.priority_shadow, item.id))
+        obligations = sorted(proof.obligations, key=lambda item: item.id)
         obligation_rows: list[str] = []
         for item in (row for row in obligations if row.blocking):
-            actions = "|".join(
-                f"{action.kind}(resolvability={action.resolvability},cost={action.cost})"
-                for action in item.candidate_actions
-            ) or "ask_user(resolvability=unknown,cost=unknown)"
+            actions = "|".join(str(action) for action in item.candidate_actions) or "read_source"
             obligation_rows.append(
-                f"{item.id}[premise={item.missing_premise};candidate_actions={actions};priority={item.priority_shadow:g}]"
+                f"{item.id}[missing_fact={item.missing_fact};candidate_actions={actions}]"
             )
         obligation_brief = ", ".join(obligation_rows[:5])
         decision_brief = ", ".join(
-            f"{item.requirement_id}={item.proof_status}/{item.outcome}"
+            f"{item.requirement_id}={item.status}"
             for item in proof.decisions
         )
         proof_brief = (
@@ -1399,10 +1366,6 @@ def _report_context_text(value: Any, max_chars: int = 220) -> str:
     return text[:max_chars] + ("..." if len(text) > max_chars else "")
 
 
-def _evidence_context_text(value: Any, max_chars: int = 220) -> str:
-    return _report_context_text(value, max_chars=max_chars)
-
-
 def _redact_planner_raw_details(text: str) -> str:
     # Planner only needs routing state and references; detailed line items stay in artifacts/role context.
     text = re.sub(
@@ -1430,174 +1393,22 @@ def _sanitize_case_state(case_state: Any) -> dict[str, Any]:
 
 def _report_case_state(case_state: Any) -> dict[str, Any]:
     data = _sanitize_case_state(case_state)
-    proof = getattr(case_state, "compiled_proof", None)
-    bindings = {
-        item.evidence_id: item
-        for item in list(getattr(getattr(proof, "evidence_ir", None), "source_bindings", []) or [])
-        if item.trusted and item.accepted
-    }
+    artifact = getattr(case_state, "review_artifact", None)
+    evidence_ir = getattr(artifact, "evidence_ir", None)
+    source_ids = set(getattr(evidence_ir, "source_ids", []) or [])
+    source_fingerprints = dict(getattr(evidence_ir, "source_fingerprints", {}) or {})
     data["evidence_items"] = [
         {
-            "id": evidence_id,
-            "type": binding.evidence_type,
-            "source": binding.source,
-            "credibility": binding.credibility,
-            "source_ref": binding.source_ref,
-            "source_fingerprint": binding.source_fingerprint,
+            "id": str(getattr(item, "id", "") or ""),
+            "type": str(getattr(item, "type", "") or ""),
+            "source": str(getattr(item, "source", "") or ""),
+            "credibility": str(getattr(item, "credibility", "") or ""),
+            "source_fingerprint": source_fingerprints.get(str(getattr(item, "id", "") or ""), ""),
         }
-        for evidence_id, binding in sorted(bindings.items())
+        for item in list(getattr(case_state, "evidence_items", []) or [])
+        if str(getattr(item, "id", "") or "") in source_ids
     ]
     return data
-
-
-def _reviewer_case_state(case_state: Any, holes: list[dict[str, Any]]) -> dict[str, Any]:
-    data = _sanitize_case_state(case_state)
-    proof = getattr(case_state, "compiled_proof", None)
-    if proof is None:
-        data["compiled_proof"] = None
-        return data
-    unresolved_contract_ids = {
-        str(contract_id)
-        for hole in holes
-        for contract_id in hole.get("contract_ids") or []
-        if str(contract_id).strip()
-    }
-    unresolved_requirement_ids = {
-        str(requirement_id)
-        for hole in holes
-        for requirement_id in hole.get("requirement_ids") or []
-        if str(requirement_id).strip()
-    }
-    semantic_keys = {
-        (item.subject, item.predicate)
-        for contract in proof.contracts
-        if contract.contract_id in unresolved_contract_ids
-        or contract.requirement_id in unresolved_requirement_ids
-        for item in contract.inputs
-        if item.hole_kind in {"claim", "relation"}
-    }
-    semantic_keys.update(
-        (str(item.get("subject") or ""), str(item.get("predicate") or ""))
-        for item in holes
-        if item.get("kind") in {"claim", "relation"}
-    )
-    claims = [
-        claim
-        for claim in proof.evidence_ir.claims
-        if (claim.subject, claim.predicate) in semantic_keys
-    ]
-    evidence_ids = {claim.evidence_id for claim in claims}
-    data["compiled_proof"] = {
-        "evidence_ir": {
-            "schema_version": proof.evidence_ir.schema_version,
-            "source_snapshot_hash": proof.evidence_ir.source_snapshot_hash,
-            "catalog_version": proof.evidence_ir.catalog_version,
-            "catalog_hash": proof.evidence_ir.catalog_hash,
-            "source_bindings": [
-                item.model_dump(mode="json")
-                for item in proof.evidence_ir.source_bindings
-                if item.evidence_id in evidence_ids
-            ],
-            "claims": [item.model_dump(mode="json") for item in claims],
-        }
-    }
-    return data
-
-
-def _reviewer_proof_context(
-    case_state: Any,
-    requested_requirement_ids: list[str] | tuple[str, ...] = (),
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    proof = getattr(case_state, "compiled_proof", None)
-    rows = requested_requirement_ids if isinstance(requested_requirement_ids, (list, tuple)) else ()
-    requested = list(dict.fromkeys(str(item or "").strip() for item in rows if str(item or "").strip()))
-    unknown = [item for item in requested if not is_known_requirement(item)]
-    if unknown:
-        raise ValueError(f"Unknown active requirement ids: {unknown}")
-    if proof is not None and getattr(proof, "contracts", None) and not requested:
-        contracts = proof.contracts
-        holes = proof.holes
-    else:
-        active = list(getattr(case_state, "requirements", []) or [])
-        existing = {item.id for item in active}
-        active.extend(item for item in requested if item not in existing)
-        contracts, holes = build_requirement_contracts(
-            active,
-            evidence_ir=getattr(proof, "evidence_ir", None),
-            proposals=getattr(proof, "proposals", ()) or (),
-        )
-    return (
-        [_contract_for_reviewer(item) for item in contracts],
-        [item.model_dump(mode="json") for item in holes],
-    )
-
-
-def _contract_for_reviewer(contract: Any) -> dict[str, Any]:
-    data = {
-        key: value
-        for key, value in contract.model_dump(mode="json").items()
-        if key in {
-            "contract_id",
-            "version",
-            "contract_hash",
-            "requirement_id",
-            "proof_template",
-            "target_predicate",
-            "evidence_roles",
-            "policy_inputs",
-            "capability",
-            "activation",
-            "candidate_actions",
-        }
-    }
-    data["input_slots"] = [
-        {
-            key: value
-            for key, value in {
-                "hole_kind": item.hole_kind,
-                "subject": item.subject,
-                "predicate": item.predicate,
-                "role": item.role,
-                "value_type": item.value_type,
-                "required": item.required,
-                "allowed_values": list(item.allowed_values),
-                "required_attributes": list(item.required_attributes),
-                "binding_mode": item.binding_mode,
-                "binding_group": item.binding_group,
-                "group_required": True if item.group_required else None,
-            }.items()
-            if value not in ("", [], None)
-        }
-        for item in contract.inputs
-        if item.hole_kind in {"claim", "relation"}
-    ]
-    if contract.proof_template == "reconciliation":
-        data["proposal_boundary"] = (
-            "Judge semantic comparability only; numeric variance and tolerance are Proof Kernel work."
-        )
-    unconfigured = set(REQUIREMENT_PACK.get("unconfigured_policy_values") or [])
-    excerpt = {}
-    for key in contract.policy_inputs:
-        value = REQUIREMENT_PACK.get(key)
-        if key not in unconfigured and value is not None and (not isinstance(value, str) or value.strip()):
-            excerpt[key] = value
-    if excerpt:
-        data["policy_excerpt"] = excerpt
-    return data
-
-
-def _reviewer_rag_context(items: Any) -> list[dict[str, Any]]:
-    rows = items if isinstance(items, list) else []
-    return [
-        {
-            "source_id": item.get("source_id", ""),
-            "locator": item.get("locator", ""),
-            "snippet": _brief_text(item.get("snippet") or "", 600),
-            "score": item.get("score", 0),
-        }
-        for item in rows[:2]
-        if isinstance(item, dict)
-    ]
 
 
 def _sanitize_evidence(item: Any) -> dict[str, Any]:
@@ -1607,195 +1418,29 @@ def _sanitize_evidence(item: Any) -> dict[str, Any]:
     for key in ("claim_to_source_refs", "semantic_judgments", "requirement_verdicts", "proof_proposals"):
         metadata.pop(key, None)
     data["metadata"] = metadata
-    data["semantic_claims"] = []
-    data["semantic_proposals"] = []
     content = str(data.get("content") or "")
     data["content"] = content[:500] + ("..." if len(content) > 500 else "")
     return data
 
 
-def _attachment_extraction_context(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    context: list[dict[str, Any]] = []
-    for item in items[:12]:
-        if not isinstance(item, dict):
-            continue
-        record = {
-            "attachment_id": item.get("attachment_id", ""),
-            "name": item.get("name", ""),
-            "content_kind": item.get("content_kind", ""),
-            "extraction_ref": item.get("extraction_ref", ""),
-            "extraction_methods": list(item.get("extraction_methods") or [])[:8],
-            "body_markdown": _evidence_context_text(item.get("body_markdown", ""), max_chars=2400),
-            "field_inventory": _brief_records(item.get("field_inventory"), 24),
-            "block_crops": _brief_records(item.get("block_crops"), 48),
-            "page_summaries": _brief_records(item.get("page_summaries"), 8),
-            "quality_notes": _brief_list(item.get("quality_notes"), 10, 220),
-            "visual_regions": _brief_records(item.get("visual_regions"), 10),
-            "visual_check": _compact_visual_check(item.get("visual_check")),
-            "preview_paths": list(item.get("preview_paths") or [])[:5],
-            "original_ref": item.get("original_ref", ""),
-            "warnings": _brief_list(item.get("warnings"), 8, 220),
-            "table_count": item.get("table_count", 0),
-        }
-        context.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
-    return context
-
-
-def _reviewer_compact_attachment_context(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    context: list[dict[str, Any]] = []
-    for item in items[:12]:
-        if not isinstance(item, dict):
-            continue
-        record = {
-            "attachment_id": item.get("attachment_id", ""),
-            "name": item.get("name", ""),
-            "status": item.get("status", ""),
-            "content_kind": item.get("content_kind", ""),
-            "extraction_method": item.get("extraction_method", ""),
-            "original_ref": item.get("original_ref", ""),
-            "extraction_ref": item.get("extraction_ref", ""),
-            "preview_paths": list(item.get("preview_paths") or [])[:5],
-            "body_markdown": _evidence_context_text(item.get("body_markdown", ""), max_chars=900),
-            "field_inventory": _compact_field_refs(item.get("field_inventory"), 12),
-            "block_crops": _compact_crop_refs(item.get("block_crops"), 10),
-            "page_summaries": _compact_page_refs(item.get("page_summaries"), 3),
-            "quality_notes": _brief_list(item.get("quality_notes"), 6, 180),
-            "warnings": _brief_list(item.get("warnings"), 6, 180),
-            "visual_check": _reviewer_visual_check_refs(item.get("visual_check")),
-        }
-        context.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
-    return context
-
-
-def _reviewer_attachment_manifest(manifest: Any) -> dict[str, Any]:
-    if not isinstance(manifest, dict):
-        return {}
-    attachments: list[dict[str, Any]] = []
-    for item in (manifest.get("attachments") or [])[:12]:
-        if not isinstance(item, dict):
-            continue
-        record = {
-            "attachment_id": item.get("attachment_id", ""),
-            "name": item.get("name", ""),
-            "status": item.get("status", ""),
-            "content_kind": item.get("content_kind", ""),
-            "summary": _brief_text(item.get("summary") or "", 180),
-            "key_facts": _brief_list(item.get("key_facts"), 4, 120),
-            "risks": _brief_list(item.get("risks"), 3, 140),
-            "reason": _brief_text(item.get("reason") or "", 120),
-            "original_ref": item.get("original_ref", ""),
-            "extraction_ref": item.get("extraction_ref", ""),
-            "preview_paths": list(item.get("preview_paths") or [])[:2],
-            "quality_notes": _brief_list(item.get("quality_notes"), 3, 120),
-            "extraction_methods": list(item.get("extraction_methods") or [])[:4],
-            "table_count": item.get("table_count", 0),
-            "evidence_ids": list(item.get("evidence_ids") or [])[:4],
-            "chars": item.get("chars", 0),
-        }
-        attachments.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
-    return {
-        "manifest_ref": manifest.get("manifest_ref", ""),
-        "version": manifest.get("version", ""),
-        "updated_at": manifest.get("updated_at", ""),
-        "status_counts": manifest.get("status_counts") or {},
-        "attachments": attachments,
-    }
-
-
-def _compact_field_refs(value: Any, limit: int) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    items = value if isinstance(value, list) else []
-    for item in items[:limit]:
-        if not isinstance(item, dict):
-            continue
-        record = {
-            "field": item.get("field", ""),
-            "value": _brief_text(item.get("value") or "", 120),
-            "status": item.get("status", ""),
-            "source_quote": _brief_text(item.get("source_quote") or "", 160),
-            "locator": item.get("locator", ""),
-            "preview_path": item.get("preview_path") or item.get("preview_ref") or "",
-            "confidence": item.get("confidence", ""),
-        }
-        records.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
-    return records
-
-
-def _compact_page_refs(value: Any, limit: int) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    items = value if isinstance(value, list) else []
-    for item in items[:limit]:
-        if not isinstance(item, dict):
-            continue
-        record = {
-            "page": item.get("page"),
-            "text_preview": _evidence_context_text(item.get("text_preview", ""), max_chars=180),
-            "block_count": item.get("block_count", 0),
-            "table_count": item.get("table_count", 0),
-            "preview_path": item.get("preview_path", ""),
-            "quality_notes": _brief_list(item.get("quality_notes"), 3, 120),
-        }
-        records.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
-    return records
-
-
-def _compact_crop_refs(value: Any, limit: int) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    items = value if isinstance(value, list) else []
-    for item in items[:limit]:
-        if not isinstance(item, dict):
-            continue
-        record = {
-            "field": item.get("field", ""),
-            "page": item.get("page"),
-            "status": item.get("status") or item.get("crop_status") or "",
-            "crop_path": item.get("crop_path", ""),
-            "preview_path": item.get("preview_path") or item.get("preview_ref") or "",
-            "locator": item.get("locator", ""),
-        }
-        records.append({key: value for key, value in record.items() if value not in ("", [], {}, None)})
-    return records
-
-
-def _reviewer_visual_check_refs(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    same_source = value.get("same_source_check") if isinstance(value.get("same_source_check"), dict) else {}
-    ocr_quality = value.get("ocr_quality") if isinstance(value.get("ocr_quality"), dict) else {}
-    page_integrity = value.get("page_integrity") if isinstance(value.get("page_integrity"), dict) else {}
-    record = {
-        "looks_like_invoice": value.get("looks_like_invoice", ""),
-        "visible_sections": value.get("visible_sections") or {},
-        "same_source_status": same_source.get("status", ""),
-        "ocr_quality_status": ocr_quality.get("status", ""),
-        "page_integrity_status": page_integrity.get("status", ""),
-        "page_integrity_warnings": _brief_list(page_integrity.get("warnings"), 3, 120),
-        "limitations": _brief_list(value.get("limitations"), 4, 120),
-    }
-    return {key: item for key, item in record.items() if item not in ("", [], {}, None)}
-
-
 def _evidence_chain_context(store: CaseStore, case_id: str, case_state: Any, attachment_manifest: dict[str, Any]) -> dict[str, Any]:
+    artifact = getattr(case_state, "review_artifact", None)
     proof = getattr(case_state, "compiled_proof", None)
-    source_bindings = {
-        item.evidence_id: item
-        for item in list(getattr(getattr(proof, "evidence_ir", None), "source_bindings", []) or [])
-        if item.trusted and item.accepted
-    }
-    active_evidence_ids = set(source_bindings)
+    evidence_ir = getattr(artifact, "evidence_ir", None)
+    active_evidence_ids = set(getattr(evidence_ir, "source_ids", []) or [])
+    source_fingerprints = dict(getattr(evidence_ir, "source_fingerprints", {}) or {})
     admitted_by_evidence: dict[str, list[dict[str, Any]]] = {}
-    for claim in list(getattr(getattr(proof, "evidence_ir", None), "claims", []) or []):
-        admitted_by_evidence.setdefault(claim.evidence_id, []).append({
+    for claim in list(getattr(evidence_ir, "claims", []) or []):
+        admitted_by_evidence.setdefault(claim.source_id, []).append({
             "claim_id": claim.id,
             "subject": claim.subject,
             "predicate": claim.predicate,
-            "typed_value": claim.typed_value,
-            "unit": claim.unit,
-            "currency": claim.currency,
-            "basis": claim.basis,
-            "source_quote": claim.source_quote,
-            "source_locator": claim.source_locator,
+            "value": claim.value,
+            "source_id": claim.source_id,
+            "quote": claim.quote,
+            "locator": claim.locator,
             "confidence": claim.confidence,
+            "attributes": dict(claim.attributes),
         })
     evidence_rows: list[dict[str, Any]] = []
     for evidence in (
@@ -1826,8 +1471,9 @@ def _evidence_chain_context(store: CaseStore, case_id: str, case_state: Any, att
             {
                 "evidence_id": data.get("id", ""),
                 "source": data.get("source", ""),
-                "evidence_type": data.get("evidence_type", ""),
+                "evidence_type": data.get("type") or data.get("evidence_type", ""),
                 "credibility": data.get("credibility", ""),
+                "source_fingerprint": source_fingerprints.get(str(data.get("id") or ""), ""),
                 "dossier_ref": metadata.get("dossier_ref") or metadata.get("extraction_ref") or "",
                 "field_inventory": _brief_records(field_inventory or context_metadata.get("extracted_fields"), 24),
                 "proof_cards": _proof_cards_from_metadata(context_metadata, limit=18),
@@ -1883,9 +1529,19 @@ def _evidence_chain_context(store: CaseStore, case_id: str, case_state: Any, att
             }
         )
     return {
-        "purpose": "descriptive source context; DecisionProof and root Checks are the only conclusion authority",
+        "purpose": "descriptive source context; DecisionProof and root NodeResult are the only conclusion authority",
         "decisions": [item.model_dump(mode="json") for item in list(getattr(proof, "decisions", []) or [])],
-        "checks": [item.model_dump(mode="json") for item in list(getattr(proof, "checks", []) or [])],
+        "node_results": [item.model_dump(mode="json") for item in list(getattr(proof, "node_results", []) or [])],
+        "obligations": [item.model_dump(mode="json") for item in list(getattr(proof, "obligations", []) or [])],
+        "evidence_ir": {
+            "schema_version": str(getattr(evidence_ir, "schema_version", "") or ""),
+            "source_ids": sorted(active_evidence_ids),
+            "source_fingerprints": source_fingerprints,
+            "claims": [
+                item.model_dump(mode="json")
+                for item in list(getattr(evidence_ir, "claims", []) or [])
+            ],
+        },
         "evidence_items": evidence_rows,
         "attachments": manifest_rows,
     }

@@ -4,25 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.domain.risk_rules import resolved_conflict_note
-from app.state.schemas import CasePatch, EvidenceReviewerOutput, EvidenceReviewResult
-
-
-def test_sparse_reviewer_rejects_bare_semantic_handles() -> None:
-    with pytest.raises(ValidationError):
-        EvidenceReviewerOutput.model_validate(
-            {
-                "sources": [
-                    {
-                        "local_source_handle": "s1",
-                        "attachment_id": "att-1",
-                        "type": "invoice",
-                        "classification": "business_evidence",
-                        "semantic_claims": ["c1"],
-                        "semantic_proposals": ["p1"],
-                    }
-                ]
-            }
-        )
+from app.state.schemas import CasePatch, EvidenceReviewResult
 
 
 def test_evidence_review_rejects_unknown_enum_values() -> None:

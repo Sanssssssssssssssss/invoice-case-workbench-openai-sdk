@@ -31,20 +31,20 @@ def test_deepseek_v4_uses_the_official_responses_contract() -> None:
     assert _model_extra_body("deepseek-v4-flash", "enabled") == {"reasoning": {"effort": "high"}}
 
 
-def test_thinking_scope_is_limited_to_planner_and_evidence_review_mode() -> None:
+def test_role_thinking_scope_is_limited_to_planner() -> None:
     configured = "enabled"
 
     assert role_thinking_type("planner", {}, configured) == "enabled"
-    assert role_thinking_type("evidence_reviewer", {"mode": "review"}, configured) == "enabled"
-    assert role_thinking_type("evidence_reviewer", {"mode": "extract"}, configured) == "disabled"
-    assert role_thinking_type("evidence_reviewer", {"mode": "repair"}, configured) == "disabled"
+    assert role_thinking_type("task_compiler", {}, configured) == "disabled"
+    assert role_thinking_type("executor", {}, configured) == "disabled"
+    assert role_thinking_type("fine_verifier", {}, configured) == "disabled"
     assert role_thinking_type("materials_advisor", {}, configured) == "disabled"
     assert role_thinking_type("case_patch_writer", {}, configured) == "disabled"
     assert role_thinking_type("report_writer", {}, configured) == "disabled"
     assert role_thinking_type("summarizer", {}, configured) == "disabled"
 
 
-def test_manager_tool_loop_disables_kimi_thinking_but_specialists_keep_review_scope() -> None:
+def test_manager_tool_loop_and_specialists_disable_kimi_thinking() -> None:
     settings = Settings(llm_model="kimi-k2.5", llm_temperature=0.1, llm_thinking_type="enabled")
     manager = CaseManagerAgentFactory(settings).build([])
     registry = RoleRegistry(LlmClient(settings))
@@ -52,11 +52,4 @@ def test_manager_tool_loop_disables_kimi_thinking_but_specialists_keep_review_sc
     assert manager_tool_loop_thinking_type("kimi-k2.5", "enabled") == "disabled"
     assert manager.model_settings.extra_body == {"thinking": {"type": "disabled"}}
     assert registry.agent("materials_advisor").model_settings.extra_body == {"thinking": {"type": "disabled"}}
-    assert registry.agent(
-        "evidence_reviewer",
-        thinking_type=role_thinking_type("evidence_reviewer", {"mode": "review"}, settings.llm_thinking_type),
-    ).model_settings.extra_body == {"thinking": {"type": "enabled"}}
-    assert registry.agent(
-        "evidence_reviewer",
-        thinking_type=role_thinking_type("evidence_reviewer", {"mode": "extract"}, settings.llm_thinking_type),
-    ).model_settings.extra_body == {"thinking": {"type": "disabled"}}
+    assert "evidence_reviewer" not in registry.role_names
