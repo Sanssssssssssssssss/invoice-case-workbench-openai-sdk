@@ -87,6 +87,37 @@ def test_session_repository_optimistic_version_conflict(tmp_path) -> None:
         sessions.append_user_turn("case_version", "stale write", [], "run_002", expected_version=version)
 
 
+def test_conversation_returns_persistent_safe_attachment_metadata(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    sessions = SessionRepository(store)
+    attachment = store.resolve_case_path("case_attachment", "attachments/originals/invoice.pdf")
+    attachment.parent.mkdir(parents=True, exist_ok=True)
+    attachment.write_bytes(b"%PDF")
+    sessions.append_user_turn(
+        "case_attachment",
+        "review this",
+        [
+            {
+                "name": "invoice.pdf",
+                "path": str(attachment),
+                "content_type": "application/pdf",
+            }
+        ],
+        "run_001",
+    )
+
+    item = sessions.get_conversation_items("case_attachment")[0]
+
+    assert item["attachments"] == [
+        {
+            "name": "invoice.pdf",
+            "path": "attachments/originals/invoice.pdf",
+            "content_type": "application/pdf",
+        }
+    ]
+    assert str(tmp_path) not in json.dumps(item)
+
+
 def test_session_compactor_writes_summary_without_case_patch_or_trace_write(tmp_path) -> None:
     store = CaseStore(tmp_path / "cases")
     sessions = SessionRepository(store)

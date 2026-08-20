@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 from pydantic import ValidationError
@@ -22,6 +22,7 @@ class SourceRecord:
     content: str
     title: str = ""
     kind: str = "unknown"
+    provenance: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         source_id = self.source_id.strip()
@@ -32,6 +33,13 @@ class SourceRecord:
         object.__setattr__(self, "source_id", source_id)
         object.__setattr__(self, "title", self.title.strip())
         object.__setattr__(self, "kind", self.kind.strip() or "unknown")
+        object.__setattr__(self, "provenance", dict(self.provenance))
+
+    @property
+    def provenance_text(self) -> str:
+        # Keep the same order that read_source exposes, so a copied multi-field
+        # quote is checked against the exact text the Worker saw.
+        return json.dumps(self.provenance, ensure_ascii=False, default=str)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +154,7 @@ class EvidenceSandbox:
                 "title": source.title,
                 "kind": source.kind,
                 "content": source.content,
+                "system_provenance": dict(source.provenance),
             },
         )
 
@@ -190,12 +199,15 @@ class EvidenceSandbox:
                 repair="Copy the shortest exact supporting text from read_source into quote.",
                 source_id=source_id,
             )
-        if quote not in source.content:
+        if quote not in source.content and quote not in source.provenance_text:
             return self._failure(
                 "bind_claim",
                 code="QUOTE_NOT_IN_SOURCE",
                 message="The quote is not an exact substring of the selected source.",
-                repair="Read the source again and copy the quote exactly, including case and spacing.",
+                repair=(
+                    "Read the source again and copy the quote exactly from content or "
+                    "system_provenance, including case and spacing."
+                ),
                 source_id=source_id,
             )
 

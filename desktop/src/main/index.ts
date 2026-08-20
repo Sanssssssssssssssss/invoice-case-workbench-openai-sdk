@@ -7,9 +7,32 @@ let mainWindow: BrowserWindow | null = null
 let backend: BackendHandle | null = null
 let isQuitting = false
 
+const RENDERER_LOAD_ATTEMPTS = 40
+const RENDERER_LOAD_RETRY_MS = 250
+
 interface CaseFileMetadata {
   absolute_path: string
   path: string
+}
+
+async function loadRenderer(window: BrowserWindow): Promise<void> {
+  if (app.isPackaged || !process.env.ELECTRON_RENDERER_URL) {
+    await window.loadFile(join(__dirname, '../renderer/index.html'))
+    return
+  }
+
+  let lastError: unknown
+  for (let attempt = 0; attempt < RENDERER_LOAD_ATTEMPTS; attempt += 1) {
+    if (window.isDestroyed()) return
+    try {
+      await window.loadURL(process.env.ELECTRON_RENDERER_URL)
+      return
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => setTimeout(resolve, RENDERER_LOAD_RETRY_MS))
+    }
+  }
+  throw lastError
 }
 
 function createWindow(handle: BackendHandle): void {
@@ -41,11 +64,9 @@ function createWindow(handle: BackendHandle): void {
     return { action: 'deny' }
   })
 
-  if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  void loadRenderer(mainWindow).catch((error) => {
+    console.error('Failed to load renderer after retries', error)
+  })
 
   mainWindow.on('closed', () => {
     mainWindow = null

@@ -184,14 +184,21 @@ class HarnessRuntime:
         calls: list[dict[str, Any]],
         debug_calls: list[dict[str, Any]] | None = None,
     ) -> None:
-        state.model_calls = list(calls)
+        prefix = state.observability.get("_resumed_model_call_prefix")
+        state.model_calls = (
+            list(prefix) + list(calls)
+            if isinstance(prefix, list)
+            else list(calls)
+        )
         debug_source = debug_calls or calls
         for call in debug_source[state.debug_model_event_count :]:
+            public_call = dict(call)
+            public_call.pop("reasoning_excerpt", None)
             event = self.append_debug_event(
                 state,
                 kind="model_call",
                 name=str(call.get("role") or "-"),
-                payload=call,
+                payload=public_call,
                 summary=f"{call.get('role', '-')} / {call.get('model', '-')} {call.get('finish_reason', '')}".strip(),
                 parent_event_id=state.last_action_event_id,
                 caused_by_event_id=state.last_action_event_id,
@@ -201,53 +208,13 @@ class HarnessRuntime:
                 state.last_planner_model_event_id = state.last_model_event_id
             if call.get("schema_validation_error"):
                 self.record_observation(state, _schema_retry_observation(call))
-            if call.get("reasoning_excerpt"):
-                thinking = {
-                    "role": call.get("role") or "-",
-                    "model": call.get("model") or "",
-                    "prompt_version": call.get("prompt_version") or "",
-                    "reasoning_excerpt": call.get("reasoning_excerpt") or "",
-                    "reasoning_chars": call.get("reasoning_chars") or len(str(call.get("reasoning_excerpt") or "")),
-                    "reasoning_chunks": call.get("reasoning_chunks") or 1,
-                    "thinking_type": call.get("thinking_type") or "",
-                    "reasoning_source": call.get("reasoning_source") or "model_call",
-                    "status": "completed",
-                    "parent_event_id": state.last_model_event_id,
-                }
-                self.record_model_thinking(state, thinking)
         state.debug_model_event_count = len(calls)
-
-    def record_model_thinking(self, state: HarnessRunState, thinking: dict[str, Any]) -> None:
-        role = str(thinking.get("role") or "model")
-        chars = int(thinking.get("reasoning_chars") or 0)
-        status = str(thinking.get("status") or "streaming")
-        payload = {
-            "role": role,
-            "model": str(thinking.get("model") or ""),
-            "prompt_version": str(thinking.get("prompt_version") or ""),
-            "reasoning_excerpt": str(thinking.get("reasoning_excerpt") or ""),
-            "reasoning_chars": chars,
-            "reasoning_chunks": int(thinking.get("reasoning_chunks") or 0),
-            "thinking_type": str(thinking.get("thinking_type") or ""),
-            "reasoning_source": str(thinking.get("reasoning_source") or ""),
-            "content_started": bool(thinking.get("content_started")),
-            "status": status,
-        }
-        parent_event_id = str(thinking.get("parent_event_id") or state.last_model_event_id or state.last_action_event_id)
-        self.append_debug_event(
-            state,
-            kind="model_thinking",
-            name=role,
-            payload=payload,
-            summary=f"{role} reasoning_content {status}; chars={chars}",
-            parent_event_id=parent_event_id,
-            caused_by_event_id=parent_event_id,
-        )
 
     def finalize_run(self, state: HarnessRunState, final_answer: str | None = None) -> None:
         if final_answer is not None:
             state.final_answer = final_answer
         state.completed_at = state.completed_at or utc_now()
+        state.pending_approvals = []
         self.set_phase(state, "finalized")
         if not state.debug_final_event_recorded:
             self.append_debug_event(
@@ -482,6 +449,34 @@ class HarnessRuntime:
                 append_text(path, line)
         state.last_debug_event_id = event_id
         return event
+
+    def reconcile_debug_sequence(self, state: HarnessRunState) -> None:
+        """Continue a resumed run after the largest event already on disk."""
+
+        with PERSISTENCE_LOCK:
+            path = self.store.resolve_case_path(
+                state.case_id,
+                f"traces/{state.run_id}/events.jsonl",
+            )
+            maximum = 0
+            latest_event_id = ""
+            if path.exists():
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                        run_seq = int(row.get("run_seq", row.get("seq", 0)) or 0)
+                    except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+                        continue
+                    if run_seq >= maximum:
+                        maximum = run_seq
+                        latest_event_id = str(row.get("event_id") or "")
+            state.debug_event_seq = max(state.debug_event_seq, maximum)
+            if latest_event_id:
+                state.last_debug_event_id = latest_event_id
+            state.observability["_resumed_model_call_prefix"] = list(state.model_calls)
+            state.debug_model_event_count = 0
 
     def step_limit_answer(self, state: HarnessRunState) -> str:
         feedback = _latest_runtime_feedback(state.observations)

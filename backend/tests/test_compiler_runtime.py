@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app.compiler_runtime.kernel import compile_review_artifact
 from app.compiler_runtime.models import CheckAssessment, EvidenceIR, ProofNode, ProofPlan
+from app.compiler_runtime.policy import requirement_context
 from app.compiler_runtime.runtime import (
     EvidenceCompilerRuntime,
     ExecutorSummary,
@@ -20,12 +25,156 @@ from app.compiler_runtime.runtime import (
     _planning_source_catalog,
     _review_result,
     _retryable_checks,
+    _sandbox_tools,
 )
 from app.compiler_runtime.sandbox import EvidenceSandbox
 from app.config import Settings
 from app.llm import LlmClient
 from app.runtime.patch_normalizer import compact_case_patch_for_write
 from app.state.schemas import EvidenceReviewResult
+
+
+def test_executor_prompt_forbids_submitting_aggregate_nodes() -> None:
+    prompt = (
+        Path(__file__).parents[1]
+        / "app"
+        / "compiler_runtime"
+        / "prompts"
+        / "executor.md"
+    ).read_text(encoding="utf-8")
+
+    assert "only for nodes whose kind is CHECK" in prompt
+    assert "Never submit ALL or ANY nodes" in prompt
+    assert "Never submit ALL, ANY, or NOT nodes" not in prompt
+
+
+def test_task_compiler_prompt_forbids_check_to_check_edges() -> None:
+    prompt = (
+        Path(__file__).parents[1]
+        / "app"
+        / "compiler_runtime"
+        / "prompts"
+        / "task_compiler.md"
+    ).read_text(encoding="utf-8")
+
+    assert "depends_on` must be exactly `[]`" in prompt
+    assert "never create a CHECK-to-CHECK edge" in prompt
+    assert "Include `version: \"1\"`" in prompt
+    assert "Every root must directly establish the supplied Requirement `proof_target` in the same polarity" in prompt
+    assert "Every CHECK must reference at least one active Requirement" in prompt
+    assert "Keep each CHECK atomic" in prompt
+    assert "A document or evidence Requirement checks only" in prompt
+    assert "never in a standalone CHECK with empty requirement_refs" in prompt
+    assert "Fold both configured and unconfigured values into the substantive CHECK" in prompt
+    assert "Only when an active Requirement explicitly targets system-provenance traceability" in prompt
+    assert "never add an unrelated provenance CHECK" in prompt
+    assert "ALL, ANY, and NOT" not in prompt
+
+
+def test_verifier_requires_a_grounded_comparison_baseline() -> None:
+    prompt = (
+        Path(__file__).parents[1]
+        / "app"
+        / "compiler_runtime"
+        / "prompts"
+        / "verifier.md"
+    ).read_text(encoding="utf-8")
+
+    assert "comparison baseline itself" in prompt
+    assert "General resemblance without that baseline is NOT_FOUND, never SUPPORTED" in prompt
+    assert "Absence of a baseline is also not evidence of mismatch" in prompt
+    assert "you may combine several grounded inputs and recompute" in prompt
+    assert "every input must be cited" in prompt
+    assert "genuinely provide partial evidence" in prompt
+    assert "examined_source_ids records coverage, not relevance" in prompt
+    assert "Generic extraction limitations about authenticity" in prompt
+    assert "do not refute that source role" in prompt
+    assert "finish the source comparison and any calculation in reason before choosing status" in prompt
+    assert "then copy that same value into the status field" in prompt
+    assert "rate was derived rather than printed" in prompt
+
+
+def test_verifier_schema_places_reason_before_status() -> None:
+    fields = list(CheckAssessment.model_json_schema()["properties"])
+
+    assert fields.index("reason") < fields.index("status")
+
+
+def test_source_traceability_target_is_system_provenance_not_authenticity() -> None:
+    requirement = requirement_context(["source_traceability"])[0]
+    prompt = (
+        Path(__file__).parents[1]
+        / "app"
+        / "compiler_runtime"
+        / "prompts"
+        / "task_compiler.md"
+    ).read_text(encoding="utf-8")
+
+    assert requirement["label"] == "上传附件来源链可追溯"
+    assert requirement["capability_hint"] == "system_provenance"
+    assert requirement["target_predicate_hint"] == "source.upload_provenance_traceable"
+    assert "never turn it into a claim that the business document is genuine" in prompt
+
+
+def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> None:
+    prompt_root = Path(__file__).parents[1] / "app" / "compiler_runtime" / "prompts"
+    requirement = requirement_context(["invoice_calculation_valid"])[0]
+    compiler = (prompt_root / "task_compiler.md").read_text(encoding="utf-8")
+    executor = (prompt_root / "executor.md").read_text(encoding="utf-8")
+    verifier = (prompt_root / "verifier.md").read_text(encoding="utf-8")
+
+    assert requirement["capability_hint"] == "invoice_arithmetic"
+    for layer in ("line extensions", "printed subtotal", "tax/discount/charge", "printed final total"):
+        assert layer in compiler
+    assert "ALL root with four separate CHECKs" in compiler
+    assert "never reduce calculation validity to field presence" in compiler
+    assert "bind every printed input needed for recomputation as separate grounded Claims" in executor
+    assert 'self-authored "calculation valid" Claim' in executor
+    assert "Field presence alone never proves calculation validity" in verifier
+    assert "a grounded mismatch beyond the configured rounding tolerance is CONTRADICTED" in verifier
+
+
+def test_invoice_arithmetic_plan_contract_keeps_recomputations_atomic() -> None:
+    check_ids = [
+        "check.line_extensions",
+        "check.subtotal",
+        "check.adjustments",
+        "check.final_total",
+    ]
+    plan = ProofPlan.model_validate(
+        {
+            "plan_id": "plan.invoice-arithmetic",
+            "version": "1",
+            "objective": "Verify the invoice's internal arithmetic.",
+            "active_requirement_ids": ["invoice_calculation_valid"],
+            "policy_refs": ["invoice_calculation_rounding_tolerance"],
+            "roots": {"invoice_calculation_valid": "root.invoice_arithmetic"},
+            "nodes": [
+                {
+                    "id": check_id,
+                    "kind": "CHECK",
+                    "statement": statement,
+                    "requirement_refs": ["invoice_calculation_valid"],
+                    "policy_refs": ["invoice_calculation_rounding_tolerance"],
+                }
+                for check_id, statement in zip(
+                    check_ids,
+                    (
+                        "Applicable line extensions equal quantity times unit price.",
+                        "Printed line totals sum to the printed subtotal.",
+                        "Printed taxes, discounts, and charges reconcile to their stated bases.",
+                        "The printed final total reconciles to subtotal plus or minus adjustments.",
+                    ),
+                    strict=True,
+                )
+            ]
+            + [{"id": "root.invoice_arithmetic", "kind": "ALL", "depends_on": check_ids}],
+        }
+    )
+
+    nodes = {node.id: node for node in plan.nodes}
+    assert nodes[plan.roots["invoice_calculation_valid"]].depends_on == check_ids
+    assert all(nodes[check_id].kind == "CHECK" and not nodes[check_id].depends_on for check_id in check_ids)
 
 
 def _settings(tmp_path) -> Settings:
@@ -70,6 +219,132 @@ def _sources():
             }
         ]
     )
+
+
+def test_compiler_phase_retries_one_transient_connection_failure_with_fresh_client(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class APIConnectionError(Exception):
+        pass
+
+    expected = _plan()
+    attempts: list[object] = []
+    run_configs: list[object] = []
+
+    def fake_build_run_config(*_args, **_kwargs):
+        config = object()
+        run_configs.append(config)
+        return config
+
+    def fake_run_agent_sync(*_args, **kwargs):
+        attempts.append(kwargs["run_config"])
+        if len(attempts) == 1:
+            raise APIConnectionError("Connection error.")
+        return SimpleNamespace(final_output=expected, raw_responses=[])
+
+    monkeypatch.setattr("app.compiler_runtime.runtime.build_run_config", fake_build_run_config)
+    monkeypatch.setattr("app.compiler_runtime.runtime.run_agent_sync", fake_run_agent_sync)
+    monkeypatch.setattr("app.compiler_runtime.runtime.time.sleep", lambda _seconds: None)
+
+    llm = LlmClient(_settings(tmp_path))
+    runtime = EvidenceCompilerRuntime(llm)
+    actual = runtime._run_phase(  # noqa: SLF001
+        name="task_compiler",
+        prompt_file="task_compiler.md",
+        payload={"test": "transport retry"},
+        output_type=ProofPlan,
+        max_turns=1,
+    )
+
+    assert actual == expected
+    assert attempts == run_configs
+    assert len(run_configs) == 2
+    assert llm.calls[0].error == "APIConnectionError: Connection error."
+    assert llm.calls[0].recovered_by == "compiler_transport_retry_success"
+    assert llm.calls[1].retry_of == "task_compiler:transport_attempt_1"
+
+
+def test_compiler_stages_emit_public_progress_before_and_after_work(tmp_path, monkeypatch) -> None:
+    events: list[tuple[str, dict, str]] = []
+    runtime = EvidenceCompilerRuntime(
+        LlmClient(_settings(tmp_path)),
+        progress_sink=lambda kind, payload, summary: events.append((kind, payload, summary)),
+    )
+
+    def fake_phase(**kwargs):
+        name = kwargs["name"]
+        assert events[-1][1]["stage"] == name
+        assert events[-1][1]["status"] == "started"
+        if name == "task_compiler":
+            return _plan()
+        if name == "executor":
+            return ExecutorSummary(
+                completed_check_ids=[],
+                unresolved_check_ids=["check.vendor"],
+                summary="nothing admitted",
+            )
+        return VerificationBatch(
+            assessments=[
+                CheckAssessment(
+                    check_id="check.vendor",
+                    status="NOT_FOUND",
+                    examined_source_ids=[_sources()[0].record.source_id],
+                    missing_fact="grounded vendor identity",
+                )
+            ]
+        )
+
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+    result = runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=_sources(),
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        requirement_requiredness={"vendor_identity": False},
+    )
+
+    assert result.proof.decision_for("vendor_identity").status == "NOT_FOUND"
+    stage_statuses = [
+        (payload["stage"], payload["status"])
+        for _kind, payload, _summary in events
+        if payload.get("stage") in {"task_compiler", "executor", "fine_verifier", "proof_kernel"}
+    ]
+    for stage in ("task_compiler", "executor", "fine_verifier", "proof_kernel"):
+        assert (stage, "started") in stage_statuses
+        assert (stage, "completed") in stage_statuses
+        assert stage_statuses.index((stage, "started")) < stage_statuses.index((stage, "completed"))
+    assert all("reasoning_excerpt" not in payload for _kind, payload, _summary in events)
+
+
+def test_sandbox_hook_rejection_is_emitted_without_source_text() -> None:
+    source = _sources()[0].record
+    sandbox = EvidenceSandbox(sources=[source], allowed_check_ids=["check.vendor"])
+    events: list[tuple[str, dict | None]] = []
+    tools = _sandbox_tools(sandbox, progress_sink=lambda tool, result: events.append((tool, result)))
+    bind = next(tool for tool in tools if tool.name == "bind_claim")
+
+    result = json.loads(
+        asyncio.run(
+            bind.on_invoke_tool(
+                None,
+                json.dumps(
+                    {
+                        "subject": "vendor:V-100",
+                        "predicate": "status",
+                        "value": "ACTIVE",
+                        "source_id": source.source_id,
+                        "quote": "Vendor V-100 is ACTIVE.",
+                        "locator": "BODY",
+                    }
+                ),
+            )
+        )
+    )
+
+    assert result["error"]["code"] == "SOURCE_NOT_READ"
+    assert events[0] == ("bind_claim", None)
+    assert events[1][1]["error"]["code"] == "SOURCE_NOT_READ"
+    assert source.content not in json.dumps(events, ensure_ascii=False)
 
 
 def test_task_compiler_planning_context_is_independent_of_source_identity() -> None:
@@ -281,6 +556,54 @@ def test_prepare_sources_is_content_addressed_and_preserves_exact_text() -> None
     assert first.metadata["attachment_id"] == "att_vendor"
 
 
+def test_prepare_sources_exposes_safe_system_provenance_without_absolute_paths() -> None:
+    prepared = prepare_sources(
+        [
+            {
+                "attachment_id": "att_invoice",
+                "name": "invoice.pdf",
+                "path": r"C:\\private\\case\\invoice.pdf",
+                "original_ref": "attachments/originals/invoice.pdf",
+                "sha256": "upload-sha256",
+                "extraction_ref": "evidence/extractions/att_invoice.json",
+                "extraction_sha256": "extraction-sha256",
+                "preview_paths": ["evidence/previews/invoice_p1.png"],
+                "content": "Invoice INV-42",
+            }
+        ]
+    )[0]
+
+    provenance = prepared.record.provenance
+    assert provenance["runtime_admission"] == "admitted"
+    assert provenance["attachment_id"] == "att_invoice"
+    assert provenance["original_ref"] == "attachments/originals/invoice.pdf"
+    assert provenance["source_sha256"] == "upload-sha256"
+    assert provenance["content_sha256"] == hashlib.sha256(
+        prepared.record.content.encode("utf-8")
+    ).hexdigest()
+    assert provenance["scope"] == "system_chain_of_custody_only_not_real_world_authenticity"
+    assert "C:\\private" not in json.dumps(provenance)
+
+
+def test_prepare_sources_prefers_full_extracted_text_over_compact_markdown() -> None:
+    full_text = "opening\n" + ("invoice line\n" * 400) + "TAIL FACT INV-999"
+
+    prepared = prepare_sources(
+        [
+            {
+                "attachment_id": "att_long_invoice",
+                "name": "long-invoice.pdf",
+                "content_kind": "pdf",
+                "body_markdown": "short preview only",
+                "content": full_text,
+            }
+        ]
+    )[0]
+
+    assert "TAIL FACT INV-999" in prepared.record.content
+    assert len(prepared.record.content) > len(full_text)
+
+
 def test_attachment_source_admission_requires_success_scope_and_readable_content() -> None:
     valid = {
         "status": "success",
@@ -348,6 +671,16 @@ def test_policy_activation_and_unconfigured_values_stay_declarative() -> None:
         "configured": False,
         "value": None,
     }
+    calculation_policy = policy_excerpt_for(["invoice_calculation_valid"])
+    assert calculation_policy["values"]["invoice_calculation_rounding_tolerance"] == {
+        "configured": True,
+        "value": {
+            "amount": "0.01",
+            "unit": "document_currency",
+            "scope": "invoice_internal_arithmetic_rounding",
+            "note": "Absolute rounding allowance for one invoice's internal arithmetic; this is not the three-way matching percentage tolerance.",
+        },
+    }
 
 
 def test_policy_expands_requirement_premises_in_stable_order() -> None:
@@ -412,7 +745,31 @@ def test_runtime_finishes_supported_case_without_retry(tmp_path) -> None:
     assert evidence["credibility"] == "medium"
     assert evidence["metadata"]["classification"] == "business_evidence"
     assert evidence["review_result"]["should_accept"] is True
-    assert result.review_result["source_traceability"] == "unclear"
+    assert result.review_result["source_traceability"] == "original_document"
+
+
+def test_runtime_projects_file_format_to_policy_declared_evidence_type(tmp_path) -> None:
+    runtime = _ScriptedRuntime(LlmClient(_settings(tmp_path)), resolve_on_retry=False)
+    prepared = prepare_sources(
+        [
+            {
+                "attachment_id": "att_vendor_image",
+                "name": "vendor-record.png",
+                "content_kind": "image",
+                "content": "Vendor V-100 is ACTIVE.",
+            }
+        ]
+    )
+
+    result = runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=prepared,
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+    )
+
+    evidence = result.review_result["suggested_patch"]["add_evidence"][0]
+    assert evidence["type"] == "vendor_record"
+    assert evidence["review_result"]["evidence_type"] == "vendor_record"
 
 
 def test_review_result_preserves_source_quality_and_does_not_accept_unused_source(tmp_path) -> None:
@@ -502,6 +859,355 @@ def test_review_result_accepts_grounded_source_submitted_to_unresolved_check(tmp
     assert evidence["supports"] == []
 
 
+def test_review_result_projects_each_requirement_own_claim_quote() -> None:
+    prepared = prepare_sources(
+        [
+            {
+                "attachment_id": "att_invoice",
+                "name": "invoice.txt",
+                "content_kind": "invoice",
+                "content": "Invoice number: INV-42\nTotal amount: EUR 125.00",
+            }
+        ]
+    )
+    record = prepared[0].record
+    plan = ProofPlan(
+        plan_id="plan.invoice-fields",
+        objective="Verify two invoice fields.",
+        active_requirement_ids=["invoice_number", "amount_total"],
+        roots={
+            "invoice_number": "check.invoice_number",
+            "amount_total": "check.amount_total",
+        },
+        nodes=[
+            ProofNode(
+                id="check.invoice_number",
+                kind="CHECK",
+                statement="The invoice number is present.",
+                requirement_refs=["invoice_number"],
+            ),
+            ProofNode(
+                id="check.amount_total",
+                kind="CHECK",
+                statement="The total amount is present.",
+                requirement_refs=["amount_total"],
+            ),
+        ],
+    )
+    sandbox = EvidenceSandbox(
+        sources=[record],
+        allowed_check_ids=[node.id for node in plan.nodes],
+        evidence_ir=EvidenceIR(
+            source_ids=[record.source_id],
+            source_fingerprints={
+                record.source_id: prepared[0].metadata["source_fingerprint"],
+            },
+        ),
+    )
+    sandbox.read_source(record.source_id)
+    number_claim = sandbox.bind_claim(
+        subject="invoice:INV-42",
+        predicate="invoice_number",
+        value="INV-42",
+        source_id=record.source_id,
+        quote="Invoice number: INV-42",
+        locator="lines 1-1",
+        confidence="high",
+    )["claim"]
+    amount_claim = sandbox.bind_claim(
+        subject="invoice:INV-42",
+        predicate="amount_total",
+        value={"amount": 125, "currency": "EUR"},
+        source_id=record.source_id,
+        quote="Total amount: EUR 125.00",
+        locator="lines 2-2",
+        confidence="high",
+    )["claim"]
+    sandbox.submit_check(check_id="check.invoice_number", claim_ids=[number_claim["id"]])
+    sandbox.submit_check(check_id="check.amount_total", claim_ids=[amount_claim["id"]])
+    assessments = [
+        CheckAssessment(
+            check_id="check.invoice_number",
+            status="SUPPORTED",
+            claim_ids=[number_claim["id"]],
+            source_ids=[record.source_id],
+            examined_source_ids=[record.source_id],
+        ),
+        CheckAssessment(
+            check_id="check.amount_total",
+            status="SUPPORTED",
+            claim_ids=[amount_claim["id"]],
+            source_ids=[record.source_id],
+            examined_source_ids=[record.source_id],
+        ),
+    ]
+    policy = policy_excerpt_for(plan.active_requirement_ids)
+    artifact = _artifact(
+        plan=plan,
+        evidence_ir=sandbox.evidence_ir,
+        assessments=assessments,
+        submitted_claim_refs={
+            "check.invoice_number": [number_claim["id"]],
+            "check.amount_total": [amount_claim["id"]],
+        },
+        policy_excerpt=policy,
+        model="fixture",
+    )
+
+    review = _review_result(
+        prepared_sources=prepared,
+        sandbox=sandbox,
+        artifact=artifact,
+        proof=compile_review_artifact(artifact),
+    )
+
+    supports = {
+        item["requirement"]: item["quoted_text"]
+        for item in review["suggested_patch"]["add_evidence"][0]["supports"]
+    }
+    assert supports == {
+        "invoice_number": "Invoice number: INV-42",
+        "amount_total": "Total amount: EUR 125.00",
+    }
+
+
+def test_review_result_uses_only_contradicting_leaf_sources_for_a_conflict() -> None:
+    prepared = prepare_sources(
+        [
+            {
+                "source_id": "source.support",
+                "name": "support.txt",
+                "content_kind": "invoice",
+                "source_content": "Invoice identity is INV-42.",
+            },
+            {
+                "source_id": "source.conflict",
+                "name": "conflict.txt",
+                "content_kind": "invoice",
+                "source_content": "Configured baseline is contradicted.",
+            },
+        ]
+    )
+    records = [item.record for item in prepared]
+    plan = ProofPlan(
+        plan_id="plan.mixed-polarity",
+        objective="Require both invoice identity and baseline conformance.",
+        active_requirement_ids=["invoice"],
+        roots={"invoice": "root.invoice"},
+        nodes=[
+            ProofNode(
+                id="check.identity",
+                kind="CHECK",
+                statement="The invoice identity is grounded.",
+                requirement_refs=["invoice"],
+            ),
+            ProofNode(
+                id="check.baseline",
+                kind="CHECK",
+                statement="The invoice conforms to the baseline.",
+                requirement_refs=["invoice"],
+            ),
+            ProofNode(
+                id="root.invoice",
+                kind="ALL",
+                depends_on=["check.identity", "check.baseline"],
+            ),
+        ],
+    )
+    sandbox = EvidenceSandbox(
+        sources=records,
+        allowed_check_ids=["check.identity", "check.baseline"],
+        evidence_ir=EvidenceIR(
+            source_ids=[item.source_id for item in records],
+            source_fingerprints={
+                item.record.source_id: item.metadata["source_fingerprint"]
+                for item in prepared
+            },
+        ),
+    )
+    for record in records:
+        sandbox.read_source(record.source_id)
+    support_claim = sandbox.bind_claim(
+        subject="invoice:INV-42",
+        predicate="identity",
+        value="INV-42",
+        source_id="source.support",
+        quote="Invoice identity is INV-42.",
+        locator="line 1",
+        confidence="high",
+    )["claim"]
+    conflict_claim = sandbox.bind_claim(
+        subject="invoice:INV-42",
+        predicate="baseline_conformance",
+        value=False,
+        source_id="source.conflict",
+        quote="Configured baseline is contradicted.",
+        locator="line 1",
+        confidence="high",
+    )["claim"]
+    sandbox.submit_check(check_id="check.identity", claim_ids=[support_claim["id"]])
+    sandbox.submit_check(check_id="check.baseline", claim_ids=[conflict_claim["id"]])
+    examined = [item.source_id for item in records]
+    policy = policy_excerpt_for(["invoice"])
+    artifact = _artifact(
+        plan=plan,
+        evidence_ir=sandbox.evidence_ir,
+        assessments=[
+            CheckAssessment(
+                check_id="check.identity",
+                status="SUPPORTED",
+                claim_ids=[support_claim["id"]],
+                source_ids=["source.support"],
+                examined_source_ids=examined,
+            ),
+            CheckAssessment(
+                check_id="check.baseline",
+                status="CONTRADICTED",
+                claim_ids=[conflict_claim["id"]],
+                source_ids=["source.conflict"],
+                examined_source_ids=examined,
+            ),
+        ],
+        submitted_claim_refs={
+            "check.identity": [support_claim["id"]],
+            "check.baseline": [conflict_claim["id"]],
+        },
+        policy_excerpt=policy,
+        model="fixture",
+    )
+    proof = compile_review_artifact(artifact)
+
+    review = _review_result(
+        prepared_sources=prepared,
+        sandbox=sandbox,
+        artifact=artifact,
+        proof=proof,
+    )
+
+    assert proof.decision_for("invoice").status == "CONTRADICTED"
+    assert review["conflicts"][0]["quoted_text"] == "Configured baseline is contradicted."
+    assert review["conflicts"][0]["affected_evidence_ids"] == ["source.conflict"]
+    evidence = {item["id"]: item for item in review["suggested_patch"]["add_evidence"]}
+    assert evidence["source.support"]["conflicts"] == []
+    assert evidence["source.conflict"]["conflicts"][0]["quoted_text"] == (
+        "Configured baseline is contradicted."
+    )
+
+
+def test_flipkart_contradiction_is_consistent_across_proof_review_and_patch() -> None:
+    prepared = prepare_sources(
+        [
+            {
+                "attachment_id": "att_flipkart",
+                "name": "FlipkartInvoice.pdf",
+                "content_kind": "invoice",
+                "content": "Invoice number: BLR_WFLD20151000982590\nLayout does not match the configured baseline.",
+            }
+        ]
+    )
+    record = prepared[0].record
+    plan = ProofPlan(
+        plan_id="plan.flipkart",
+        objective="Verify invoice identity and configured template match.",
+        active_requirement_ids=["invoice_number", "template_match"],
+        roots={
+            "invoice_number": "check.invoice_number",
+            "template_match": "check.template_match",
+        },
+        nodes=[
+            ProofNode(
+                id="check.invoice_number",
+                kind="CHECK",
+                statement="The invoice number is present.",
+                requirement_refs=["invoice_number"],
+            ),
+            ProofNode(
+                id="check.template_match",
+                kind="CHECK",
+                statement="The invoice matches the configured template baseline.",
+                requirement_refs=["template_match"],
+            ),
+        ],
+    )
+    sandbox = EvidenceSandbox(
+        sources=[record],
+        allowed_check_ids=[node.id for node in plan.nodes],
+        evidence_ir=EvidenceIR(
+            source_ids=[record.source_id],
+            source_fingerprints={record.source_id: prepared[0].metadata["source_fingerprint"]},
+        ),
+    )
+    sandbox.read_source(record.source_id)
+    number = sandbox.bind_claim(
+        subject="invoice:BLR_WFLD20151000982590",
+        predicate="invoice_number",
+        value="BLR_WFLD20151000982590",
+        source_id=record.source_id,
+        quote="Invoice number: BLR_WFLD20151000982590",
+        locator="line 1",
+        confidence="high",
+    )["claim"]
+    mismatch = sandbox.bind_claim(
+        subject="invoice:BLR_WFLD20151000982590",
+        predicate="template_match",
+        value=False,
+        source_id=record.source_id,
+        quote="Layout does not match the configured baseline.",
+        locator="line 2",
+        confidence="high",
+    )["claim"]
+    sandbox.submit_check(check_id="check.invoice_number", claim_ids=[number["id"]])
+    sandbox.submit_check(check_id="check.template_match", claim_ids=[mismatch["id"]])
+    assessments = [
+        CheckAssessment(
+            check_id="check.invoice_number",
+            status="SUPPORTED",
+            claim_ids=[number["id"]],
+            source_ids=[record.source_id],
+            examined_source_ids=[record.source_id],
+        ),
+        CheckAssessment(
+            check_id="check.template_match",
+            status="CONTRADICTED",
+            claim_ids=[mismatch["id"]],
+            source_ids=[record.source_id],
+            examined_source_ids=[record.source_id],
+            reason="The configured template baseline is contradicted.",
+        ),
+    ]
+    policy = policy_excerpt_for(plan.active_requirement_ids)
+    artifact = _artifact(
+        plan=plan,
+        evidence_ir=sandbox.evidence_ir,
+        assessments=assessments,
+        submitted_claim_refs={
+            "check.invoice_number": [number["id"]],
+            "check.template_match": [mismatch["id"]],
+        },
+        policy_excerpt=policy,
+        model="fixture",
+    )
+    proof = compile_review_artifact(artifact)
+    review = _review_result(
+        prepared_sources=prepared,
+        sandbox=sandbox,
+        artifact=artifact,
+        proof=proof,
+    )
+
+    expected_quote = "Layout does not match the configured baseline."
+    evidence = review["suggested_patch"]["add_evidence"][0]
+    assert proof.decision_for("template_match").status == "CONTRADICTED"
+    assert review["risk_flags"] == ["template_match"]
+    assert review["suggested_patch"]["risk_flags"] == review["risk_flags"]
+    assert review["conflicts"][0]["requirement"] == "template_match"
+    assert review["conflicts"][0]["quoted_text"] == expected_quote
+    assert evidence["conflicts"][0]["quoted_text"] == expected_quote
+    assert review["supports"][0]["quoted_text"] == "Invoice number: BLR_WFLD20151000982590"
+    assert review["evidence_type"] == "invoice"
+    assert review["source_traceability"] == "original_document"
+
+
 def test_runtime_does_not_retry_unresolved_leaf_below_decisive_any_root(tmp_path) -> None:
     runtime = _DecisiveAnyRuntime(LlmClient(_settings(tmp_path)))
 
@@ -515,6 +1221,25 @@ def test_runtime_does_not_retry_unresolved_leaf_below_decisive_any_root(tmp_path
     assert result.proof.obligations == []
     assert result.retry_count == 0
     assert runtime.execute_calls == 1
+
+
+def test_runtime_does_not_retry_optional_not_found_requirement(tmp_path) -> None:
+    runtime = _ScriptedRuntime(LlmClient(_settings(tmp_path)), resolve_on_retry=True)
+
+    result = runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=_sources(),
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        requirement_requiredness={"vendor_identity": False},
+    )
+
+    assert result.proof.decision_for("vendor_identity").status == "NOT_FOUND"
+    assert result.proof.obligations
+    assert all(item.blocking is False for item in result.proof.obligations)
+    assert result.retry_count == 0
+    assert runtime.execute_calls == 1
+    assert runtime.verify_calls == 1
+    assert result.review_result["suggested_patch"]["next_questions"]
 
 
 def test_verifier_receives_full_sources_and_only_per_check_submitted_claims(
@@ -590,6 +1315,64 @@ def test_verifier_receives_full_sources_and_only_per_check_submitted_claims(
     check = captured["checks"][0]
     assert check["submitted_claim_refs"] == [vendor_claim["id"]]
     assert [item["id"] for item in check["candidate_claims"]] == [vendor_claim["id"]]
+
+
+def test_verifier_reconciles_one_explicit_final_status_without_another_call(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    prepared = _sources()
+    record = prepared[0].record
+    sandbox = EvidenceSandbox(
+        sources=[record],
+        allowed_check_ids=["check.vendor"],
+        evidence_ir=EvidenceIR(
+            source_ids=[record.source_id],
+            source_fingerprints={
+                record.source_id: hashlib.sha256(record.content.encode("utf-8")).hexdigest()
+            },
+        ),
+    )
+    sandbox.read_source(record.source_id)
+    claim = sandbox.bind_claim(
+        subject="vendor:V-100",
+        predicate="status",
+        value="ACTIVE",
+        source_id=record.source_id,
+        quote="Vendor V-100 is ACTIVE.",
+        locator="line 1",
+        confidence="high",
+    )["claim"]
+    sandbox.submit_check(check_id="check.vendor", claim_ids=[claim["id"]])
+    calls = 0
+
+    def fake_phase(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return VerificationBatch(
+            assessments=[
+                CheckAssessment(
+                    check_id="check.vendor",
+                    claim_ids=[claim["id"]],
+                    source_ids=[record.source_id],
+                    examined_source_ids=[record.source_id],
+                    reason="The evidence directly refutes the check. Final classification: CONTRADICTED",
+                    status="SUPPORTED",
+                )
+            ]
+        )
+
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+
+    assessments = runtime.verify(
+        plan=_plan(),
+        sandbox=sandbox,
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+    )
+
+    assert calls == 1
+    assert assessments[0].status == "CONTRADICTED"
 
 
 def test_runtime_retries_only_unresolved_checks_once(tmp_path) -> None:

@@ -1,0 +1,90 @@
+{
+  "invoice_id": "INV-2026-0075",
+  "vendor": "Dunder Mifflin Europe GmbH",
+  "vendor_country": "DE",
+  "vendor_address": {
+    "street": "Eichkätzchenweg 12",
+    "postal_code": "40990",
+    "city": "Düsseldorf"
+  },
+  "recipient": "Benelux Windmill Automation B.V.",
+  "recipient_country": "NL",
+  "recipient_address": {
+    "street": "Pelikaanhofkade 88",
+    "postal_code": "1015 DV",
+    "city": "Amsterdam"
+  },
+  "date": "2026-03-26",
+  "due_date": "2026-04-25",
+  "line_items": [
+    {
+      "description": "Board meeting facilitation",
+      "quantity": 3,
+      "unit_price": "18659.90",
+      "vat_rate": "0.20",
+      "amount": "55979.70"
+    },
+    {
+      "description": "Photocopier toner (see framework agreement)",
+      "quantity": 2,
+      "unit_price": "30697.90",
+      "vat_rate": "0.20",
+      "amount": "61395.80"
+    },
+    {
+      "description": "Due-diligence memorandum — Project Thornbury",
+      "quantity": 2,
+      "unit_price": "48115.80",
+      "vat_rate": "0.20",
+      "amount": "96231.60"
+    },
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 10,
+      "unit_price": "637.20",
+      "vat_rate": "0.20",
+      "amount": "6372.00"
+    },
+    {
+      "description": "Penetration testing — scope per SOW 2026-03",
+      "quantity": 1,
+      "unit_price": "22978.30",
+      "vat_rate": "0.20",
+      "amount": "22978.30"
+    },
+    {
+      "description": "Training materials — onboarding programme",
+      "quantity": 2,
+      "unit_price": "12376.30",
+      "vat_rate": "0.20",
+      "amount": "24752.60"
+    }
+  ],
+  "subtotal": "267710.00",
+  "vat_rate": "0.20",
+  "vat_amount": "53542.00",
+  "discount": {
+    "type": "percentage",
+    "value": "0.02",
+    "applied_to": "subtotal",
+    "description": "early payment discount",
+    "conditional": false
+  },
+  "discount_amount": "5354.20",
+  "total": "315897.80",
+  "currency": "EUR",
+  "payment_terms": "Net 30 days",
+  "bank_details": "Deutsche Bank | IBAN: DE80 2355 1686 7750 1654 25 | BIC: DEUTDEFFXXX",
+  "variants": {
+    "vat_variant": "explicit_included",
+    "discount_variant": "explicit_percentage",
+    "number_format": "german",
+    "layout": "mixed",
+    "consistency": "total_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "267710.00",
+  "rendered_total": "319056.78",
+  "error_note": "Displayed total 319056.78 differs from true total 315897.80 by +3158.98 (+1.00%).",
+  "is_credit_note": false
+}

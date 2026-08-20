@@ -18,6 +18,7 @@ from app.agents.patch_builder.deterministic import reduce_review_to_patch
 from app.agents.registry import RoleRegistry
 from app.compiler_runtime.runtime import (
     EvidenceCompilerRuntime,
+    PROMPT_VERSIONS,
     attachment_source_admission,
     compiler_trace_metadata,
     prepare_sources,
@@ -36,7 +37,6 @@ from app.runtime.context_assembler import ContextAssembler, context_budget
 from app.runtime.context_partition import build_context_packet, usage_from_result as extract_usage_from_result, with_usage_metrics
 from app.runtime.patch_normalizer import PatchNormalizer
 from app.runtime.policy_gate import PolicyGate, requires_materials_advice
-from app.runtime.reasoning_capture import append_reasoning_delta, extract_reasoning_from_result, extract_reasoning_from_stream_item, extract_stream_reasoning_delta
 from app.runtime.recovery_policy import RecoveryPolicy
 from app.runtime.retry import is_transient_llm_error
 from app.runtime.supervisor_contract import CAPABILITY_CARDS, sorted_specialist_tool_specs
@@ -65,6 +65,7 @@ from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
 
 ROLE_TARGETS = {"materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"}
+MANAGER_PROMPT_VERSION = "supervisor_planner_v2.4_native_tools"
 
 
 @dataclass
@@ -446,7 +447,9 @@ class TurnRunner:
                     self._stream_emit = prior_emit
 
     def resume_approval(self, case_id: str, run_id: str, approved: bool, reason: str = "") -> AgentTurnResponse:
-        state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
+        state, request, sdk_state, interruptions = self.checkpoints.consume(case_id, run_id)
+        self.harness.reconcile_debug_sequence(state)
+        state.pending_approvals = []
         hooks_token = self.llm.bind_runtime_hooks(self.transcript_hooks(state))
         try:
             with self.observability.start_turn(
@@ -473,7 +476,8 @@ class TurnRunner:
                         approved=approved,
                         reason=reason,
                     )
-                    return self._handle_manager_outcome(request, state, outcome)
+                    response = self._handle_manager_outcome(request, state, outcome)
+                    return response or self._run_until_final(request, state)
                 return self._run_until_final(request, state)
         finally:
             try:
@@ -495,7 +499,9 @@ class TurnRunner:
         self._stream_emit = event_sink
         lag_stop: asyncio.Event | None = None
         lag_task: asyncio.Task[None] | None = None
-        state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
+        state, request, sdk_state, interruptions = self.checkpoints.consume(case_id, run_id)
+        self.harness.reconcile_debug_sequence(state)
+        state.pending_approvals = []
         hooks_token = self.llm.bind_runtime_hooks(self.transcript_hooks(state))
         with self.observability.start_turn(
             case_id=state.case_id,
@@ -530,7 +536,8 @@ class TurnRunner:
                         approved=approved,
                         reason=reason,
                     )
-                    return self._handle_manager_outcome(request, state, outcome)
+                    response = self._handle_manager_outcome(request, state, outcome)
+                    return response or await self._run_until_final_streamed(request, state)
                 return await self._run_until_final_streamed(request, state)
             finally:
                 try:
@@ -585,9 +592,12 @@ class TurnRunner:
         }
 
     def _run_until_final(self, request: AgentTurnRequest, state: HarnessRunState) -> AgentTurnResponse:
-        while not state.completed_at and state.step_count < state.max_steps:
+        while not state.completed_at and (
+            state.step_count < state.max_steps or bool(state.observability.get("_manager_final_rewrite_pending"))
+        ):
+            manager_rewrite_pending = bool(state.observability.pop("_manager_final_rewrite_pending", False))
             planner_context = self.context_assembler.build_planner_context(request, state)
-            forced = self._deterministic_policy_continuation(request, state)
+            forced = None if manager_rewrite_pending else self._deterministic_policy_continuation(request, state)
             if forced:
                 name, payload = forced
                 self.harness.append_debug_event(
@@ -610,13 +620,13 @@ class TurnRunner:
                     return self._waiting_approval_response(request, state, "", [result])
                 if result.get("status") != "blocked":
                     continue
-            runtime_final = self._deterministic_final_after_patch(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_patch(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
-            runtime_final = self._deterministic_final_after_report(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_report(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
-            runtime_final = self._deterministic_final_after_materials_advice(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_materials_advice(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
             manager_input = self._manager_input(request, state, planner_context)
@@ -635,6 +645,8 @@ class TurnRunner:
                 self.harness.finalize_run(state, _manager_failure_answer(exc))
                 return self.trace_recorder.finalize_turn(state)
             response = self._handle_manager_outcome(request, state, outcome)
+            if response is None:
+                continue
             if state.completed_at or state.phase == "waiting_approval":
                 return response
         if not state.final_answer:
@@ -645,11 +657,14 @@ class TurnRunner:
         return self.trace_recorder.finalize_turn(state)
 
     async def _run_until_final_streamed(self, request: AgentTurnRequest, state: HarnessRunState) -> AgentTurnResponse:
-        while not state.completed_at and state.step_count < state.max_steps:
+        while not state.completed_at and (
+            state.step_count < state.max_steps or bool(state.observability.get("_manager_final_rewrite_pending"))
+        ):
+            manager_rewrite_pending = bool(state.observability.pop("_manager_final_rewrite_pending", False))
             started = time.perf_counter()
             planner_context = await asyncio.to_thread(self.context_assembler.build_planner_context, request, state)
             self._record_timing(state, "planner_context", started)
-            forced = self._deterministic_policy_continuation(request, state)
+            forced = None if manager_rewrite_pending else self._deterministic_policy_continuation(request, state)
             if forced:
                 name, payload = forced
                 self.harness.append_debug_event(
@@ -672,13 +687,13 @@ class TurnRunner:
                     return self._waiting_approval_response(request, state, "", [result])
                 if result.get("status") != "blocked":
                     continue
-            runtime_final = self._deterministic_final_after_patch(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_patch(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
-            runtime_final = self._deterministic_final_after_report(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_report(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
-            runtime_final = self._deterministic_final_after_materials_advice(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_materials_advice(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
             manager_input = self._manager_input(request, state, planner_context)
@@ -706,6 +721,8 @@ class TurnRunner:
                 self.harness.finalize_run(state, _manager_failure_answer(exc))
                 return self.trace_recorder.finalize_turn(state)
             response = self._handle_manager_outcome(request, state, outcome)
+            if response is None:
+                continue
             if state.completed_at or state.phase == "waiting_approval":
                 return response
         if not state.final_answer:
@@ -726,14 +743,11 @@ class TurnRunner:
             if not self.context.last_evidence_reviewer_result(state, mode="review"):
                 if not _latest_observation_error(state, kind="role", name="evidence_reviewer"):
                     selected = list(state.observability.get("active_requirement_ids") or [])
-                    if not selected:
-                        selected = [
-                            item.id
-                            for item in self.store.load(state.case_id).requirements
-                            if item.id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
-                        ]
                     if selected:
                         return "evidence_reviewer", {"mode": "review", "active_requirement_ids": selected}
+                    # The current user turn may intentionally narrow or replace an
+                    # older case scope. Let Manager interpret that request before
+                    # falling back to requirements already stored on the case.
                     return None
         reviewer_index = _latest_observation_index(state, kind="role", name="evidence_reviewer")
         writer_index = _latest_observation_index(state, kind="role", name="case_patch_writer")
@@ -768,10 +782,40 @@ class TurnRunner:
             return ""
         markdown_path, pdf_path = report_paths_for_run(state.started_at)
         if _markdown_only_report_message(request.message):
-            return f"报告 Markdown 已生成：{markdown_path}"
-        if not _latest_observation(state, kind="tool", name="render_pdf"):
-            return ""
-        return f"报告已生成：Markdown {markdown_path}；PDF {pdf_path}"
+            delivery = ["报告已生成。", f"- Markdown：{markdown_path}"]
+        else:
+            if not _latest_observation(state, kind="tool", name="render_pdf"):
+                return ""
+            delivery = [
+                "报告已生成。",
+                f"- PDF（主要交付）：{pdf_path}",
+                f"- Markdown（辅助源文件）：{markdown_path}",
+            ]
+        proof = getattr(self.store.load(state.case_id), "compiled_proof", None)
+        decisions = list(getattr(proof, "decisions", []) or [])
+        counts = {
+            status: sum(1 for item in decisions if str(getattr(item, "status", "") or "") == status)
+            for status in ("SUPPORTED", "CONTRADICTED", "NOT_FOUND")
+        }
+        delivery.append(
+            "- 证据结论："
+            f"SUPPORTED {counts['SUPPORTED']}；"
+            f"CONTRADICTED {counts['CONTRADICTED']}；"
+            f"NOT_FOUND {counts['NOT_FOUND']}。"
+        )
+        conflict = next((item for item in decisions if item.status == "CONTRADICTED"), None)
+        unresolved = next((item for item in decisions if item.status == "NOT_FOUND"), None)
+        if conflict is not None:
+            delivery.append(f"- 首个已证实冲突：{conflict.requirement_id}。")
+        elif unresolved is not None:
+            obligation = next(
+                (item for item in list(getattr(proof, "obligations", []) or []) if item.requirement_id == unresolved.requirement_id),
+                None,
+            )
+            detail = f"（{obligation.missing_fact}）" if obligation is not None else ""
+            delivery.append(f"- 首个未决项：{unresolved.requirement_id}{detail}。")
+        delivery.append("以上是证据状态，不等于业务批准或拒绝。")
+        return "\n".join(delivery)
 
     def _deterministic_final_after_materials_advice(self, request: AgentTurnRequest, state: HarnessRunState) -> str:
         if not requires_materials_advice(request.message):
@@ -786,7 +830,7 @@ class TurnRunner:
         request: AgentTurnRequest,
         state: HarnessRunState,
         outcome: ManagerRunOutcome,
-    ) -> AgentTurnResponse:
+    ) -> AgentTurnResponse | None:
         interruptions = list(outcome.interruptions or [])
         if interruptions:
             return self._waiting_approval_response(request, state, outcome.sdk_state, interruptions)
@@ -830,7 +874,7 @@ class TurnRunner:
         request: AgentTurnRequest,
         state: HarnessRunState,
         final_text: str,
-    ) -> AgentTurnResponse:
+    ) -> AgentTurnResponse | None:
         if (
             _latest_observation(state, kind="tool", name="read_attachment")
             and not _latest_observation(state, kind="tool", name="write_case_patch")
@@ -853,6 +897,22 @@ class TurnRunner:
             self.trace_recorder.persist_trace_checkpoint(state, decision)
             return self.trace_recorder.finalize_turn(state)
         self.trace_recorder.persist_trace_checkpoint(state, decision)
+        if (
+            _latest_observation(state, kind="guard", name="final_answer_internal_retry_instruction")
+            and not state.observability.get("manager_final_rewrite_attempted")
+        ):
+            state.observability["manager_final_rewrite_attempted"] = True
+            state.observability["_manager_final_rewrite_pending"] = True
+            self.harness.append_debug_event(
+                state,
+                kind="runtime_recovery",
+                name="manager_final_answer_rewrite_requested",
+                payload={"guard_feedback": self.context.last_runtime_feedback(state)},
+                summary="Asked case manager to rewrite a leaked internal planning preamble.",
+                parent_event_id=state.last_action_event_id,
+                caused_by_event_id=state.last_action_event_id,
+            )
+            return None
         recovered_text, recovered_source = self._guard_recovery_final_answer(request, state)
         recovered = SupervisorDecision(
             action="final_answer",
@@ -1018,7 +1078,15 @@ class TurnRunner:
             hook = ModelTranscriptHooks(
                 self.harness,
                 state,
-                prompt_version="invoice_agent_run_v1",
+                prompt_versions={
+                    "case_manager": MANAGER_PROMPT_VERSION,
+                    "planner": MANAGER_PROMPT_VERSION,
+                    "task_compiler": PROMPT_VERSIONS["task_compiler"],
+                    "executor": PROMPT_VERSIONS["executor"],
+                    "fine_verifier": PROMPT_VERSIONS["verifier"],
+                    "materials_advisor": self.roles.prompt_version("materials_advisor"),
+                    "report_writer": self.roles.prompt_version("report_writer"),
+                },
                 secret_values=[self.settings.llm_api_key or ""],
             )
             self._transcript_hooks[state.run_id] = hook
@@ -1041,11 +1109,10 @@ class TurnRunner:
         partition = with_usage_metrics(self.context.prompt_partition_metadata(state, "planner"), usage)
         self.context.update_context_manifest_usage(state, "planner", partition)
         output_preview = _manager_output_preview(result)
-        reasoning = extract_reasoning_from_result(result)
         record = ModelCallRecord(
             role="planner",
             model=self.settings.llm_model,
-            prompt_version="case_manager_agents_sdk_v1",
+            prompt_version=MANAGER_PROMPT_VERSION,
             input_preview=json.dumps(manager_input, ensure_ascii=False, default=str)[:1400],
             output_preview=output_preview,
             system_prompt=MANAGER_PROMPT,
@@ -1055,11 +1122,7 @@ class TurnRunner:
             latency_ms=latency_ms,
             ttft_ms=model_ttft_ms(state.observability, "planner"),
             content_chars=len(output_preview),
-            reasoning_excerpt=reasoning.text if reasoning else "",
-            reasoning_chars=reasoning.chars if reasoning else 0,
-            reasoning_chunks=reasoning.chunks if reasoning else 0,
             thinking_type=self.settings.llm_thinking_type or "",
-            reasoning_source=reasoning.source if reasoning else "",
             prompt_partition=partition,
         )
         self.llm.calls.append(record)
@@ -1103,25 +1166,11 @@ class TurnRunner:
             return
         if event_type == "raw_response_event":
             data = getattr(event, "data", None)
-            reasoning_delta = extract_stream_reasoning_delta(data)
-            if reasoning_delta:
+            data_type = str(getattr(data, "type", "") or (data.get("type") if isinstance(data, dict) else ""))
+            if "reasoning" in data_type or "thinking" in data_type:
                 role = str(state.observability.get("_active_stream_role") or "planner")
                 mark_first_model_output(state.observability, role)
-                reasoning = _append_stream_reasoning(state, role, reasoning_delta)
-                self.emit_stream_event(
-                    "model_thinking",
-                    {
-                        "role": role,
-                        "model": self.settings.llm_model,
-                        "reasoning_excerpt": reasoning["text"],
-                        "reasoning_delta": reasoning_delta,
-                        "reasoning_chars": reasoning["chars"],
-                        "reasoning_chunks": reasoning["chunks"],
-                        "step_count": state.step_count,
-                        "status": "streaming",
-                    },
-                    summary=f"{role} reasoning_content streaming.",
-                )
+                self._emit_public_model_working(state, role)
             delta = _stream_text_delta(data)
             if delta:
                 role = str(state.observability.get("_active_stream_role") or "planner")
@@ -1141,30 +1190,38 @@ class TurnRunner:
             elif name == "tool_output" and tool_name:
                 self.emit_stream_event("tool_finished", {"tool": tool_name, "source": "sdk", "status": "completed"}, summary=f"{tool_name} output.")
             elif name == "reasoning_item_created":
-                capture = extract_reasoning_from_stream_item(item)
-                if capture:
-                    role = str(state.observability.get("_active_stream_role") or "planner")
-                    mark_first_model_output(state.observability, role)
-                    bucket = state.observability.get("_stream_reasoning")
-                    current = bucket.get(role) if isinstance(bucket, dict) else None
-                    if isinstance(current, dict) and int(current.get("chars") or 0) > 0:
-                        return
-                    reasoning = _append_stream_reasoning(state, role, capture.text)
-                    self.emit_stream_event(
-                        "model_thinking",
-                        {
-                            "role": role,
-                            "model": self.settings.llm_model,
-                            "reasoning_excerpt": reasoning["text"],
-                            "reasoning_delta": capture.text,
-                            "reasoning_chars": reasoning["chars"],
-                            "reasoning_chunks": reasoning["chunks"],
-                            "step_count": state.step_count,
-                            "status": "streaming",
-                            "reasoning_source": capture.source,
-                        },
-                        summary=f"{role} reasoning_content streaming.",
-                    )
+                role = str(state.observability.get("_active_stream_role") or "planner")
+                mark_first_model_output(state.observability, role)
+                self._emit_public_model_working(state, role)
+
+    def _emit_public_model_working(self, state: HarnessRunState, role: str) -> None:
+        emitted = state.observability.setdefault("_public_model_working", {})
+        if not isinstance(emitted, dict):
+            emitted = {}
+            state.observability["_public_model_working"] = emitted
+        key = f"{role}:{state.step_count}"
+        if key in emitted:
+            return
+        emitted[key] = True
+        payload = {
+            "role": role,
+            "model": self.settings.llm_model,
+            "stage": role,
+            "status": "running",
+            "action": "正在分析当前上下文并准备下一步公开结果",
+            "public_reason": "模型内部推理保持私密；这里只展示可审计的工作进度。",
+            "step_count": state.step_count,
+        }
+        self.harness.append_debug_event(
+            state,
+            kind="model_thinking",
+            name=role,
+            payload=payload,
+            summary=payload["action"],
+            parent_event_id=state.last_model_event_id or state.last_action_event_id,
+            caused_by_event_id=state.last_model_event_id or state.last_action_event_id,
+        )
+        self.emit_stream_event("model_thinking", payload, summary=payload["action"])
 
     def _record_timing(self, state: HarnessRunState, name: str, started: float) -> None:
         duration_ms = max(0, int((time.perf_counter() - started) * 1000))
@@ -1232,7 +1289,7 @@ class TurnRunner:
             ModelCallRecord(
                 role="planner",
                 model=self.settings.llm_model,
-                prompt_version="case_manager_agents_sdk_v1",
+                prompt_version=MANAGER_PROMPT_VERSION,
                 input_preview=json.dumps(manager_input, ensure_ascii=False, default=str)[:1400],
                 output_preview="",
                 error=error,
@@ -1332,6 +1389,12 @@ class TurnRunner:
             result = reduce_review_to_patch(reviewer_result)
             selected = list(state.observability.get("active_requirement_ids") or [])
             if selected:
+                existing = {
+                    item.id
+                    for item in self.store.load(state.case_id).requirements
+                    if item.id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
+                }
+                selected_set = set(selected)
                 result["case_updates"]["requirements"] = [
                     {
                         "id": requirement_id,
@@ -1342,6 +1405,7 @@ class TurnRunner:
                     for requirement_id in selected
                     if requirement_id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
                 ]
+                result["case_updates"]["remove_requirements"] = sorted(existing - selected_set)
             capability = self.roles.trace_metadata(role)
             capability.update(
                 runtime="deterministic_reducer",
@@ -1397,8 +1461,10 @@ class TurnRunner:
             metadata={"role_capability": role_capability, "step_count": state.step_count},
             as_type="agent",
         ) as span:
+            specialist_started = time.perf_counter()
             try:
                 stream_handler = self._specialist_stream_handler(state, role)
+                self._emit_specialist_progress(state, role, status="started")
                 if stream_handler is None:
                     result = self.roles.call(
                         role,
@@ -1414,6 +1480,12 @@ class TurnRunner:
                         prompt_partition=role_partition_metadata,
                         hooks=self.transcript_hooks(state),
                     )
+                self._emit_specialist_progress(
+                    state,
+                    role,
+                    status="completed",
+                    duration_ms=max(0, int((time.perf_counter() - specialist_started) * 1000)),
+                )
                 _mark_prior_specialist_errors_recovered(
                     state,
                     self.llm.calls,
@@ -1445,8 +1517,20 @@ class TurnRunner:
                 self.harness.record_observation(state, observation)
                 self._update_phase_after_role(state, role, result)
                 span.update(output=safe_role_output(result))
-                return _manager_success("role", role, observation=observation)
+                return _manager_success(
+                    "role",
+                    role,
+                    observation=observation,
+                    result=result if role == "materials_advisor" else None,
+                )
             except Exception as exc:
+                self._emit_specialist_progress(
+                    state,
+                    role,
+                    status="error",
+                    duration_ms=max(0, int((time.perf_counter() - specialist_started) * 1000)),
+                    error_type=type(exc).__name__,
+                )
                 self.harness.record_role_call(state, role, role_input, {}, error=f"{type(exc).__name__}: {exc}", capability=role_capability)
                 self.harness.record_observation(state, self.context.record_error(kind="role", name=role, exc=exc))
                 span.update(output=safe_role_output({}, error=f"{type(exc).__name__}: {exc}"), level="ERROR", status_message=str(exc))
@@ -1468,7 +1552,7 @@ class TurnRunner:
             for item in case_state.requirements
             if item.id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
         ]
-        selected = list(dict.fromkeys([*existing, *requested]))
+        selected = list(dict.fromkeys(requested if requested else existing))
         if not selected:
             exc = ValueError("evidence_reviewer requires at least one active requirement")
             self.harness.record_observation(
@@ -1577,11 +1661,16 @@ class TurnRunner:
                     self.llm,
                     hooks=self.transcript_hooks(state),
                     settings=self.settings,
+                    progress_sink=self._compiler_progress_sink(state),
                 )
                 compiled = runtime.run(
                     active_requirement_ids=selected,
                     prepared_sources=prepared_sources,
                     extraction_summary=extraction_summary,
+                    requirement_requiredness={
+                        item.id: item.required
+                        for item in case_state.requirements
+                    },
                 )
                 result = EvidenceReviewResult.model_validate(compiled.review_result).model_dump(mode="json")
                 state.observability["_pending_review_artifact"] = compiled.artifact.model_dump(mode="json")
@@ -1630,6 +1719,72 @@ class TurnRunner:
                     "role": role,
                     "error": {"type": type(exc).__name__, "message": str(exc)},
                 }
+
+    def _compiler_progress_sink(self, state: HarnessRunState) -> Any:
+        def emit(kind: str, payload: dict[str, Any], summary: str) -> None:
+            stage = str(payload.get("stage") or payload.get("role") or "evidence_compiler")
+            name = str(payload.get("tool") or stage)
+            self.harness.append_debug_event(
+                state,
+                kind=kind,
+                name=name,
+                payload=payload,
+                summary=summary,
+                parent_event_id=state.last_action_event_id,
+                caused_by_event_id=state.last_action_event_id,
+            )
+            self.emit_stream_event(kind, payload, summary=summary)
+
+        return emit
+
+    def _emit_specialist_progress(
+        self,
+        state: HarnessRunState,
+        role: str,
+        *,
+        status: str,
+        duration_ms: int = 0,
+        error_type: str = "",
+    ) -> None:
+        work = {
+            "materials_advisor": "整理补料建议",
+            "report_writer": "整理审核报告",
+        }.get(role, "处理专门任务")
+        label = {
+            "materials_advisor": "材料顾问",
+            "report_writer": "报告撰写员",
+        }.get(role, role)
+        action = {
+            "started": f"{label}正在{work}",
+            "completed": f"{label}已完成{work}",
+            "error": f"{label}{work}失败",
+        }.get(status, f"{label}正在工作")
+        public_reason = {
+            "materials_advisor": "正在根据当前案卷、证据缺口和适用规则生成可执行的补料清单。",
+            "report_writer": "正在根据已验证的证据结论和来源链组织报告。",
+        }.get(role, "正在根据当前任务上下文生成结构化结果。")
+        payload = {
+            "role": role,
+            "stage": role,
+            "status": status,
+            "action": action,
+            "public_reason": public_reason,
+            "step_count": state.step_count,
+        }
+        if duration_ms:
+            payload["duration_ms"] = duration_ms
+        if error_type:
+            payload["error_type"] = error_type
+        self.harness.append_debug_event(
+            state,
+            kind="model_thinking",
+            name=role,
+            payload=payload,
+            summary=action,
+            parent_event_id=state.last_action_event_id,
+            caused_by_event_id=state.last_action_event_id,
+        )
+        self.emit_stream_event("model_thinking", payload, summary=action)
 
     def _specialist_stream_handler(self, state: HarnessRunState, role: str) -> Any | None:
         if not callable(self._stream_emit):
@@ -1942,6 +2097,26 @@ def _manager_result_preview(name: str, result: dict[str, Any] | None) -> Any | N
         return None
     if name in {"read_attachment", "write_case_patch", "write_case_file", "render_pdf"}:
         return None
+    if name == "materials_advisor":
+        tasks = [item for item in result.get("tasks") or [] if isinstance(item, dict)]
+        return {
+            "answer_summary": " ".join(str(result.get("answer") or "").split())[:480],
+            "tasks": [
+                {
+                    "requirement": str(item.get("requirement") or "")[:120],
+                    "current_status": str(item.get("current_status") or "")[:80],
+                    "task": str(item.get("task") or "")[:180],
+                    "why_insufficient": str(item.get("why_insufficient") or "")[:240],
+                }
+                for item in tasks
+            ],
+            "missing_materials": [
+                str(item)[:180] for item in result.get("missing_materials") or [] if str(item).strip()
+            ],
+            "next_questions": [
+                str(item)[:240] for item in result.get("next_questions") or [] if str(item).strip()
+            ],
+        }
     text = json.dumps(result, ensure_ascii=False, default=str)
     if len(text) <= 2200:
         return result
@@ -2236,18 +2411,6 @@ def _stream_text_delta(data: Any) -> str:
     return ""
 
 
-def _stream_reasoning_delta(data: Any) -> str:
-    return extract_stream_reasoning_delta(data)
-
-
-def _append_stream_reasoning(state: HarnessRunState, role: str, delta: str) -> dict[str, Any]:
-    bucket = state.observability.setdefault("_stream_reasoning", {})
-    if not isinstance(bucket, dict):
-        bucket = {}
-        state.observability["_stream_reasoning"] = bucket
-    return append_reasoning_delta(bucket, role, delta)
-
-
 def _stream_agent_role(agent_name: str) -> str:
     name = str(agent_name or "").strip().lower()
     if name in {"case_manager", "manager", "supervisor"}:
@@ -2416,7 +2579,9 @@ def _report_requested_message(message: str) -> bool:
         return False
     text = text.replace("ready_for_report", "")
     compact = compact.replace("ready_for_report", "")
-    if re.search(r"(生成|撰写|写入|写|输出|导出|渲染).{0,16}(报告|pdf)", text, flags=re.I):
+    if re.search(r"(生成|撰写|写入|写|输出|导出|渲染|出具|制作).{0,16}(报告|pdf)", text, flags=re.I):
+        return True
+    if re.search(r"(我要|要|需要|给我|来一份).{0,8}(一份)?(报告|pdf)", text, flags=re.I):
         return True
     return any(
         term in text
@@ -2432,8 +2597,10 @@ def _report_requested_message(message: str) -> bool:
             "write report",
             "render report",
             "export report",
+            "i need a report",
+            "give me a report",
         )
-    ) or any(term in compact for term in ("生成报告", "最终报告", "导出报告", "渲染pdf", "生成pdf", "导出pdf"))
+    ) or any(term in compact for term in ("生成报告", "最终报告", "导出报告", "出具报告", "制作报告", "渲染pdf", "生成pdf", "导出pdf"))
 
 
 def _markdown_only_report_message(message: str) -> bool:

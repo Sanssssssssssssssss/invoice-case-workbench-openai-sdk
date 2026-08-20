@@ -1,0 +1,77 @@
+{
+  "invoice_id": "INV-2026-0183",
+  "vendor": "InGen BioSciences S.A.",
+  "vendor_country": "FR",
+  "vendor_address": {
+    "street": "12 avenue Verrebrille",
+    "postal_code": "75008",
+    "city": "Paris"
+  },
+  "recipient": "Alpenvista Kredit AG",
+  "recipient_country": "CH",
+  "recipient_address": {
+    "street": "Rebenhangweg 91",
+    "postal_code": "8001",
+    "city": "Zürich"
+  },
+  "date": "2026-01-18",
+  "due_date": "2026-02-17",
+  "line_items": [
+    {
+      "description": "Compliance audit preparation (regulations may have changed since)",
+      "quantity": 1,
+      "unit_price": "46444.00",
+      "vat_rate": "0.00",
+      "amount": "46444.00"
+    },
+    {
+      "description": "Board meeting facilitation",
+      "quantity": 5,
+      "unit_price": "890.80",
+      "vat_rate": "0.00",
+      "amount": "4454.00"
+    },
+    {
+      "description": "Backup verification (annual)",
+      "quantity": 1,
+      "unit_price": "39182.20",
+      "vat_rate": "0.00",
+      "amount": "39182.20"
+    },
+    {
+      "description": "Professional indemnity insurance — pro rata",
+      "quantity": 4,
+      "unit_price": "15255.30",
+      "vat_rate": "0.00",
+      "amount": "61021.20"
+    },
+    {
+      "description": "Strategic advisory — Q1 2026 (PowerPoints not included)",
+      "quantity": 10,
+      "unit_price": "228.80",
+      "vat_rate": "0.00",
+      "amount": "2288.00"
+    }
+  ],
+  "subtotal": "153389.40",
+  "vat_rate": "0.00",
+  "vat_amount": "0.00",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "153389.40",
+  "currency": "EUR",
+  "payment_terms": "Net 30 days",
+  "bank_details": "BNP Paribas | IBAN: FR47 5804 3016 9410 4014 1260 704 | BIC: BNPAFRPPXXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "none",
+    "number_format": "english",
+    "layout": "paragraph",
+    "consistency": "correct",
+    "edge_case": "reverse_charge"
+  },
+  "rendered_subtotal": "153389.40",
+  "rendered_total": "153389.40",
+  "error_note": null,
+  "is_credit_note": false
+}

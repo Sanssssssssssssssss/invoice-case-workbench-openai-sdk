@@ -1,0 +1,76 @@
+{
+  "invoice_id": "INV-2026-0104",
+  "vendor": "Dunder Mifflin Europe GmbH",
+  "vendor_country": "DE",
+  "vendor_address": {
+    "street": "Roggenfeldallee 42",
+    "postal_code": "60311",
+    "city": "Frankfurt am Main"
+  },
+  "recipient": "Société Continentale de Logistique S.A.",
+  "recipient_country": "FR",
+  "recipient_address": {
+    "street": "47 rue des Lilas Perdus",
+    "postal_code": "75008",
+    "city": "Paris"
+  },
+  "date": "2026-02-13",
+  "due_date": "2026-03-15",
+  "line_items": [
+    {
+      "description": "Incident response (post-mortem deliverable pending)",
+      "quantity": 1,
+      "unit_price": "36435.90",
+      "vat_rate": "0.20",
+      "amount": "36435.90"
+    },
+    {
+      "description": "Hardware procurement — 4 workstations",
+      "quantity": 4,
+      "unit_price": "23006.80",
+      "vat_rate": "0.20",
+      "amount": "92027.20"
+    },
+    {
+      "description": "Emergency weekend support call (45 minutes, felt longer)",
+      "quantity": 1,
+      "unit_price": "32787.60",
+      "vat_rate": "0.20",
+      "amount": "32787.60"
+    },
+    {
+      "description": "Board meeting facilitation",
+      "quantity": 1,
+      "unit_price": "3847.40",
+      "vat_rate": "0.20",
+      "amount": "3847.40"
+    }
+  ],
+  "subtotal": "165098.10",
+  "vat_rate": "0.20",
+  "vat_amount": "33019.62",
+  "discount": {
+    "type": "trade_terms",
+    "value": "0.02",
+    "applied_to": "subtotal",
+    "description": "2/10 net 30 — conditional early-payment discount",
+    "conditional": true
+  },
+  "discount_amount": "0.00",
+  "total": "198117.72",
+  "currency": "EUR",
+  "payment_terms": "2/10 net 30",
+  "bank_details": "Commerzbank | IBAN: DE20 7477 5908 5281 0741 59 | BIC: COBADEFFXXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "trade_terms",
+    "number_format": "english",
+    "layout": "paragraph",
+    "consistency": "total_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "165098.10",
+  "rendered_total": "192174.19",
+  "error_note": "Displayed total 192174.19 differs from true total 198117.72 by -5943.53 (-3.00%).",
+  "is_credit_note": false
+}

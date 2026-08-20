@@ -64,4 +64,12 @@ describe('eventTitle', () => {
   it('labels summarizer model calls as attachment summaries', () => {
     expect(eventTitle({ ...event('summary', 1), kind: 'artifact_summary', raw_kind: 'model_call', name: 'summarizer' })).toBe('附件摘要')
   })
+
+  it('labels provider calls by compiler role', () => {
+    expect(eventTitle({ ...event('provider', 1), kind: 'observation', raw_kind: 'provider_call', name: 'task_compiler' })).toBe('Provider API 调用：Task Compiler')
+  })
+
+  it('distinguishes aggregate model metrics from a real provider call', () => {
+    expect(eventTitle({ ...event('metrics', 1), kind: 'model', raw_kind: 'model_call', name: 'task_compiler' })).toBe('角色调用统计：Task Compiler')
+  })
 })

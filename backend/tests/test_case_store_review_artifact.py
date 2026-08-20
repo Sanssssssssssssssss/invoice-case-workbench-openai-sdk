@@ -18,6 +18,7 @@ from app.compiler_runtime.models import (
 )
 from app.compiler_runtime.policy import policy_excerpt_for, policy_hash
 from app.state.case_store import CaseStore
+from app.state.schemas import CaseState, Requirement
 
 
 SOURCE_ID = "ev_compiler_source"
@@ -219,12 +220,12 @@ def test_mismatched_review_artifact_rejects_the_whole_patch(store_factory, misma
 
 
 @pytest.mark.parametrize(
-    ("status", "cite_source", "expected_status"),
+    ("status", "cite_source", "expected_status", "expected_case_status"),
     [
-        ("SUPPORTED", True, "accepted"),
-        ("CONTRADICTED", True, "conflict"),
-        ("NOT_FOUND", True, "weak"),
-        ("NOT_FOUND", False, "missing"),
+        ("SUPPORTED", True, "accepted", "ready_for_report"),
+        ("CONTRADICTED", True, "conflict", "ready_for_report"),
+        ("NOT_FOUND", True, "weak", "collecting_materials"),
+        ("NOT_FOUND", False, "missing", "collecting_materials"),
     ],
 )
 def test_requirement_projection_comes_only_from_decision_proof(
@@ -232,6 +233,7 @@ def test_requirement_projection_comes_only_from_decision_proof(
     status: str,
     cite_source: bool,
     expected_status: str,
+    expected_case_status: str,
 ) -> None:
     store = store_factory()
     updated = store.apply_review_patch(
@@ -243,6 +245,143 @@ def test_requirement_projection_comes_only_from_decision_proof(
     requirement = next(item for item in updated.requirements if item.id == "invoice")
     assert requirement.status == expected_status
     assert requirement.evidence_ids == ([SOURCE_ID] if cite_source else [])
+    assert updated.status == expected_case_status
+
+
+def test_contradicted_projection_uses_only_contradicting_leaf_sources() -> None:
+    plan = ProofPlan(
+        plan_id="plan-case-store-polarity",
+        objective="Require two independently grounded checks.",
+        active_requirement_ids=["invoice"],
+        roots={"invoice": "root:invoice"},
+        nodes=[
+            ProofNode(
+                id="check:support",
+                kind="CHECK",
+                statement="The invoice identity is supported.",
+                requirement_refs=["invoice"],
+            ),
+            ProofNode(
+                id="check:conflict",
+                kind="CHECK",
+                statement="The invoice conforms to the baseline.",
+                requirement_refs=["invoice"],
+            ),
+            ProofNode(
+                id="root:invoice",
+                kind="ALL",
+                depends_on=["check:support", "check:conflict"],
+            ),
+        ],
+    )
+    claims = [
+        Claim(
+            id="claim:support",
+            subject="invoice:INV-42",
+            predicate="identity",
+            value="INV-42",
+            source_id="source:support",
+            quote="Invoice INV-42",
+            locator="line 1",
+            confidence="high",
+        ),
+        Claim(
+            id="claim:conflict",
+            subject="invoice:INV-42",
+            predicate="baseline_conformance",
+            value=False,
+            source_id="source:conflict",
+            quote="Baseline contradicted",
+            locator="line 1",
+            confidence="high",
+        ),
+    ]
+    evidence_ir = EvidenceIR(
+        source_ids=["source:support", "source:conflict"],
+        source_fingerprints={
+            "source:support": "sha256:support",
+            "source:conflict": "sha256:conflict",
+        },
+        claims=claims,
+    )
+    examined = ["source:support", "source:conflict"]
+    artifact = ReviewArtifact(
+        plan=plan,
+        plan_hash=plan.content_hash(),
+        evidence_ir=evidence_ir,
+        evidence_snapshot_hash=evidence_ir.content_hash(),
+        assessments=[
+            CheckAssessment(
+                check_id="check:support",
+                status="SUPPORTED",
+                claim_ids=["claim:support"],
+                source_ids=["source:support"],
+                examined_source_ids=examined,
+            ),
+            CheckAssessment(
+                check_id="check:conflict",
+                status="CONTRADICTED",
+                claim_ids=["claim:conflict"],
+                source_ids=["source:conflict"],
+                examined_source_ids=examined,
+            ),
+        ],
+        submitted_claim_refs={
+            "check:support": ["claim:support"],
+            "check:conflict": ["claim:conflict"],
+        },
+        policy_hash="sha256:policy",
+        compiler_version="test",
+        model="fixture",
+    )
+    state = CaseState(
+        case_id="case-polarity-projection",
+        requirements=[Requirement(id="invoice")],
+    )
+
+    case_store_module._project_compiled_requirements(
+        state,
+        compile_review_artifact(artifact),
+    )
+
+    assert state.requirements[0].status == "conflict"
+    assert state.requirements[0].evidence_ids == ["source:conflict"]
+
+
+def test_artifact_projection_replaces_stale_risk_and_question_sidecars(store_factory) -> None:
+    store = store_factory()
+    case_id = "case-canonical-sidecars"
+    contradiction_patch = _review_patch(["invoice"])
+    contradiction_patch["case_updates"].update(
+        {
+            "risk_flags": ["stale-risk"],
+            "next_questions": ["stale question"],
+        }
+    )
+
+    contradicted = store.apply_review_patch(
+        case_id,
+        contradiction_patch,
+        _artifact(["invoice"], status="CONTRADICTED"),
+    )
+
+    assert contradicted.risk_flags == ["invoice"]
+    assert contradicted.next_questions == []
+
+    resolved = store.apply_review_patch(
+        case_id,
+        {
+            "patch_type": "update_case",
+            "case_updates": {
+                "risk_flags": ["stale-risk-again"],
+                "next_questions": ["stale question again"],
+            },
+        },
+        _artifact(["invoice"], status="SUPPORTED"),
+    )
+
+    assert resolved.risk_flags == []
+    assert resolved.next_questions == []
 
 
 def test_compiler_conclusion_projects_to_satisfied(store_factory) -> None:
@@ -258,6 +397,24 @@ def test_compiler_conclusion_projects_to_satisfied(store_factory) -> None:
     requirements = {item.id: item for item in updated.requirements}
     assert requirements["vendor_identity"].status == "accepted"
     assert requirements["vendor_identity_active"].status == "satisfied"
+
+
+def test_optional_template_baseline_gap_does_not_block_report(store_factory) -> None:
+    store = store_factory()
+    patch = _review_patch(["template_match"])
+    patch["case_updates"]["requirements"][0]["required"] = False
+
+    updated = store.apply_review_patch(
+        "case-optional-template-baseline",
+        patch,
+        _artifact(["template_match"], status="NOT_FOUND", cite_source=True),
+    )
+
+    decision = updated.compiled_proof.decision_for("template_match")
+    assert decision.status == "NOT_FOUND"
+    assert updated.requirements[0].status == "weak"
+    assert updated.compiled_proof.obligations[0].blocking is False
+    assert updated.status == "ready_for_report"
 
 
 def test_source_requirement_or_policy_change_invalidates_proof_but_keeps_artifact(

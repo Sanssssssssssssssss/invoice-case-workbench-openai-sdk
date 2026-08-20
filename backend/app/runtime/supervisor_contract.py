@@ -19,7 +19,7 @@ class EvidenceReviewerInput(_SupervisorToolInput):
     mode: Literal["review"] = Field(default="review", description="Run the Evidence Compiler review loop.")
     active_requirement_ids: list[RequirementId] = Field(
         default_factory=list,
-        description="Policy-catalog requirement ids selected for this review scope; omit when the case already defines its scope.",
+        description="Actual Requirement ids selected from profile value lists; profile map keys are grouping labels and are invalid here. Invoice review always includes invoice_calculation_valid. Omit when the case already defines its scope.",
     )
 
 

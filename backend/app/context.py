@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.capabilities import role_input_keys
+from app.compiler_runtime.policy import proof_is_reportable
 from app.domain.invoice_requirements import (
     AUTO_DERIVED_COMPILER_REQUIREMENTS,
     REQUIREMENT_CATALOG_VERSION,
@@ -18,7 +19,7 @@ from app.domain.invoice_requirements import (
 )
 from app.state.attachment_manifest import attachment_manifest_for_context, update_manifest_summaries
 from app.state.artifact_store import ArtifactStore
-from app.guards import enforce_case_state_consistency, enforce_no_execution_wording
+from app.guards import enforce_case_state_consistency, enforce_no_execution_wording, enforce_report_proof_consistency
 from app.llm import LlmClient
 from app.memory_service import MemoryService
 from app.runtime import policy_gate as route_policy
@@ -197,9 +198,16 @@ class ContextManager:
         hydrated["case_state"] = (
             _report_case_state(case_state)
             if role == "report_writer"
+            else _advisor_case_state(case_state)
+            if role == "materials_advisor"
             else _sanitize_case_state(case_state)
         )
-        hydrated["attachment_manifest"] = attachment_manifest_for_context(self.store, state.case_id)
+        attachment_manifest = attachment_manifest_for_context(self.store, state.case_id)
+        hydrated["attachment_manifest"] = (
+            _advisor_attachment_manifest(attachment_manifest)
+            if role == "materials_advisor"
+            else attachment_manifest
+        )
         hydrated["memory_hints"] = self._memory_hints_for_context(
             case_id=state.case_id,
             query=f"{user_message} {getattr(case_state, 'summary', '')}",
@@ -224,13 +232,21 @@ class ContextManager:
             hydrated.setdefault("user_message", user_message)
         elif role == "report_writer":
             hydrated.setdefault("evidence", list(hydrated["case_state"].get("evidence_items") or []))
-            hydrated.setdefault("conversation_summary", case_state.conversation_summary)
             hydrated.setdefault("user_request", user_message)
             hydrated.setdefault("report_instructions", user_message)
-        hydrated.setdefault(
-            "evidence_chain_context",
-            _evidence_chain_context(self.store, state.case_id, case_state, hydrated.get("attachment_manifest") or {}),
+        canonical_evidence_chain = _evidence_chain_context(
+            self.store,
+            state.case_id,
+            case_state,
+            hydrated.get("attachment_manifest") or {},
         )
+        if role == "report_writer":
+            hydrated["evidence_chain_context"] = canonical_evidence_chain
+            hydrated["attachment_manifest"] = {
+                "attachments": list(canonical_evidence_chain.get("attachments") or [])
+            }
+        else:
+            hydrated.setdefault("evidence_chain_context", canonical_evidence_chain)
         return _filter_role_payload(role, hydrated)
 
     def pop_pending_rag_debug(self, state: Any, role: str) -> list[dict[str, Any]]:
@@ -269,9 +285,11 @@ class ContextManager:
                     text = str(value)
                     if role_name == "report_writer" and field == "markdown":
                         text = _apply_report_instruction_appendix(text, getattr(state, "user_message_for_planner", ""))
-                        text = _sanitize_report_markdown_for_guards(text, self.store.load(case_id))
+                        case_state = self.store.load(case_id)
+                        text = _sanitize_report_markdown_for_guards(text, case_state)
                         text = enforce_no_execution_wording(text)
-                        text = enforce_case_state_consistency(text, self.store.load(case_id))
+                        text = enforce_report_proof_consistency(text, case_state)
+                        text = enforce_case_state_consistency(text, case_state)
                     return text
         raise ValueError(f"Unsupported content_ref: {content_ref}")
 
@@ -591,6 +609,10 @@ def _heuristic_summary(artifact_type: str, name: str, result: Any) -> SummaryRes
                     next_action_hint="call_role:evidence_reviewer_review",
                 )
             suggested = result.get("suggested_patch") or {}
+            contradicted = _unique_nonempty(
+                list(result.get("risk_flags") or [])
+                + list(suggested.get("risk_flags") or [])
+            )
             return SummaryResult(
                 summary=(
                     "证据审查完成："
@@ -598,7 +620,7 @@ def _heuristic_summary(artifact_type: str, name: str, result: Any) -> SummaryRes
                     f"credibility={result.get('credibility', 'unknown')}; "
                     f"should_accept={result.get('should_accept')}; "
                     f"supports={len(result.get('supports') or [])}; "
-                    f"conflicts={len(result.get('conflicts') or [])}; "
+                    f"conflicts={len(contradicted)}; "
                     f"cards={len(result.get('evidence_cards') or [])}; "
                     f"add_evidence={len(suggested.get('add_evidence') or [])}."
                 ),
@@ -607,7 +629,7 @@ def _heuristic_summary(artifact_type: str, name: str, result: Any) -> SummaryRes
                     for item in result.get("supports") or []
                     if isinstance(item, dict)
                 ][:8],
-                risks=[f"conflicts={len(result.get('conflicts') or [])}"] if result.get("conflicts") else [],
+                risks=[f"proof_contradiction:{item}" for item in contradicted[:6]],
                 missing_items=list(suggested.get("missing_materials") or [])[:8],
                 next_action_hint="call_role:case_patch_writer",
             )
@@ -648,8 +670,14 @@ def _heuristic_summary(artifact_type: str, name: str, result: Any) -> SummaryRes
                 next_action_hint="write_case_patch",
             )
         if name == "write_case_patch":
+            requirement_facts = [
+                f"{item.get('id')}={item.get('status')}"
+                for item in list(result.get("requirements") or [])
+                if str(item.get("id") or "").strip() and str(item.get("status") or "").strip()
+            ]
             return SummaryResult(
                 summary=f"Case state updated: status={result.get('status')}, evidence={len(result.get('evidence_items') or [])}.",
+                key_facts=requirement_facts[:12],
                 missing_items=list(result.get("missing_materials") or [])[:8],
                 next_action_hint="final_answer",
             )
@@ -1391,24 +1419,127 @@ def _sanitize_case_state(case_state: Any) -> dict[str, Any]:
     return data
 
 
+def _advisor_case_state(case_state: Any) -> dict[str, Any]:
+    requirements = list(getattr(case_state, "requirements", []) or [])
+    referenced_evidence_ids = {
+        str(evidence_id)
+        for requirement in requirements
+        for evidence_id in list(getattr(requirement, "evidence_ids", []) or [])
+        if str(evidence_id)
+    }
+    proof = getattr(case_state, "compiled_proof", None)
+    return {
+        "case_id": str(getattr(case_state, "case_id", "") or ""),
+        "case_type": str(getattr(case_state, "case_type", "") or ""),
+        "status": str(getattr(case_state, "status", "") or ""),
+        "requirements": [
+            {
+                "id": str(getattr(item, "id", "") or ""),
+                "label": str(getattr(item, "label", "") or ""),
+                "kind": str(getattr(item, "kind", "") or ""),
+                "required": bool(getattr(item, "required", True)),
+                "status": str(getattr(item, "status", "") or ""),
+                "evidence_ids": list(getattr(item, "evidence_ids", []) or []),
+            }
+            for item in requirements
+        ],
+        "missing_materials": list(getattr(case_state, "missing_materials", []) or []),
+        "weak_materials": list(getattr(case_state, "weak_materials", []) or []),
+        "conflict_materials": list(getattr(case_state, "conflict_materials", []) or []),
+        "satisfied_materials": list(getattr(case_state, "satisfied_materials", []) or []),
+        "risk_flags": _brief_list(
+            _sanitize_prompt_injection_details(getattr(case_state, "risk_flags", [])),
+            8,
+            220,
+        ),
+        "evidence_items": [
+            {
+                "id": str(getattr(item, "id", "") or ""),
+                "type": str(getattr(item, "type", "") or ""),
+                "source": str(getattr(item, "source", "") or ""),
+                "credibility": str(getattr(item, "credibility", "") or ""),
+                "summary": _brief_text(
+                    _sanitize_prompt_injection_details(getattr(item, "summary", "")),
+                    360,
+                ),
+            }
+            for item in list(getattr(case_state, "evidence_items", []) or [])
+            if str(getattr(item, "id", "") or "") in referenced_evidence_ids
+        ],
+        "compiled_proof": {
+            "decisions": [
+                item.model_dump(mode="json")
+                for item in list(getattr(proof, "decisions", []) or [])
+            ],
+            "obligations": [
+                item.model_dump(mode="json")
+                for item in list(getattr(proof, "obligations", []) or [])
+            ],
+        }
+        if proof is not None
+        else None,
+    }
+
+
+def _advisor_attachment_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "manifest_ref": manifest.get("manifest_ref", ""),
+        "version": manifest.get("version", ""),
+        "status_counts": dict(manifest.get("status_counts") or {}),
+        "attachments": [
+            {
+                "attachment_id": item.get("attachment_id", ""),
+                "name": item.get("name", ""),
+                "content_kind": item.get("content_kind", ""),
+                "status": item.get("status", ""),
+                "summary": _brief_text(
+                    _sanitize_prompt_injection_details(item.get("summary", "")),
+                    360,
+                ),
+                "risks": _brief_list(
+                    _sanitize_prompt_injection_details(item.get("risks")),
+                    4,
+                    180,
+                ),
+                "original_ref": item.get("original_ref", ""),
+                "evidence_ids": list(item.get("evidence_ids") or [])[:6],
+            }
+            for item in list(manifest.get("attachments") or [])
+            if isinstance(item, dict)
+        ],
+    }
+
+
 def _report_case_state(case_state: Any) -> dict[str, Any]:
-    data = _sanitize_case_state(case_state)
     artifact = getattr(case_state, "review_artifact", None)
+    proof = getattr(case_state, "compiled_proof", None)
     evidence_ir = getattr(artifact, "evidence_ir", None)
     source_ids = set(getattr(evidence_ir, "source_ids", []) or [])
     source_fingerprints = dict(getattr(evidence_ir, "source_fingerprints", {}) or {})
-    data["evidence_items"] = [
-        {
-            "id": str(getattr(item, "id", "") or ""),
-            "type": str(getattr(item, "type", "") or ""),
-            "source": str(getattr(item, "source", "") or ""),
-            "credibility": str(getattr(item, "credibility", "") or ""),
-            "source_fingerprint": source_fingerprints.get(str(getattr(item, "id", "") or ""), ""),
-        }
-        for item in list(getattr(case_state, "evidence_items", []) or [])
-        if str(getattr(item, "id", "") or "") in source_ids
-    ]
-    return data
+    return {
+        "case_id": str(getattr(case_state, "case_id", "") or ""),
+        "case_type": str(getattr(case_state, "case_type", "") or ""),
+        "status": str(getattr(case_state, "status", "") or ""),
+        "case_profile": dict(getattr(case_state, "case_profile", {}) or {}),
+        "reportable": proof_is_reportable(proof),
+        "requirement_labels": {
+            str(getattr(item, "id", "") or ""): str(getattr(item, "label", "") or "")
+            for item in list(getattr(case_state, "requirements", []) or [])
+            if str(getattr(item, "id", "") or "")
+        },
+        "compiled_proof": proof.model_dump(mode="json") if proof is not None else None,
+        "evidence_items": [
+            {
+                "id": str(getattr(item, "id", "") or ""),
+                "type": str(getattr(item, "type", "") or ""),
+                "source": str(getattr(item, "source", "") or ""),
+                "credibility": str(getattr(item, "credibility", "") or ""),
+                "source_fingerprint": source_fingerprints.get(str(getattr(item, "id", "") or ""), ""),
+            }
+            for item in list(getattr(case_state, "evidence_items", []) or [])
+            if str(getattr(item, "id", "") or "") in source_ids
+        ],
+    }
 
 
 def _sanitize_evidence(item: Any) -> dict[str, Any]:
@@ -1529,7 +1660,11 @@ def _evidence_chain_context(store: CaseStore, case_id: str, case_state: Any, att
             }
         )
     return {
-        "purpose": "descriptive source context; DecisionProof and root NodeResult are the only conclusion authority",
+        "purpose": (
+            "descriptive source context; DecisionProof is conclusion authority and only its "
+            "status-specific leaf check NodeResults are evidence authority"
+        ),
+        "reportable": proof_is_reportable(proof),
         "decisions": [item.model_dump(mode="json") for item in list(getattr(proof, "decisions", []) or [])],
         "node_results": [item.model_dump(mode="json") for item in list(getattr(proof, "node_results", []) or [])],
         "obligations": [item.model_dump(mode="json") for item in list(getattr(proof, "obligations", []) or [])],
@@ -2073,6 +2208,23 @@ def classify_runtime_error(*, kind: str, name: str, error: dict[str, Any] | str)
             "blocked_action": f"delegate_agent:{name}" if kind == "role" and name else "",
             "user_message_hint": (
                 "模型调用超时，本轮不要重复调用同一个 specialist；请基于已有 case_state/observations 告知用户稍后重试。"
+            ),
+        }
+    if kind in {"role", "model"} and (
+        "apiconnectionerror" in text
+        or "connection error" in text
+        or "connection reset" in text
+        or "connection aborted" in text
+    ):
+        return {
+            "status": "terminal",
+            "error_type": "llm_connection_error",
+            "retry_allowed": False,
+            "recommended_action": "final_answer",
+            "blocked_action": f"delegate_agent:{name}" if kind == "role" and name else "",
+            "user_message_hint": (
+                "模型连接在本轮内部重试后仍然失败；不要再次运行同一个 specialist，"
+                "请告知用户连接暂时不可用并稍后重新发起。"
             ),
         }
     if name == "read_attachment" and (

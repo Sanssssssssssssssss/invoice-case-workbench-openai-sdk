@@ -262,7 +262,7 @@ class SessionRepository:
             self._ensure_session(conn, case_id)
             rows = conn.execute(
                 """
-                SELECT role, content, content_ref, content_summary, metadata_json, created_at
+                SELECT role, content, content_ref, content_summary, attachments_json, metadata_json, created_at
                 FROM session_items
                 WHERE case_id=? AND active=1
                 ORDER BY id DESC LIMIT ?
@@ -278,7 +278,37 @@ class SessionRepository:
                     "ts": row["created_at"],
                     "role": row["role"],
                     "content": content,
+                    "attachments": self._safe_attachment_metadata(case_id, _loads_list(row["attachments_json"])),
                     "metadata": metadata,
+                }
+            )
+        return records
+
+    def _safe_attachment_metadata(self, case_id: str, attachments: list[Any]) -> list[dict[str, str]]:
+        case_root = self.store.case_dir(case_id).resolve()
+        records: list[dict[str, str]] = []
+        for item in attachments:
+            if not isinstance(item, dict):
+                continue
+            name = Path(str(item.get("name") or "attachment")).name
+            raw_path = str(item.get("relative_path") or item.get("path") or "").strip()
+            relative_path = ""
+            if raw_path:
+                candidate = Path(raw_path)
+                try:
+                    relative_path = (
+                        candidate.resolve().relative_to(case_root).as_posix()
+                        if candidate.is_absolute()
+                        else candidate.as_posix().lstrip("/")
+                    )
+                    self.store.resolve_case_path(case_id, relative_path)
+                except (OSError, ValueError):
+                    relative_path = ""
+            records.append(
+                {
+                    "name": name,
+                    "path": relative_path,
+                    "content_type": str(item.get("content_type") or "application/octet-stream"),
                 }
             )
         return records

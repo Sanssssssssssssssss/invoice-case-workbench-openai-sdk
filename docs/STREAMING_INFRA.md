@@ -1,6 +1,6 @@
 # Streaming Infra
 
-This project keeps the blocking `POST /api/agent/turn` contract and adds a default streaming run path for the renderer.
+The renderer and benchmark use a single streaming run path. There is no blocking turn fallback.
 
 ## API
 
@@ -14,8 +14,6 @@ This project keeps the blocking `POST /api/agent/turn` contract and adds a defau
 - `POST /api/agent/runs/{run_id}/approval`
   - Body: `{ case_id, approved, reason }`.
   - Continues the same run stream after an approval decision.
-
-The legacy `POST /api/cases/{case_id}/runs/{run_id}/approval` remains available for blocking fallback.
 
 ## Events
 
@@ -36,7 +34,7 @@ Intermediate events are summary-only. They must not include raw prompts, raw att
 
 ## Runtime
 
-The streaming manager path uses OpenAI Agents SDK `Runner.run_streamed(...)`. The synchronous path still uses `Runner.run(...)` through `run_agent_sync(...)`.
+The streaming manager path uses OpenAI Agents SDK `Runner.run_streamed(...)`.
 
 FastAPI lifespan enables a shared `AsyncOpenAI` client pool keyed by API key, base URL, and timeout. CLI and test paths that do not start the app lifespan still create temporary clients and close them after the run.
 
@@ -47,7 +45,7 @@ SDK tool calls are exposed to the manager as async tools, while the existing syn
 Default benchmark runs are fake/scripted and do not call an LLM:
 
 ```powershell
-python -m benchmarks.infra.run --mode fake --transport sse --variants blocking,streaming --scenarios simple,material_advice,small_attachment,report_approval
+python -m benchmarks.infra.run --mode fake --transport sse --variants streaming --scenarios simple,material_advice,small_attachment,report_approval
 ```
 
 Reports are written under `benchmarks/infra/reports/`.
@@ -59,7 +57,7 @@ Metrics include accepted latency, first SSE event latency, first assistant delta
 ## Regression Targets
 
 - First SSE p95 under 300 ms on local fake/scripted runs.
-- Streaming final latency no more than 5% slower than blocking for comparable fake scenarios.
+- Streaming final latency remains stable across comparable fake scenarios.
 - Event loop lag p95 under 50 ms on local fake/scripted runs.
 - Shared client reuse should reduce repeated live simple-run p95 final latency once real network/model overhead is included.
 - Approval resume must either continue to final or surface an `error` event without breaking the next chat command.

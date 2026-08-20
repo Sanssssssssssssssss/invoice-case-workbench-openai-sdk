@@ -7,6 +7,7 @@ from app.harness import HarnessRuntime, HarnessRunState
 from app.llm import LlmClient
 from app.observability.langfuse_tracer import LangfuseTracer
 from app.observability.model_metrics import summarize_model_metrics
+from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.session_manager import SessionManager
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnResponse, SupervisorDecision
@@ -42,6 +43,7 @@ class TraceRecorder:
         self.harness.persist_trace_checkpoint(state, action)
 
     def finalize_turn(self, state: HarnessRunState) -> AgentTurnResponse:
+        RuntimeCheckpointStore(self.store).clear(state.case_id, state.run_id)
         case_state = self.store.load(state.case_id)
         self.record_model_call_debug(state)
         self.harness.finalize_run(state)

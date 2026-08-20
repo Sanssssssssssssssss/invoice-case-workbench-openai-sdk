@@ -9,20 +9,12 @@ from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
-
 from app.api.read_models import WorkbenchReadService, case_summary_from_state
-from app.runtime.turn_runner import AgentRuntime
 from app.state.case_store import CaseStore, FileBoundaryError
 from app.state.schemas import timestamp_case_id
 
 
 router = APIRouter(prefix="/api", tags=["workbench"])
-
-
-class ApprovalResumeRequest(BaseModel):
-    approved: bool
-    reason: str = ""
 
 
 def _service() -> WorkbenchReadService:
@@ -155,18 +147,6 @@ def get_run_events(
 ) -> list[dict[str, Any]]:
     try:
         return [_to_json(item) for item in _service().run_events(case_id, run_id, limit=limit, after_seq=after_seq)]
-    except (FileBoundaryError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/cases/{case_id}/runs/{run_id}/approval")
-def resume_run_approval(case_id: str, run_id: str, request: ApprovalResumeRequest) -> dict[str, Any]:
-    try:
-        return AgentRuntime().resume_approval(case_id, run_id, approved=request.approved, reason=request.reason).model_dump(mode="json")
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (FileBoundaryError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -43,9 +43,24 @@ def test_requirement_profiles_are_loaded_from_versioned_policy_pack() -> None:
     )
     assert "currency_tax" in INVOICE_REQUIRED_FIELD_REQUIREMENTS
     assert "template_match" in INVOICE_OPTIONAL_FIELD_REQUIREMENTS
+    assert "invoice" not in INVOICE_REQUIRED_FIELD_REQUIREMENTS
+    assert "invoice_calculation_valid" not in INVOICE_REQUIRED_FIELD_REQUIREMENTS
+    assert profile_requirements("invoice_only")[:2] == ("invoice", "invoice_number")
+    assert "invoice_calculation_valid" in profile_requirements("invoice_only")
+    for profile_id, rows in REQUIREMENT_PACK["profiles"].items():
+        profile_ids = {str(row["id"]) for row in rows}
+        if "invoice" in profile_ids:
+            assert "invoice_calculation_valid" in profile_ids, profile_id
     assert COMPILER_DERIVED_REQUIREMENTS == {"three_way_amount_match", "no_active_duplicate"}
     assert "vendor_bank_account_authorized" in REVIEWER_DERIVED_REQUIREMENTS
     assert "approval_authority_limits" in REQUIREMENT_PACK["unconfigured_policy_values"]
+    assert "invoice_calculation_rounding_tolerance" not in REQUIREMENT_PACK["unconfigured_policy_values"]
+    assert REQUIREMENT_PACK["invoice_calculation_rounding_tolerance"] == {
+        "amount": "0.01",
+        "unit": "document_currency",
+        "scope": "invoice_internal_arithmetic_rounding",
+        "note": "Absolute rounding allowance for one invoice's internal arithmetic; this is not the three-way matching percentage tolerance.",
+    }
 
 
 def test_enterprise_profiles_keep_materials_and_semantic_conclusions_separate() -> None:
@@ -92,6 +107,20 @@ def test_requirement_pack_rejects_old_contract_fields_in_planning_hints(tmp_path
     path.write_text(json.dumps(pack), encoding="utf-8")
 
     with pytest.raises(ValueError, match="planning hint"):
+        load_requirement_pack(path)
+
+
+def test_requirement_pack_rejects_invoice_profile_without_calculation(tmp_path) -> None:
+    path = tmp_path / "policy.json"
+    pack = deepcopy(REQUIREMENT_PACK)
+    pack["profiles"]["invoice_only"] = [
+        row
+        for row in pack["profiles"]["invoice_only"]
+        if row["id"] != "invoice_calculation_valid"
+    ]
+    path.write_text(json.dumps(pack), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must include invoice_calculation_valid"):
         load_requirement_pack(path)
 
 

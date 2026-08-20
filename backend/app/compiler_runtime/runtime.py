@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from agents import Agent, FunctionTool, ModelSettings, ToolsToFinalOutputResult
 from agents.exceptions import MaxTurnsExceeded
@@ -13,10 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.thinking import model_extra_body_for_thinking, temperature_for_thinking
 from app.config import Settings
+from app.domain.invoice_requirements import default_requirement_required, requirement_evidence_type
 from app.llm import LlmClient, ModelCallRecord
 from app.runtime.agents_sdk import FencedJsonOutputSchema, build_run_config, run_agent_sync
 from app.runtime.context_partition import usage_from_result
-from app.runtime.reasoning_capture import extract_reasoning_from_result
+from app.runtime.retry import is_transient_llm_error
 
 from .kernel import compile_review_artifact
 from .policy import (
@@ -32,15 +33,16 @@ from .models import (
     EvidenceIR,
     ProofPlan,
     ReviewArtifact,
+    explicit_final_statuses,
 )
 from .sandbox import EvidenceSandbox, SourceRecord
 
 
 COMPILER_VERSION = "evidence_compiler_runtime_v2"
 PROMPT_VERSIONS = {
-    "task_compiler": "task_compiler_v4",
-    "executor": "evidence_executor_v2",
-    "verifier": "fine_verifier_v4",
+    "task_compiler": "task_compiler_v8",
+    "executor": "evidence_executor_v4",
+    "verifier": "fine_verifier_v9",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
 _TRACE_METADATA = {
@@ -184,10 +186,12 @@ class EvidenceCompilerRuntime:
         *,
         hooks: Any | None = None,
         settings: Settings | None = None,
+        progress_sink: Callable[[str, dict[str, Any], str], None] | None = None,
     ) -> None:
         self.llm = llm
         self.settings = settings or llm.settings
         self.hooks = hooks
+        self.progress_sink = progress_sink
 
     def compile_task(
         self,
@@ -198,6 +202,15 @@ class EvidenceCompilerRuntime:
         extraction_summary: Sequence[dict[str, Any]] = (),
     ) -> ProofPlan:
         requirement_ids = _unique(active_requirement_ids)
+        self._progress(
+            "model_started",
+            stage="task_compiler",
+            status="started",
+            action="正在把审核目标编译成可核查的 Proof Plan",
+            public_reason="先明确检查边界和完成条件，再让 Worker 阅读证据。",
+            requirement_count=len(requirement_ids),
+            source_count=len(source_catalog),
+        )
         payload = {
             "active_requirements": requirement_context(requirement_ids),
             "policy": policy_excerpt,
@@ -216,12 +229,24 @@ class EvidenceCompilerRuntime:
             max_turns=1,
         )
         if plan.active_requirement_ids != requirement_ids:
+            self._progress_error("task_compiler", "Proof Plan 改变了活动 Requirement 范围。")
             raise ValueError("Task Compiler changed the ordered active requirement set")
         expected_policy_refs = sorted(required_policy_refs(requirement_ids))
         if sorted(plan.policy_refs) != expected_policy_refs:
+            self._progress_error("task_compiler", "Proof Plan 没有完整覆盖适用 Policy。")
             raise ValueError(
                 f"Task Compiler policy coverage mismatch: expected={expected_policy_refs}, got={sorted(plan.policy_refs)}"
             )
+        self._progress(
+            "model_thinking",
+            stage="task_compiler",
+            status="completed",
+            action="Proof Plan 已通过结构校验",
+            public_reason="活动 Requirement、Policy 引用和无环结构均已覆盖。",
+            requirement_count=len(requirement_ids),
+            root_count=len(plan.roots),
+            check_count=sum(1 for node in plan.nodes if node.kind == "CHECK"),
+        )
         return plan
 
     def execute_plan(
@@ -271,6 +296,16 @@ class EvidenceCompilerRuntime:
             "hook_feedback": list(hook_feedback),
         }
         target_check_ids = _unique(focus_check_ids) or check_ids
+        self._progress(
+            "model_started",
+            stage="executor",
+            status="started",
+            action="Evidence Worker 正在按 Plan 读取来源并绑定 Claim",
+            public_reason="Worker 只能通过证据沙箱读取来源、绑定事实和提交检查。",
+            source_count=len(source_records),
+            target_check_count=len(target_check_ids),
+            existing_claim_count=len(sandbox.evidence_ir.claims),
+        )
         submission_counts = {
             check_id: sum(1 for item in sandbox.submissions if item.check_id == check_id)
             for check_id in target_check_ids
@@ -281,7 +316,7 @@ class EvidenceCompilerRuntime:
                 prompt_file="executor.md",
                 payload=payload,
                 output_type=ExecutorSummary,
-                tools=_sandbox_tools(sandbox),
+                tools=_sandbox_tools(sandbox, progress_sink=self._sandbox_progress),
                 max_turns=6,
                 tool_use_behavior=_completion_hook(
                     sandbox,
@@ -300,7 +335,20 @@ class EvidenceCompilerRuntime:
             (set(summary.completed_check_ids) | set(summary.unresolved_check_ids)) - set(check_ids)
         )
         if unknown:
+            self._progress_error("executor", "Worker 提交了 Proof Plan 之外的检查。")
             raise ValueError(f"Executor referenced checks outside the ProofPlan: {unknown}")
+        self._progress(
+            "model_thinking",
+            stage="executor",
+            status="completed",
+            action="Evidence Worker 已完成本轮证据工作",
+            public_reason="已采纳的 Claim 与检查提交已冻结，等待独立 Verifier 核查。",
+            source_count=len(sandbox.source_records),
+            read_source_count=len(sandbox.read_source_ids),
+            claim_count=len(sandbox.evidence_ir.claims),
+            submitted_check_count=len({item.check_id for item in sandbox.submissions}),
+            unresolved_check_count=len(summary.unresolved_check_ids),
+        )
         return summary, sandbox
 
     def verify(
@@ -310,6 +358,15 @@ class EvidenceCompilerRuntime:
         sandbox: EvidenceSandbox,
         policy_excerpt: dict[str, Any],
     ) -> list[CheckAssessment]:
+        self._progress(
+            "model_started",
+            stage="fine_verifier",
+            status="started",
+            action="Fine Verifier 正在逐项核查原子命题",
+            public_reason="Verifier 只读取检查、Claim、原始引用与 Policy，不沿用 Worker 的最终判断。",
+            check_count=sum(1 for node in plan.nodes if node.kind == "CHECK"),
+            claim_count=len(sandbox.evidence_ir.claims),
+        )
         claims = {claim.id: claim for claim in sandbox.evidence_ir.claims}
         submitted_refs = _submitted_claim_refs(sandbox)
         sources = [
@@ -318,12 +375,14 @@ class EvidenceCompilerRuntime:
                 "title": source.title,
                 "kind": source.kind,
                 "content": source.content,
+                "system_provenance": dict(source.provenance),
             }
             for source in sandbox.source_records
         ]
         visible_source_ids = {item["source_id"] for item in sources}
         admitted_source_ids = set(sandbox.evidence_ir.source_ids)
         if visible_source_ids != admitted_source_ids:
+            self._progress_error("fine_verifier", "Verifier 的来源快照与 Evidence IR 不一致。")
             raise ValueError(
                 "Fine Verifier source snapshot mismatch: "
                 f"missing={sorted(admitted_source_ids - visible_source_ids)}, "
@@ -360,9 +419,50 @@ class EvidenceCompilerRuntime:
         expected = {item["id"] for item in checks}
         actual = [item.check_id for item in batch.assessments]
         if len(actual) != len(set(actual)) or set(actual) != expected:
+            self._progress_error("fine_verifier", "Verifier 没有对每个 CHECK 恰好核查一次。")
             raise ValueError(
                 f"Fine Verifier must assess every CHECK exactly once: expected={sorted(expected)}, got={sorted(actual)}"
             )
+        reconciled: list[CheckAssessment] = []
+        corrections: list[dict[str, str]] = []
+        for assessment in batch.assessments:
+            explicit_statuses = explicit_final_statuses(assessment.reason)
+            if len(explicit_statuses) == 1 and assessment.status not in explicit_statuses:
+                corrected_status = next(iter(explicit_statuses))
+                corrections.append(
+                    {
+                        "check_id": assessment.check_id,
+                        "from": assessment.status,
+                        "to": corrected_status,
+                    }
+                )
+                assessment = assessment.model_copy(update={"status": corrected_status})
+            reconciled.append(assessment)
+        if corrections:
+            batch = batch.model_copy(update={"assessments": reconciled})
+            self._progress(
+                "model_thinking",
+                stage="fine_verifier",
+                status="reconciled",
+                action="Verifier 的显式终态已与结构化状态对齐",
+                public_reason="只对齐模型自己明确写出的最终分类，不重新解释业务证据。",
+                corrections=corrections,
+            )
+        counts = {
+            status.lower(): sum(1 for item in batch.assessments if item.status == status)
+            for status in ("SUPPORTED", "CONTRADICTED", "NOT_FOUND")
+        }
+        self._progress(
+            "model_thinking",
+            stage="fine_verifier",
+            status="completed",
+            action="Fine Verifier 已完成全部原子检查",
+            public_reason="三态结果已经引用完整性校验，可交给 Proof Kernel 聚合。",
+            check_count=len(batch.assessments),
+            supported_count=counts["supported"],
+            contradicted_count=counts["contradicted"],
+            not_found_count=counts["not_found"],
+        )
         return batch.assessments
 
     def run(
@@ -372,8 +472,18 @@ class EvidenceCompilerRuntime:
         prepared_sources: Sequence[PreparedSource],
         policy_excerpt: dict[str, Any] | None = None,
         extraction_summary: Sequence[dict[str, Any]] = (),
+        requirement_requiredness: Mapping[str, bool] | None = None,
     ) -> CompilerRunResult:
         active_ids = expand_active_requirements(active_requirement_ids)
+        requiredness = {
+            requirement_id: bool(
+                (requirement_requiredness or {}).get(
+                    requirement_id,
+                    default_requirement_required(requirement_id),
+                )
+            )
+            for requirement_id in active_ids
+        }
         policy_excerpt = policy_excerpt or policy_excerpt_for(active_ids)
         plan = self.compile_task(
             active_requirement_ids=active_ids,
@@ -403,9 +513,23 @@ class EvidenceCompilerRuntime:
             policy_excerpt=policy_excerpt,
             model=self.settings.llm_model,
         )
-        proof = compile_review_artifact(artifact)
+        self._progress(
+            "model_started",
+            stage="proof_kernel",
+            status="started",
+            action="Proof Kernel 正在聚合三态检查结果",
+            public_reason="Kernel 只验证引用与传播三值逻辑，不重新解释业务语义。",
+            assessment_count=len(assessments),
+        )
+        proof = compile_review_artifact(
+            artifact,
+            requirement_requiredness=requiredness,
+        )
+        self._emit_kernel_completed(proof)
 
-        blocking_check_ids = sorted({item.check_id for item in proof.obligations})
+        blocking_check_ids = sorted(
+            {item.check_id for item in proof.obligations if item.blocking}
+        )
         retryable = _retryable_checks(plan, blocking_check_ids, policy_excerpt)
         retry_count = 0
         if retryable:
@@ -441,7 +565,20 @@ class EvidenceCompilerRuntime:
                     policy_excerpt=policy_excerpt,
                     model=self.settings.llm_model,
                 )
-                proof = compile_review_artifact(artifact)
+                self._progress(
+                    "model_started",
+                    stage="proof_kernel",
+                    status="started",
+                    action="Proof Kernel 正在重新聚合新增证据",
+                    public_reason="主动验证产生了新的有效 Claim，Kernel 将重新计算 DecisionProof。",
+                    assessment_count=len(assessments),
+                    retry=1,
+                )
+                proof = compile_review_artifact(
+                    artifact,
+                    requirement_requiredness=requiredness,
+                )
+                self._emit_kernel_completed(proof)
 
         return CompilerRunResult(
             artifact=artifact,
@@ -469,7 +606,6 @@ class EvidenceCompilerRuntime:
         if not self.llm.available:
             raise RuntimeError("LLM_API_KEY is required for Evidence Compiler execution")
         prompt = (_PROMPT_ROOT / prompt_file).read_text(encoding="utf-8")
-        started = time.perf_counter()
         model = self.settings.llm_model
         agent = Agent(
             name=name,
@@ -483,71 +619,160 @@ class EvidenceCompilerRuntime:
             output_type=FencedJsonOutputSchema(output_type, strict_json_schema=False),
             tool_use_behavior=tool_use_behavior,
         )
-        run_config = build_run_config(
-            self.settings,
-            workflow_name=f"invoice_agent.compiler.{name}",
-            trace_metadata={
-                "role": name,
-                "prompt_version": PROMPT_VERSIONS[name if name != "fine_verifier" else "verifier"],
-                "compiler_version": COMPILER_VERSION,
-            },
-            timeout_seconds=self.settings.evidence_reviewer_timeout_seconds,
-        )
         input_text = json.dumps(payload, ensure_ascii=False, default=str)
-        try:
-            result = run_agent_sync(
-                agent,
-                input_text,
-                max_turns=max_turns,
-                hooks=self.hooks,
-                run_config=run_config,
+        prompt_version = PROMPT_VERSIONS[name if name != "fine_verifier" else "verifier"]
+        failed_record: ModelCallRecord | None = None
+        for attempt in range(2):
+            # A failed SDK run closes its client. Build a fresh config so the one
+            # visible transport retry cannot reuse a broken connection pool.
+            run_config = build_run_config(
+                self.settings,
+                workflow_name=f"invoice_agent.compiler.{name}",
+                trace_metadata={
+                    "role": name,
+                    "prompt_version": prompt_version,
+                    "compiler_version": COMPILER_VERSION,
+                    "transport_attempt": attempt + 1,
+                },
+                timeout_seconds=self.settings.evidence_reviewer_timeout_seconds,
             )
-            parsed = result.final_output
-            if not isinstance(parsed, output_type):
-                parsed = output_type.model_validate(parsed)
-            raw = parsed.model_dump_json()
-            usage = usage_from_result(result)
-            reasoning = extract_reasoning_from_result(result)
-            self.llm.calls.append(
-                ModelCallRecord(
-                    role=name,
-                    model=model,
-                    prompt_version=PROMPT_VERSIONS[name if name != "fine_verifier" else "verifier"],
-                    input_preview=input_text[:1400],
-                    output_preview=raw[:1400],
-                    system_prompt=prompt,
-                    payload=payload,
-                    raw_response=raw,
-                    usage=usage,
-                    latency_ms=round((time.perf_counter() - started) * 1000, 2),
-                    content_chars=len(raw),
-                    runtime="evidence_compiler_runtime",
-                    reasoning_excerpt=reasoning.text if reasoning else "",
-                    reasoning_chars=reasoning.chars if reasoning else 0,
-                    reasoning_chunks=reasoning.chunks if reasoning else 0,
-                    thinking_type="disabled",
-                    reasoning_source=reasoning.source if reasoning else "",
+            attempt_started = time.perf_counter()
+            try:
+                result = run_agent_sync(
+                    agent,
+                    input_text,
+                    max_turns=max_turns,
+                    hooks=self.hooks,
+                    run_config=run_config,
                 )
-            )
-            return parsed
-        except Exception as exc:
-            if self.hooks is not None and hasattr(self.hooks, "record_error"):
-                self.hooks.record_error(exc)
-            self.llm.calls.append(
-                ModelCallRecord(
+                parsed = result.final_output
+                if not isinstance(parsed, output_type):
+                    parsed = output_type.model_validate(parsed)
+                raw = parsed.model_dump_json()
+                usage = usage_from_result(result)
+                if failed_record is not None:
+                    failed_record.recovered_by = "compiler_transport_retry_success"
+                self.llm.calls.append(
+                    ModelCallRecord(
+                        role=name,
+                        model=model,
+                        prompt_version=prompt_version,
+                        input_preview=input_text[:1400],
+                        output_preview=raw[:1400],
+                        system_prompt=prompt,
+                        payload=payload,
+                        raw_response=raw,
+                        usage=usage,
+                        latency_ms=round((time.perf_counter() - attempt_started) * 1000, 2),
+                        content_chars=len(raw),
+                        retry_of=f"{name}:transport_attempt_1" if attempt else "",
+                        runtime="evidence_compiler_runtime",
+                        thinking_type="disabled",
+                    )
+                )
+                return parsed
+            except Exception as exc:
+                if self.hooks is not None and hasattr(self.hooks, "record_error"):
+                    self.hooks.record_error(exc)
+                failed_record = ModelCallRecord(
                     role=name,
                     model=model,
-                    prompt_version=PROMPT_VERSIONS[name if name != "fine_verifier" else "verifier"],
+                    prompt_version=prompt_version,
                     input_preview=input_text[:1400],
                     output_preview="",
                     error=f"{type(exc).__name__}: {exc}",
                     system_prompt=prompt,
                     payload=payload,
-                    latency_ms=round((time.perf_counter() - started) * 1000, 2),
+                    latency_ms=round((time.perf_counter() - attempt_started) * 1000, 2),
                     runtime="evidence_compiler_runtime",
                 )
+                self.llm.calls.append(failed_record)
+                if attempt or not is_transient_llm_error(exc):
+                    self._progress(
+                        "model_thinking",
+                        stage=name,
+                        status="error",
+                        action=f"{name} 阶段失败",
+                        public_reason=f"{type(exc).__name__}: 结构化模型调用没有产出可接受结果。",
+                    )
+                    raise
+                time.sleep(0.25)
+
+        raise RuntimeError(f"Compiler phase {name} exhausted its transport attempts")
+
+    def _emit_kernel_completed(self, proof: CompiledProof) -> None:
+        self._progress(
+            "model_thinking",
+            stage="proof_kernel",
+            status="completed",
+            action="DecisionProof 已生成",
+            public_reason="每个 Requirement 已得到 SUPPORTED、CONTRADICTED 或 NOT_FOUND 结果。",
+            supported_count=sum(1 for item in proof.decisions if item.status == "SUPPORTED"),
+            contradicted_count=sum(1 for item in proof.decisions if item.status == "CONTRADICTED"),
+            not_found_count=sum(1 for item in proof.decisions if item.status == "NOT_FOUND"),
+            blocking_obligation_count=sum(1 for item in proof.obligations if item.blocking),
+        )
+
+    def _sandbox_progress(self, tool: str, result: dict[str, Any] | None) -> None:
+        if result is None:
+            self._progress(
+                "tool_started",
+                stage="executor",
+                status="started",
+                action=f"Evidence Worker 调用 {tool}",
+                public_reason="沙箱正在校验这一步是否满足来源与引用边界。",
+                tool=tool,
             )
-            raise
+            return
+        accepted = result.get("ok") is True
+        error = result.get("error") if isinstance(result.get("error"), dict) else {}
+        code = str(error.get("code") or "")
+        self._progress(
+            "tool_finished",
+            stage="executor",
+            status="completed" if accepted else "rejected",
+            action=(f"{tool} 已完成" if accepted else f"证据 Hook 拒绝了 {tool}"),
+            public_reason=str(
+                error.get("message")
+                or ("沙箱已接受这一步。" if accepted else "这一步没有进入 Evidence IR。")
+            ),
+            tool=tool,
+            hook_code=code,
+        )
+
+    def _progress(
+        self,
+        kind: str,
+        *,
+        stage: str,
+        status: str,
+        action: str,
+        public_reason: str,
+        **counts: Any,
+    ) -> None:
+        if self.progress_sink is None:
+            return
+        payload = {
+            "role": stage,
+            "stage": stage,
+            "status": status,
+            "action": action,
+            "public_reason": public_reason,
+            **counts,
+        }
+        try:
+            self.progress_sink(kind, payload, action)
+        except Exception:
+            return
+
+    def _progress_error(self, stage: str, public_reason: str) -> None:
+        self._progress(
+            "model_thinking",
+            stage=stage,
+            status="error",
+            action=f"{stage} 未通过 Runtime 校验",
+            public_reason=public_reason,
+        )
 
 
 def prepare_sources(items: Iterable[Mapping[str, Any]]) -> list[PreparedSource]:
@@ -593,9 +818,27 @@ def prepare_sources(items: Iterable[Mapping[str, Any]]) -> list[PreparedSource]:
         kind = str(item.get("evidence_type") or item.get("type") or item.get("content_kind") or "unknown")
         classification = _source_attribute(item, "classification") or "unclear"
         credibility = _normalize_credibility(_source_attribute(item, "credibility"))
+        provenance = {
+            "runtime_admission": "admitted",
+            "attachment_id": str(item.get("attachment_id") or ""),
+            "original_ref": str(item.get("original_ref") or ""),
+            "source_sha256": str(item.get("sha256") or ""),
+            "content_sha256": actual_fingerprint,
+            "extraction_ref": str(item.get("extraction_ref") or ""),
+            "extraction_sha256": str(item.get("extraction_sha256") or ""),
+            "preview_paths": list(item.get("preview_paths") or []),
+            "scope": "system_chain_of_custody_only_not_real_world_authenticity",
+        }
+        provenance = {key: value for key, value in provenance.items() if value not in ("", [], None)}
         result.append(
             PreparedSource(
-                record=SourceRecord(source_id=source_id, title=title, kind=kind, content=content),
+                record=SourceRecord(
+                    source_id=source_id,
+                    title=title,
+                    kind=kind,
+                    content=content,
+                    provenance=provenance,
+                ),
                 metadata={
                     "attachment_id": str(item.get("attachment_id") or ""),
                     "original_ref": str(item.get("original_ref") or ""),
@@ -666,22 +909,34 @@ def _submitted_claim_refs(sandbox: EvidenceSandbox) -> dict[str, list[str]]:
     }
 
 
-def _sandbox_tools(sandbox: EvidenceSandbox) -> list[FunctionTool]:
+def _sandbox_tools(
+    sandbox: EvidenceSandbox,
+    *,
+    progress_sink: Callable[[str, dict[str, Any] | None], None] | None = None,
+) -> list[FunctionTool]:
     async def list_sources(_context: Any, raw: str) -> str:
         _ListSourcesInput.model_validate_json(raw or "{}")
-        return _tool_json(sandbox.list_sources())
+        return _observed_tool("list_sources", sandbox.list_sources)
 
     async def read_source(_context: Any, raw: str) -> str:
         data = _ReadSourceInput.model_validate_json(raw)
-        return _tool_json(sandbox.read_source(data.source_id))
+        return _observed_tool("read_source", lambda: sandbox.read_source(data.source_id))
 
     async def bind_claim(_context: Any, raw: str) -> str:
         data = _BindClaimInput.model_validate_json(raw)
-        return _tool_json(sandbox.bind_claim(**data.model_dump()))
+        return _observed_tool("bind_claim", lambda: sandbox.bind_claim(**data.model_dump()))
 
     async def submit_check(_context: Any, raw: str) -> str:
         data = _SubmitCheckInput.model_validate_json(raw)
-        return _tool_json(sandbox.submit_check(**data.model_dump()))
+        return _observed_tool("submit_check", lambda: sandbox.submit_check(**data.model_dump()))
+
+    def _observed_tool(name: str, invoke: Callable[[], dict[str, Any]]) -> str:
+        if progress_sink is not None:
+            progress_sink(name, None)
+        result = invoke()
+        if progress_sink is not None:
+            progress_sink(name, result)
+        return _tool_json(result)
 
     return [
         _function_tool("list_sources", "List the evidence sources available in this run.", _ListSourcesInput, list_sources),
@@ -744,8 +999,9 @@ def _review_result(
     claims_by_source: dict[str, list[Any]] = {}
     for claim in sandbox.evidence_ir.claims:
         claims_by_source.setdefault(claim.source_id, []).append(claim)
+    claims_by_id = {claim.id: claim for claim in sandbox.evidence_ir.claims}
     decisions = {item.requirement_id: item for item in proof.decisions}
-    assessments = {item.check_id: item for item in artifact.assessments}
+    node_results = {item.node_id: item for item in proof.node_results}
     submitted_claim_ids = {
         claim_id
         for submission in sandbox.submissions
@@ -767,24 +1023,25 @@ def _review_result(
         credibility = _normalize_credibility(prepared.metadata.get("credibility"))
         supports: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
+        supported_evidence_types: set[str] = set()
         for requirement_id, decision in decisions.items():
-            referenced = any(
-                source_id in assessments[check_id].source_ids
-                for check_id in (
-                    decision.supporting_check_ids
-                    + decision.contradicting_check_ids
-                    + decision.unresolved_check_ids
-                )
-                if check_id in assessments
-            )
-            if not referenced:
+            referenced_claims = [
+                claim
+                for claim in _decision_claims(decision, node_results, claims_by_id)
+                if claim.source_id == source_id
+            ]
+            if not referenced_claims:
                 continue
+            quoted_text = "\n".join(_unique(claim.quote for claim in referenced_claims))
             if decision.status == "SUPPORTED":
+                declared_evidence_type = requirement_evidence_type(requirement_id)
+                if declared_evidence_type:
+                    supported_evidence_types.add(declared_evidence_type)
                 supports.append(
                     {
                         "requirement": requirement_id,
                         "support_level": "full",
-                        "quoted_text": claims[0].quote if claims else "",
+                        "quoted_text": quoted_text,
                     }
                 )
             elif decision.status == "CONTRADICTED":
@@ -794,11 +1051,15 @@ def _review_result(
                         "requirement": requirement_id,
                         "severity": "high",
                         "description": decision.stop_reason,
-                        "quoted_text": claims[0].quote if claims else "",
+                        "quoted_text": quoted_text,
                         "affected_evidence_ids": [source_id],
                     }
                 )
         evidence_type = prepared.record.kind if prepared.record.kind in _EVIDENCE_TYPES else "unknown"
+        if evidence_type == "unknown" and len(supported_evidence_types) == 1:
+            candidate_type = next(iter(supported_evidence_types))
+            if candidate_type in _EVIDENCE_TYPES:
+                evidence_type = candidate_type
         item = {
             "id": source_id,
             "type": evidence_type,
@@ -833,12 +1094,33 @@ def _review_result(
             }
         )
     obligations = _unique([item.missing_fact for item in proof.obligations if item.missing_fact])
+    has_blocking_obligations = any(item.blocking for item in proof.obligations)
     contradicted = sorted(item.requirement_id for item in proof.decisions if item.status == "CONTRADICTED")
-    supported = [
-        {"requirement": item.requirement_id, "support_level": "full", "quoted_text": ""}
-        for item in proof.decisions
-        if item.status == "SUPPORTED"
-    ]
+    supported: list[dict[str, Any]] = []
+    proof_conflicts: list[dict[str, Any]] = []
+    for decision in proof.decisions:
+        referenced_claims = _decision_claims(decision, node_results, claims_by_id)
+        quoted_text = "\n".join(_unique(claim.quote for claim in referenced_claims))
+        source_ids = _unique(claim.source_id for claim in referenced_claims)
+        if decision.status == "SUPPORTED":
+            supported.append(
+                {
+                    "requirement": decision.requirement_id,
+                    "support_level": "full",
+                    "quoted_text": quoted_text,
+                }
+            )
+        elif decision.status == "CONTRADICTED":
+            proof_conflicts.append(
+                {
+                    "type": "proof_contradiction",
+                    "requirement": decision.requirement_id,
+                    "severity": "high",
+                    "description": decision.stop_reason,
+                    "quoted_text": quoted_text,
+                    "affected_evidence_ids": source_ids,
+                }
+            )
     accepted_items = [item for item in evidence_items if item["review_result"]["should_accept"]]
     accepted_credibility = [str(item["credibility"]) for item in accepted_items]
     overall_credibility = (
@@ -848,21 +1130,27 @@ def _review_result(
         if accepted_credibility and all(value == "low" for value in accepted_credibility)
         else "medium"
     )
+    accepted_types = _unique(
+        str(item.get("type") or "")
+        for item in accepted_items
+        if str(item.get("type") or "") != "unknown"
+    )
+    overall_evidence_type = accepted_types[0] if len(accepted_types) == 1 else "unknown"
+    traceability = _review_traceability(accepted_items)
     return {
         "mode": "review",
         "source_doc_id": ",".join(item.record.source_id for item in prepared_sources),
-        "evidence_type": "unknown",
+        "evidence_type": overall_evidence_type,
         "credibility": overall_credibility,
         "extracted_fields": {},
         "extraction_result": {},
-        # Grounded quotes prove provenance to this run, not legal originality or authenticity.
-        "source_traceability": "unclear",
-        "support_level": "full" if supported and not obligations else "partial" if evidence_items else "none",
+        "source_traceability": traceability,
+        "support_level": "full" if supported and not has_blocking_obligations else "partial" if evidence_items else "none",
         "risk_flags": contradicted,
         "should_accept": bool(accepted_items),
         "reason": f"Compiled {len(proof.decisions)} requirement proof(s) from {len(sandbox.evidence_ir.claims)} grounded claim(s).",
         "supports": supported,
-        "conflicts": [],
+        "conflicts": proof_conflicts,
         "evidence_cards": cards,
         "suggested_patch": {
             "add_evidence": evidence_items,
@@ -874,12 +1162,47 @@ def _review_result(
     }
 
 
+def _decision_claims(
+    decision: Any,
+    node_results: Mapping[str, Any],
+    claims_by_id: Mapping[str, Any],
+) -> list[Any]:
+    check_ids = (
+        decision.supporting_check_ids
+        if decision.status == "SUPPORTED"
+        else decision.contradicting_check_ids
+        if decision.status == "CONTRADICTED"
+        else decision.unresolved_check_ids
+    )
+    claim_ids = _unique(
+        claim_id
+        for check_id in check_ids
+        for claim_id in getattr(node_results.get(check_id), "claim_ids", [])
+    )
+    return [claims_by_id[claim_id] for claim_id in claim_ids if claim_id in claims_by_id]
+
+
+def _review_traceability(accepted_items: Sequence[Mapping[str, Any]]) -> str:
+    if not accepted_items:
+        return "unclear"
+    sources = {str(item.get("source") or "") for item in accepted_items}
+    if sources == {"attachment"}:
+        return "original_document"
+    if sources == {"rag"}:
+        return "rag_guidance"
+    if sources == {"user_message"}:
+        return "user_statement"
+    return "unclear"
+
+
 def _source_text(item: dict[str, Any]) -> str:
     lines = [
         f"SOURCE: {item.get('name') or item.get('attachment_id') or 'attachment'}",
         f"ATTACHMENT_ID: {item.get('attachment_id') or ''}",
     ]
-    body = str(item.get("body_markdown") or item.get("content") or "")
+    # Attachment dossiers keep a compact Markdown preview alongside the full
+    # extracted text. The Worker must receive the full text when it is present.
+    body = str(item.get("content") or item.get("body_markdown") or "")
     if body:
         lines.extend(["", "BODY:", body])
     for heading, key in (

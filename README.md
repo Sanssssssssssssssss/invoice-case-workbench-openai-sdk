@@ -39,12 +39,12 @@ API debugging:
 
 ## Runtime Contract
 
-The frontend contract is preserved:
+The frontend uses one streaming run contract:
 
-- `POST /api/agent/turn` accepts the existing `AgentTurnRequest` shape.
-- `POST /api/agent/turn` returns the existing `AgentTurnResponse` shape.
+- `POST /api/agent/runs` accepts `AgentTurnRequest` and returns the run id plus stream URL.
+- `GET /api/agent/runs/{run_id}/stream` streams progress, approval interruptions, and the final response.
 - `POST /api/cases/{case_id}/attachments` keeps the existing upload behavior.
-- `POST /api/cases/{case_id}/runs/{run_id}/approval` resumes SDK tool approval interruptions.
+- `POST /api/agent/runs/{run_id}/approval` resumes the same interrupted stream once.
 - Case state, attachments, traces, and generated reports remain local under the case workspace.
 
 ## Agent and Tool Structure

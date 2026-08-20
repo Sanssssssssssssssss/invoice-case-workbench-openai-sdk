@@ -119,19 +119,21 @@ def _latest_thinking_event(events: list[TraceEvent], run_id: str) -> TraceEvent 
             continue
         if event.raw_kind == "model_thinking":
             return event
-        if event.raw_kind == "model_call" and event.payload.get("reasoning_excerpt"):
-            return event
     return None
 
 
 def _thinking_from_event(event: TraceEvent) -> dict[str, Any]:
-    role = str(event.payload.get("role") or event.name or "model")
-    text = str(event.payload.get("reasoning_excerpt") or "").strip()
+    text = str(
+        event.payload.get("public_reason")
+        or event.payload.get("action")
+        or event.summary
+        or ""
+    ).strip()
     return {
         "text": _clip(text),
-        "source": "reasoning_content" if text else "",
-        "chars": _int_value(event.payload.get("reasoning_chars")),
-        "chunks": _int_value(event.payload.get("reasoning_chunks")),
+        "source": "public_work_log" if text else "",
+        "chars": 0,
+        "chunks": 0,
     }
 
 
@@ -141,7 +143,13 @@ def _thinking_fallback(events: list[TraceEvent], run_id: str) -> dict[str, Any]:
 
 
 def _thought_summary(event: TraceEvent, thinking: dict[str, Any], active_role: str) -> str:
-    if event.raw_kind in {"model_thinking", "model_call"}:
+    if event.raw_kind == "model_thinking":
+        public = str(event.payload.get("public_reason") or event.payload.get("action") or "").strip()
+        if public:
+            return public
+        role = str(event.payload.get("role") or active_role or event.name or "model")
+        return _role_thought_summary(role, event)
+    if event.raw_kind == "model_call":
         role = str(event.payload.get("role") or active_role or event.name or "model")
         return _role_thought_summary(role, event)
     text = str(thinking.get("text") or "").strip()
@@ -179,7 +187,7 @@ def _role_thought_summary(role: str, event: TraceEvent) -> str:
 def _active_agent(event: TraceEvent) -> tuple[str, str]:
     if event.raw_kind == "model_thinking":
         role = str(event.payload.get("role") or event.name or "model")
-        return f"{_role_label(role)}正在思考", role
+        return f"{_role_label(role)}正在工作", role
     if event.raw_kind == "model_call":
         role = str(event.payload.get("role") or event.name or "model")
         if role == "summarizer":
@@ -203,9 +211,11 @@ def _active_agent(event: TraceEvent) -> tuple[str, str]:
 
 def _summary_for(event: TraceEvent) -> str:
     if event.raw_kind == "model_thinking":
+        action = str(event.payload.get("action") or "").strip()
+        if action:
+            return action
         role = str(event.payload.get("role") or event.name or "model")
-        chars = _int_value(event.payload.get("reasoning_chars"))
-        return f"{_role_label(role)}正在推理，已接收 {chars} 个字符。"
+        return f"{_role_label(role)}正在处理当前步骤。"
     if event.summary:
         return event.summary
     return event.raw_kind
@@ -213,6 +223,9 @@ def _summary_for(event: TraceEvent) -> str:
 
 def _active_step(event: TraceEvent, active_role: str) -> str:
     if event.raw_kind == "model_thinking":
+        action = str(event.payload.get("action") or "").strip()
+        if action:
+            return action
         return _role_thought_summary(active_role or event.name, event)
     if event.raw_kind == "model_call" and str(event.payload.get("role") or event.name) == "summarizer":
         return "正在整理附件摘要"
@@ -241,6 +254,10 @@ def _role_label(role: str) -> str:
         "summarizer": "摘要器",
         "session_compactor": "上下文整理器",
         "artifact_summary": "附件摘要",
+        "task_compiler": "任务编译器",
+        "executor": "证据执行器",
+        "fine_verifier": "精细验证器",
+        "proof_kernel": "证明内核",
         "model": "模型",
     }.get(str(role or ""), str(role or "模型"))
 

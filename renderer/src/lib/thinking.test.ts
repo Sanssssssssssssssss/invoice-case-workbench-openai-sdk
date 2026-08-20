@@ -14,7 +14,7 @@ const status: LiveStatus = {
   elapsedMs: 84000,
   latestEventId: 'evt_1',
   isRunning: true,
-  thinkingSource: 'reasoning_content',
+  thinkingSource: 'public_work_log',
   reasoningChars: 24,
   reasoningChunks: 3,
   updatedAt: '2026-06-01T10:00:00+00:00'
@@ -43,8 +43,8 @@ describe('thinking helpers', () => {
   it('maps line clamp and title text', () => {
     expect(thinkingLineClass(false)).toBe('collapsed')
     expect(thinkingLineClass(true)).toBe('expanded')
-    expect(thinkingTitle(status)).toBe('证据审核员 · 思考中 01:24')
-    expect(thinkingTitle(status, 125000)).toBe('证据审核员 · 思考中 02:05')
+    expect(thinkingTitle(status)).toBe('证据审核员 · 工作中 01:24')
+    expect(thinkingTitle(status, 125000)).toBe('证据审核员 · 工作中 02:05')
     expect(thinkingText(status)).toBe('正在核对金额和税率。')
     expect(thinkingSummary(status)).toBe(thinkingText(status))
     expect(thinkingRaw(status)).toBe('正在核对金额和税率。')

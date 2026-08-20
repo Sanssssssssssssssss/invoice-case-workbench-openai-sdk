@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -130,6 +131,117 @@ def test_policy_gate_blocks_empty_final_answer_even_if_constructed(tmp_path) -> 
 
     assert not check.allowed
     assert check.error_type == "empty_final_answer"
+
+
+def test_policy_gate_rejects_profile_key_as_active_requirement_id(tmp_path) -> None:
+    store, context, _harness, state = _state(tmp_path)
+    check = PolicyGate(store=store, context=context).check(
+        request=AgentTurnRequest(case_id=state.case_id, message="审核这笔 ERP 付款申请"),
+        state=state,
+        decision=SupervisorDecision(
+            action="delegate_agent",
+            target="evidence_reviewer",
+            input={"mode": "review", "active_requirement_ids": ["invoice_only"]},
+            reason="review",
+        ),
+        planner_context={
+            "attachments": [],
+            "requirement_catalog": {"profiles": {"invoice_only": ["invoice", "invoice_number"]}},
+        },
+    )
+
+    assert not check.allowed
+    assert check.error_type == "unknown_active_requirement_ids"
+    assert "profile grouping keys" in check.feedback_to_supervisor
+    assert "do not rely on PolicyGate to expand" in " ".join(check.recommended_constraints)
+
+
+def test_policy_gate_accepts_catalog_requirement_id_without_routing_it(tmp_path) -> None:
+    store, context, _harness, state = _state(tmp_path)
+    decision = SupervisorDecision(
+        action="delegate_agent",
+        target="evidence_reviewer",
+        input={
+            "mode": "review",
+            "active_requirement_ids": ["invoice", "invoice_calculation_valid"],
+        },
+        reason="review",
+    )
+    check = PolicyGate(store=store, context=context).check(
+        request=AgentTurnRequest(case_id=state.case_id, message="审核这笔 ERP 付款申请"),
+        state=state,
+        decision=decision,
+        planner_context={
+            "attachments": [],
+            "requirement_catalog": {
+                "profiles": {
+                    "invoice_only": ["invoice", "invoice_number", "invoice_calculation_valid"]
+                }
+            },
+        },
+    )
+
+    assert check.allowed
+    assert decision.input["active_requirement_ids"] == ["invoice", "invoice_calculation_valid"]
+
+
+def test_policy_gate_rejects_invoice_scope_without_mandatory_calculation(tmp_path) -> None:
+    store, context, _harness, state = _state(tmp_path)
+    check = PolicyGate(store=store, context=context).check(
+        request=AgentTurnRequest(
+            case_id=state.case_id,
+            message="只看发票字段，不要检查计算",
+        ),
+        state=state,
+        decision=SupervisorDecision(
+            action="delegate_agent",
+            target="evidence_reviewer",
+            input={
+                "mode": "review",
+                "active_requirement_ids": ["invoice_number", "amount_total"],
+            },
+            reason="review",
+        ),
+        planner_context={
+            "attachments": [],
+            "requirement_catalog": {
+                "profiles": {
+                    "invoice_only": [
+                        "invoice",
+                        "invoice_number",
+                        "amount_total",
+                        "invoice_calculation_valid",
+                    ]
+                }
+            },
+        },
+    )
+
+    assert not check.allowed
+    assert check.error_type == "invoice_calculation_required"
+    assert "invoice_calculation_valid" in " ".join(check.recommended_constraints)
+    assert "cannot be omitted" in " ".join(check.recommended_constraints)
+
+
+def test_policy_gate_rejects_known_requirement_not_exposed_by_catalog(tmp_path) -> None:
+    store, context, _harness, state = _state(tmp_path)
+    check = PolicyGate(store=store, context=context).check(
+        request=AgentTurnRequest(case_id=state.case_id, message="审核这笔 ERP 付款申请"),
+        state=state,
+        decision=SupervisorDecision(
+            action="delegate_agent",
+            target="evidence_reviewer",
+            input={"mode": "review", "active_requirement_ids": ["purchase_order"]},
+            reason="review",
+        ),
+        planner_context={
+            "attachments": [],
+            "requirement_catalog": {"profiles": {"invoice_only": ["invoice", "invoice_number"]}},
+        },
+    )
+
+    assert not check.allowed
+    assert check.error_type == "unknown_active_requirement_ids"
 
 
 def test_policy_gate_blocks_final_answer_when_attachments_unread(tmp_path) -> None:
@@ -473,8 +585,15 @@ def test_policy_gate_blocks_extract_when_text_attachment_expects_review(tmp_path
     assert "mode=review" in " ".join(check.recommended_constraints)
 
 
-def test_policy_gate_enforces_report_writer_file_and_pdf_sequence(tmp_path) -> None:
+def test_policy_gate_enforces_report_writer_file_and_pdf_sequence(tmp_path, monkeypatch) -> None:
     store, context, harness, state = _state(tmp_path, message="生成最终报告")
+    monkeypatch.setattr(
+        store,
+        "load",
+        lambda _case_id: SimpleNamespace(
+            compiled_proof=SimpleNamespace(decisions=[object()], obligations=[])
+        ),
+    )
     gate = PolicyGate(store=store, context=context)
     request = AgentTurnRequest(case_id=state.case_id, message="生成最终报告")
 
@@ -506,6 +625,54 @@ def test_policy_gate_enforces_report_writer_file_and_pdf_sequence(tmp_path) -> N
     )
     assert not check.allowed
     assert check.error_type in {"report_requires_pdf", "report_file_requires_pdf"}
+
+
+def test_policy_gate_uses_canonical_blocking_obligations_for_reportability(tmp_path, monkeypatch) -> None:
+    store, context, _harness, state = _state(tmp_path, message="生成最终报告")
+    gate = PolicyGate(store=store, context=context)
+    request = AgentTurnRequest(case_id=state.case_id, message="生成最终报告")
+    decision = SupervisorDecision(
+        action="delegate_agent",
+        target="report_writer",
+        reason="draft",
+    )
+
+    monkeypatch.setattr(
+        store,
+        "load",
+        lambda _case_id: SimpleNamespace(
+            compiled_proof=SimpleNamespace(
+                decisions=[SimpleNamespace(status="CONTRADICTED")],
+                obligations=[],
+            )
+        ),
+    )
+    assert gate.check(
+        request=request,
+        state=state,
+        decision=decision,
+        planner_context={"attachments": []},
+    ).allowed
+
+    monkeypatch.setattr(
+        store,
+        "load",
+        lambda _case_id: SimpleNamespace(
+            compiled_proof=SimpleNamespace(
+                decisions=[SimpleNamespace(status="NOT_FOUND")],
+                obligations=[SimpleNamespace(blocking=True, missing_fact="template baseline")],
+            )
+        ),
+    )
+    blocked = gate.check(
+        request=request,
+        state=state,
+        decision=decision,
+        planner_context={"attachments": []},
+    )
+    assert not blocked.allowed
+    assert blocked.error_type == "report_blocked_by_proof"
+    assert "template baseline" in " ".join(blocked.recommended_constraints)
 
 
 def test_policy_gate_does_not_reblock_approved_report_file_tool(tmp_path) -> None:
@@ -565,6 +732,18 @@ def test_runtime_error_classification_blocks_terminal_read_attachment() -> None:
     feedback = classify_runtime_error(kind="tool", name="read_attachment", error={"message": "unsupported attachment type: exe"})
     assert feedback["retry_allowed"] is False
     assert feedback["blocked_action"] == "call_tool:read_attachment"
+
+
+def test_runtime_error_classification_stops_repeating_exhausted_model_connection() -> None:
+    feedback = classify_runtime_error(
+        kind="role",
+        name="evidence_reviewer",
+        error={"type": "APIConnectionError", "message": "Connection error."},
+    )
+
+    assert feedback["error_type"] == "llm_connection_error"
+    assert feedback["retry_allowed"] is False
+    assert feedback["blocked_action"] == "delegate_agent:evidence_reviewer"
 
 
 def test_retry_predicates_only_allow_transient_failures() -> None:

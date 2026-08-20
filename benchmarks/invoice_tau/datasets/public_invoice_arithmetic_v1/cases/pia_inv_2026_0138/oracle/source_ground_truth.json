@@ -1,0 +1,69 @@
+{
+  "invoice_id": "INV-2026-0138",
+  "vendor": "Sabre International GmbH",
+  "vendor_country": "AT",
+  "vendor_address": {
+    "street": "Nebelkaiserweg 128",
+    "postal_code": "1070",
+    "city": "Wien"
+  },
+  "recipient": "Helvetica Technische Beratung AG",
+  "recipient_country": "CH",
+  "recipient_address": {
+    "street": "Kirschfeldvorstadt 17",
+    "postal_code": "4052",
+    "city": "Basel"
+  },
+  "date": "2026-01-18",
+  "due_date": "2026-01-18",
+  "line_items": [
+    {
+      "description": "Consulting hours — Senior Partner",
+      "quantity": 2,
+      "unit_price": "5893.60",
+      "vat_rate": "0.20",
+      "amount": "11787.20"
+    },
+    {
+      "description": "SEO audit (Q1 2026)",
+      "quantity": 1,
+      "unit_price": "8359.50",
+      "vat_rate": "0.20",
+      "amount": "8359.50"
+    },
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 2,
+      "unit_price": "26363.60",
+      "vat_rate": "0.20",
+      "amount": "52727.20"
+    }
+  ],
+  "subtotal": "72873.90",
+  "vat_rate": "0.20",
+  "vat_amount": "14574.78",
+  "discount": {
+    "type": "percentage",
+    "value": "0.075",
+    "applied_to": "subtotal",
+    "description": "adjustment per framework agreement ref. FA-2025-551",
+    "conditional": false
+  },
+  "discount_amount": "5465.54",
+  "total": "81983.14",
+  "currency": "EUR",
+  "payment_terms": "Due upon receipt",
+  "bank_details": "Raiffeisenbank Austria | IBAN: AT79 5729 6676 7882 7495 | BIC: RZBAATWWXXX",
+  "variants": {
+    "vat_variant": "implicit_no_rate",
+    "discount_variant": "obfuscated",
+    "number_format": "swiss",
+    "layout": "paragraph",
+    "consistency": "total_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "72873.90",
+  "rendered_total": "82802.97",
+  "error_note": "Displayed total 82802.97 differs from true total 81983.14 by +819.83 (+1.00%).",
+  "is_credit_note": false
+}

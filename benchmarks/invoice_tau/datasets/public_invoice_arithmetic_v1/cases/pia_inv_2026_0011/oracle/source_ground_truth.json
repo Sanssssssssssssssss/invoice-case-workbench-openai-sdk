@@ -1,0 +1,55 @@
+{
+  "invoice_id": "INV-2026-0011",
+  "vendor": "Vandelay Industries GmbH",
+  "vendor_country": "AT",
+  "vendor_address": {
+    "street": "Silberknopfstraße 14",
+    "postal_code": "8010",
+    "city": "Graz"
+  },
+  "recipient": "Instituto Meridiano Tecnológico S.L.",
+  "recipient_country": "ES",
+  "recipient_address": {
+    "street": "Passeig del Carmel Amagat 91",
+    "postal_code": "08008",
+    "city": "Barcelona"
+  },
+  "date": "2026-02-12",
+  "due_date": "2026-04-13",
+  "line_items": [
+    {
+      "description": "Server colocation fees — rack 14-B",
+      "quantity": 1,
+      "unit_price": "5797.30",
+      "vat_rate": "0.20",
+      "amount": "5797.30"
+    }
+  ],
+  "subtotal": "5797.30",
+  "vat_rate": "0.20",
+  "vat_amount": "1159.46",
+  "discount": {
+    "type": "amount",
+    "value": "289.87",
+    "applied_to": "subtotal",
+    "description": "rebate per agreement",
+    "conditional": false
+  },
+  "discount_amount": "289.87",
+  "total": "6666.89",
+  "currency": "EUR",
+  "payment_terms": "Net 60 days",
+  "bank_details": "Bank Austria | IBAN: AT40 5740 1644 5150 3816 | BIC: BKAUATWWXXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "explicit_amount",
+    "number_format": "english",
+    "layout": "paragraph",
+    "consistency": "subtotal_error",
+    "edge_case": "single_item"
+  },
+  "rendered_subtotal": "5807.30",
+  "rendered_total": "6666.89",
+  "error_note": "Displayed subtotal 5807.30 differs from true subtotal 5797.30 by +10.00.",
+  "is_credit_note": false
+}

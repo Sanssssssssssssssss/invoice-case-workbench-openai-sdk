@@ -1,0 +1,43 @@
+{
+  "schema_version": "1",
+  "id": "pia_inv_2026_0145",
+  "name": "公开发票计算审核 - INV-2026-0145",
+  "description": "自然语言付款前审核；预期答案不会进入模型上下文。",
+  "case_type": "invoice_payment_review",
+  "tags": [
+    "public_pdf",
+    "invoice_arithmetic",
+    "swiss",
+    "mixed",
+    "correct",
+    "none"
+  ],
+  "initial_case_state": {
+    "requirements": [
+      {
+        "id": "invoice",
+        "required": true
+      },
+      {
+        "id": "invoice_calculation_valid",
+        "required": true
+      }
+    ]
+  },
+  "policy_overrides": {
+    "invoice_calculation_rounding_tolerance": {
+      "configured": true,
+      "value": "0.01",
+      "unit": "EUR"
+    }
+  },
+  "user_script": [
+    {
+      "message": "麻烦审核一下附件里的发票，确认票面金额、折扣和税额之间有没有不一致。暂时不用出报告。",
+      "attach": [
+        "attachments/invoice.pdf"
+      ],
+      "approvals": {}
+    }
+  ]
+}

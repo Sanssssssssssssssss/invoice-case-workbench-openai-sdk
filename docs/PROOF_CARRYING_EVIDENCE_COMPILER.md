@@ -1,5 +1,7 @@
 # Lightweight Evidence Compiler
 
+> 2026-08-21 的可执行实现基线见 `COMPILER_RUNTIME_FREEZE_20260821.md`；发生差异时以冻结说明和当前 schema 为准。
+
 这个项目里的 Compiler 不是规则引擎，也不是把 Reviewer 的判断换成 Python。
 
 它的职责只有一句话：
@@ -14,7 +16,7 @@
 flowchart LR
     A["附件抽取结果"] --> B["Task Compiler"]
     R["Active Requirement + Policy"] --> B
-    B --> C["ProofPlan<br/>CHECK / ALL / ANY / NOT"]
+    B --> C["ProofPlan<br/>CHECK / ALL / ANY"]
     C --> D["LLM Executor"]
     D <-->|"4 个受限工具"| S["Evidence Sandbox"]
     S --> IR["EvidenceIR<br/>Claims + 来源"]
@@ -36,12 +38,13 @@ flowchart LR
 
 Task Compiler 接收当前活动 Requirement、版本化 Policy 摘要，以及按文档类型聚合后的来源/抽取形状，一次生成本轮计划。规划输入不包含 `source_id`、文件名或附件名，因此 Plan 不会提前选择证据，也不会因为运行期来源 ID 改名而改变语义。
 
-计划只有四种节点：
+计划只有三种节点：
 
 - `CHECK`：一个可以单独核查的命题；
 - `ALL`：全部子命题成立；
 - `ANY`：至少一个子命题成立；
-- `NOT`：对子命题取三值否定。
+
+当前 schema 不提供 `NOT` 节点；正向 Requirement 必须由同极性的命题直接建立，不能通过双重否定改写目标。
 
 本地代码只验证唯一 ID、引用完整、Requirement/Policy 覆盖、根节点完整和无环。它不替模型决定应该如何拆业务问题，也不在代码中按金额、供应商或重复付款 ID 建专用 DAG。
 
@@ -79,7 +82,7 @@ Verifier 看原子问题、该检查已提交的 Claims、全部准入来源正�
 
 强结论必须引用已进入 IR 且由 Executor 提交给该检查的 Claim，并明确检查完整个准入来源快照。缺失、部分、歧义、低置信度、来源漏读、互相冲突或 Policy 未配置都只能是 `NOT_FOUND`。
 
-文档类型只能证明“这是一份发票/采购订单等文档”，不能自动证明原件、真实性、审批、授权或生命周期状态。比如 `invoice` 表示“发票文档”；若要证明原件可追溯性，必须单独激活 `source_traceability` 并提供直接证据。
+文档类型只能证明“这是一份发票/采购订单等文档”。`source_traceability` 单独检查系统准入的附件 ID、相对原件定位、哈希和可读来源链；它证明系统内可追溯，不证明文件在现实世界中的真实性，也不自动证明审批、授权或生命周期状态。
 
 ### `ReviewArtifact` 与 `DecisionProof`
 
@@ -89,7 +92,6 @@ Verifier 看原子问题、该检查已提交的 Claims、全部准入来源正�
 
 - `ALL`：任一反驳即反驳；全部支持才支持；其他为未知；
 - `ANY`：任一支持即支持；全部反驳才反驳；其他为未知；
-- `NOT`：支持与反驳互换，未知仍未知；
 - 引用、来源或哈希不完整时一律降为 `NOT_FOUND`。
 
 CaseStore 只投影根结论：

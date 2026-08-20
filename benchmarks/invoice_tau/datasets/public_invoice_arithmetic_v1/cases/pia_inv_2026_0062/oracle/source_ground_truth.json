@@ -1,0 +1,91 @@
+{
+  "invoice_id": "INV-2026-0062",
+  "vendor": "Bluth Development Company LLC",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "42 Fenfell Rise",
+    "postal_code": "EC1M 3JB",
+    "city": "London"
+  },
+  "recipient": "Caledonian Moor Pension Management Ltd",
+  "recipient_country": "GB",
+  "recipient_address": {
+    "street": "14 Pembroke-Brook Passage",
+    "postal_code": "EC1R 0AA",
+    "city": "London"
+  },
+  "date": "2026-01-19",
+  "due_date": "2026-02-18",
+  "line_items": [
+    {
+      "description": "Documentation cleanup (Sisyphean endeavour)",
+      "quantity": 1,
+      "unit_price": "6603.80",
+      "vat_rate": "0.20",
+      "amount": "6603.80"
+    },
+    {
+      "description": "Data room hosting — February 2026",
+      "quantity": 1,
+      "unit_price": "25458.00",
+      "vat_rate": "0.20",
+      "amount": "25458.00"
+    },
+    {
+      "description": "Training materials — onboarding programme",
+      "quantity": 1,
+      "unit_price": "38752.20",
+      "vat_rate": "0.20",
+      "amount": "38752.20"
+    },
+    {
+      "description": "Regulatory filing — Companies House",
+      "quantity": 10,
+      "unit_price": "1167.80",
+      "vat_rate": "0.20",
+      "amount": "11678.00"
+    },
+    {
+      "description": "Translation services (EN ↔ DE, 12k words)",
+      "quantity": 2,
+      "unit_price": "1802.60",
+      "vat_rate": "0.10",
+      "amount": "3605.20"
+    },
+    {
+      "description": "Consulting hours — Associate",
+      "quantity": 100,
+      "unit_price": "176.10",
+      "vat_rate": "0.20",
+      "amount": "17610.00"
+    },
+    {
+      "description": "Hardware procurement — 4 workstations",
+      "quantity": 1,
+      "unit_price": "26462.80",
+      "vat_rate": "0.10",
+      "amount": "26462.80"
+    }
+  ],
+  "subtotal": "130170.00",
+  "vat_rate": null,
+  "vat_amount": "23027.20",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "153197.20",
+  "currency": "EUR",
+  "payment_terms": "Net 30 days",
+  "bank_details": "Lloyds Bank | IBAN: GB06 7334 2536 1489 8976 55 | BIC: LOYDGB21XXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "none",
+    "number_format": "swiss",
+    "layout": "mixed",
+    "consistency": "correct",
+    "edge_case": "mixed_vat"
+  },
+  "rendered_subtotal": "130170.00",
+  "rendered_total": "153197.20",
+  "error_note": null,
+  "is_credit_note": false
+}

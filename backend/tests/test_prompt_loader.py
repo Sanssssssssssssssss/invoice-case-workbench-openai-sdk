@@ -23,6 +23,15 @@ def test_load_prompt_returns_role_file_only() -> None:
     assert "name: supervisor_planner" in prompt
 
 
+def test_planner_final_answer_uses_only_compiler_admitted_facts() -> None:
+    prompt = load_system_prompt("agents/planner/prompt.md")
+
+    assert "present a concrete field value as verified only when" in prompt
+    assert "admitted in the current Compiler Evidence IR" in prompt
+    assert "Do not add order" in prompt
+    assert "bank details, countries/addresses" in prompt
+
+
 def test_agent_prompt_files_have_versioned_contract_headers() -> None:
     prompt_root = Path(__file__).resolve().parents[1] / "app" / "agents"
     files = sorted(prompt_root.glob("*.md")) + sorted(prompt_root.glob("*/*.md"))
@@ -49,3 +58,7 @@ def test_report_writer_prompt_blocks_routine_boundary_boilerplate() -> None:
     assert "PDF renderer 会强制每章分页" in REPORT_WRITER_PROMPT
     assert "`block_crops` 是调试索引" in REPORT_WRITER_PROMPT
     assert "RAG/profile/template 只能作为审核依据" in REPORT_WRITER_PROMPT
+    assert "`CONTRADICTED`: show it prominently as a reportable finding" in REPORT_WRITER_PROMPT
+    assert "You may say “无冲突” only when there is no `CONTRADICTED` DecisionProof" in REPORT_WRITER_PROMPT
+    assert "does not provide the ProofPlan or Verifier assessments" in REPORT_WRITER_PROMPT
+    assert "missing comparison baseline makes match/conformance `NOT_FOUND`" in REPORT_WRITER_PROMPT

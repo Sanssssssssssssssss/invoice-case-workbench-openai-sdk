@@ -1,0 +1,104 @@
+{
+  "invoice_id": "INV-2026-0038",
+  "vendor": "Weyland-Yutani Europe S.A.",
+  "vendor_country": "FR",
+  "vendor_address": {
+    "street": "23 rue de la Croix-Brisée",
+    "postal_code": "75001",
+    "city": "Paris"
+  },
+  "recipient": "Instituto Meridiano Tecnológico S.L.",
+  "recipient_country": "ES",
+  "recipient_address": {
+    "street": "Calle de las Alamedas Viejas 28",
+    "postal_code": "28013",
+    "city": "Madrid"
+  },
+  "date": "2026-02-14",
+  "due_date": "2026-02-28",
+  "line_items": [
+    {
+      "description": "Regulatory filing — Companies House",
+      "quantity": 10,
+      "unit_price": "321.70",
+      "vat_rate": "0.20",
+      "amount": "3217.00"
+    },
+    {
+      "description": "Photocopier toner (see framework agreement)",
+      "quantity": 1,
+      "unit_price": "45552.40",
+      "vat_rate": "0.20",
+      "amount": "45552.40"
+    },
+    {
+      "description": "Translation services (EN ↔ DE, 12k words)",
+      "quantity": 1,
+      "unit_price": "24651.50",
+      "vat_rate": "0.20",
+      "amount": "24651.50"
+    },
+    {
+      "description": "Database optimisation retainer — March",
+      "quantity": 1,
+      "unit_price": "16860.80",
+      "vat_rate": "0.20",
+      "amount": "16860.80"
+    },
+    {
+      "description": "Marketing collateral refresh",
+      "quantity": 2,
+      "unit_price": "45082.40",
+      "vat_rate": "0.20",
+      "amount": "90164.80"
+    },
+    {
+      "description": "Travel expenses (London–Vienna)",
+      "quantity": 10,
+      "unit_price": "1291.70",
+      "vat_rate": "0.20",
+      "amount": "12917.00"
+    },
+    {
+      "description": "Documentation cleanup (Sisyphean endeavour)",
+      "quantity": 4,
+      "unit_price": "29732.20",
+      "vat_rate": "0.20",
+      "amount": "118928.80"
+    },
+    {
+      "description": "Consulting hours — Associate",
+      "quantity": 1,
+      "unit_price": "6089.20",
+      "vat_rate": "0.20",
+      "amount": "6089.20"
+    }
+  ],
+  "subtotal": "318381.50",
+  "vat_rate": "0.20",
+  "vat_amount": "63676.30",
+  "discount": {
+    "type": "percentage",
+    "value": "0.05",
+    "applied_to": "subtotal",
+    "description": "early payment discount",
+    "conditional": false
+  },
+  "discount_amount": "15919.08",
+  "total": "366138.72",
+  "currency": "EUR",
+  "payment_terms": "Payable within 14 days",
+  "bank_details": "BNP Paribas | IBAN: FR26 4743 3848 2279 7519 6871 936 | BIC: BNPAFRPPXXX",
+  "variants": {
+    "vat_variant": "implicit_no_rate",
+    "discount_variant": "explicit_percentage",
+    "number_format": "swiss",
+    "layout": "paragraph",
+    "consistency": "total_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "318381.50",
+  "rendered_total": "362477.33",
+  "error_note": "Displayed total 362477.33 differs from true total 366138.72 by -3661.39 (-1.00%).",
+  "is_credit_note": false
+}

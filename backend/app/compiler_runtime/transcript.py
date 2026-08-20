@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass, field, is_dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from agents.lifecycle import RunHooks
 from pydantic import BaseModel
@@ -50,12 +50,14 @@ class ModelTranscriptHooks(RunHooks[Any]):
         state: HarnessRunState,
         *,
         prompt_version: str = "",
+        prompt_versions: Mapping[str, str] | None = None,
         transcript_name: str = "deepseek_calls.txt",
         secret_values: Iterable[str] = (),
     ) -> None:
         self.harness = harness
         self.state = state
         self.prompt_version = prompt_version
+        self.prompt_versions = dict(prompt_versions or {})
         self.transcript_path = (
             harness.store.ensure_case_dirs(state.case_id) / "traces" / state.run_id / transcript_name
         )
@@ -81,11 +83,12 @@ class ModelTranscriptHooks(RunHooks[Any]):
             if previous.ended and not any(tool["result"] is None for tool in previous.tools):
                 self._finish(previous)
         self.call_count += 1
+        role = str(getattr(agent, "name", None) or "model")
         self._active.append(_ProviderCall(
             number=self.call_count,
-            role=str(getattr(agent, "name", None) or "model"),
+            role=role,
             model=_model_name(getattr(agent, "model", None)),
-            prompt_version=self.prompt_version,
+            prompt_version=self.prompt_versions.get(role, self.prompt_version),
             started_at=utc_now(),
             system_prompt=str(system_prompt or ""),
             input_items=input_items,

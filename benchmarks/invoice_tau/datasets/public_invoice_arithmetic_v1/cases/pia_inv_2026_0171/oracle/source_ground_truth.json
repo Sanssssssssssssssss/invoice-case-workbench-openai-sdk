@@ -1,0 +1,98 @@
+{
+  "invoice_id": "INV-2026-0171",
+  "vendor": "Pearson Hardman",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "7 Merrowdale Lane",
+    "postal_code": "EC2V 5AQ",
+    "city": "London"
+  },
+  "recipient": "Thames Gate Capital Partners LLP",
+  "recipient_country": "GB",
+  "recipient_address": {
+    "street": "7 Merrowdale Lane",
+    "postal_code": "EC2V 5AQ",
+    "city": "London"
+  },
+  "date": "2026-03-12",
+  "due_date": "2026-03-26",
+  "line_items": [
+    {
+      "description": "Incident response (post-mortem deliverable pending)",
+      "quantity": 5,
+      "unit_price": "780.30",
+      "vat_rate": "0.00",
+      "amount": "3901.50"
+    },
+    {
+      "description": "Annual subscription — enterprise tier (unused features included)",
+      "quantity": 3,
+      "unit_price": "32691.30",
+      "vat_rate": "0.00",
+      "amount": "98073.90"
+    },
+    {
+      "description": "Professional indemnity insurance — pro rata",
+      "quantity": 100,
+      "unit_price": "117.60",
+      "vat_rate": "0.00",
+      "amount": "11760.00"
+    },
+    {
+      "description": "Compliance audit preparation (regulations may have changed since)",
+      "quantity": 3,
+      "unit_price": "13744.50",
+      "vat_rate": "0.00",
+      "amount": "41233.50"
+    },
+    {
+      "description": "Penetration testing — scope per SOW 2026-03",
+      "quantity": 1,
+      "unit_price": "16699.50",
+      "vat_rate": "0.00",
+      "amount": "16699.50"
+    },
+    {
+      "description": "Training materials — onboarding programme",
+      "quantity": 2,
+      "unit_price": "26757.00",
+      "vat_rate": "0.00",
+      "amount": "53514.00"
+    },
+    {
+      "description": "Data room hosting — February 2026",
+      "quantity": 1,
+      "unit_price": "19831.90",
+      "vat_rate": "0.00",
+      "amount": "19831.90"
+    },
+    {
+      "description": "Server maintenance — March 2026",
+      "quantity": 3,
+      "unit_price": "9436.70",
+      "vat_rate": "0.00",
+      "amount": "28310.10"
+    }
+  ],
+  "subtotal": "273324.40",
+  "vat_rate": "0.00",
+  "vat_amount": "0.00",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "273324.40",
+  "currency": "EUR",
+  "payment_terms": "Payable within 14 days",
+  "bank_details": "Barclays | IBAN: GB92 1692 8219 6460 6446 26 | BIC: BARCGB22XXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "none",
+    "number_format": "german",
+    "layout": "paragraph",
+    "consistency": "correct",
+    "edge_case": "reverse_charge"
+  },
+  "rendered_subtotal": "273324.40",
+  "rendered_total": "273324.40",
+  "error_note": null,
+  "is_credit_note": false
+}

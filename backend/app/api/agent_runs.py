@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from app.api.workbench import sse_payload
 from app.harness import HarnessRuntime
-from app.runtime.streaming import stream_hub
+from app.runtime.streaming import ActiveCaseRunError, stream_hub
 from app.runtime.turn_runner import AgentRuntime
 from app.state.case_store import FileBoundaryError
 from app.state.case_store import CaseStore
@@ -45,7 +45,10 @@ async def start_agent_run(request: AgentTurnRequest) -> AgentRunAccepted:
     except (FileBoundaryError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     run_id = HarnessRuntime(store).new_run_id()
-    stream_hub.create(run_id=run_id, case_id=case_id)
+    try:
+        stream_hub.create(run_id=run_id, case_id=case_id)
+    except ActiveCaseRunError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     asyncio.create_task(_execute_turn(request, run_id))
     return AgentRunAccepted(
         case_id=case_id,

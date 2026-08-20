@@ -6,7 +6,7 @@ from app.config import get_settings
 from app.main import app
 
 
-def test_agent_turn_api(tmp_path, monkeypatch) -> None:
+def test_blocking_agent_turn_api_is_removed(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("INVOICE_AGENT_WORKSPACE_ROOT", str(tmp_path / "cases"))
     monkeypatch.setenv("INVOICE_AGENT_STORAGE_ROOT", str(tmp_path / "storage"))
     get_settings.cache_clear()
@@ -16,12 +16,7 @@ def test_agent_turn_api(tmp_path, monkeypatch) -> None:
         "/api/agent/turn",
         json={"case_id": "case_api_live_test", "message": "我现在需要准备什么？", "attachments": []},
     )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["case_id"] == "case_api_live_test"
-    assert payload["reply"]
-    assert payload["trace"]["model_calls"]
-    assert payload["trace"]["planner_actions"]
+    assert response.status_code == 404
 
 
 def test_upload_attachment_api(tmp_path, monkeypatch) -> None:

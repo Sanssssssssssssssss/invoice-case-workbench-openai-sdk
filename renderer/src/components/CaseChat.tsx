@@ -3,11 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Bot, CheckCircle2, ChevronDown, ChevronUp, CloudUpload, Download, ExternalLink, FileText, FolderOpen, Paperclip, Send, Settings2, ShieldAlert, UserRound, X } from 'lucide-react'
 import { Virtuoso } from 'react-virtuoso'
 import type { ApprovalInterrupt, ArtifactItem, CaseState, ConversationItem, LiveStatus, TraceEvent } from '@/types'
+import type { ApprovalPhase } from '@/lib/caseRuntime'
 import { requirementProgress, statusLabel } from '@/lib/requirements'
 import { shortTime } from '@/lib/trace'
 import { shouldShowThinking, thinkingLineClass, thinkingRaw, thinkingSummary, thinkingTitle } from '@/lib/thinking'
 import { dataTransferHasFiles, mergeFiles } from '@/lib/files'
-import { runArtifactAction } from '@/lib/artifacts'
+import { isPdfArtifact, runArtifactAction } from '@/lib/artifacts'
+import { plainChatText } from '@/lib/chat'
 import { RequirementRing } from './RequirementRing'
 
 interface CaseChatProps {
@@ -20,8 +22,15 @@ interface CaseChatProps {
   running: boolean
   agentRunning: boolean
   pendingApprovals: ApprovalInterrupt[]
+  approvalPhase: ApprovalPhase
+  approvalInFlight: ApprovalInterrupt | null
+  completedApprovalSteps: number
+  draft: string
+  files: File[]
   onOpenRequirements: () => void
   onSend: (message: string, files: File[]) => void
+  onDraftChange: (draft: string) => void
+  onFilesChange: (files: File[]) => void
   onApprovalDecision: (approved: boolean) => void
 }
 
@@ -35,19 +44,43 @@ export function CaseChat({
   running,
   agentRunning,
   pendingApprovals,
+  approvalPhase,
+  approvalInFlight,
+  completedApprovalSteps,
+  draft,
+  files,
   onOpenRequirements,
   onSend,
+  onDraftChange,
+  onFilesChange,
   onApprovalDecision
 }: CaseChatProps) {
-  const [message, setMessage] = useState('')
-  const [files, setFiles] = useState<File[]>([])
   const [dragActive, setDragActive] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const dragDepth = useRef(0)
   const requirements = caseState?.requirements ?? []
   const progress = requirementProgress(requirements)
+  const submittedAttachments = useMemo(() => {
+    const seen = new Set<string>()
+    return messages.flatMap((item) => item.attachments).filter((attachment) => {
+      const key = attachment.path || `${attachment.name}:${attachment.content_type}`
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [messages])
   const waitingApproval = pendingApprovals.length > 0
+  const approvalExecuting = approvalPhase === 'executing'
+  const message = draft
+  const setMessage = onDraftChange
+  const setFiles = (update: File[] | ((current: File[]) => File[])) => {
+    onFilesChange(typeof update === 'function' ? update(files) : update)
+  }
+  useEffect(() => {
+    dragDepth.current = 0
+    setDragActive(false)
+  }, [caseId])
   const virtuosoComponents = useMemo(() => ({ Footer: MessageFooter }), [])
   const rows = useMemo<ChatRow[]>(() => {
     const base: ChatRow[] = messages.map((item) => ({ type: 'message', id: `${item.ts}:${item.role}:${item.content}`, item }))
@@ -160,7 +193,16 @@ export function CaseChat({
         </motion.div>
       )}
 
-      {waitingApproval && <ApprovalPanel approvals={pendingApprovals} running={running} onDecision={onApprovalDecision} />}
+      {(waitingApproval || approvalExecuting) && (
+        <ApprovalPanel
+          approvals={pendingApprovals}
+          inFlight={approvalInFlight}
+          phase={approvalPhase}
+          completedSteps={completedApprovalSteps}
+          running={running}
+          onDecision={onApprovalDecision}
+        />
+      )}
 
       <footer
         className={`composer ${dragActive ? 'drag-active' : ''} ${waitingApproval ? 'approval-locked' : ''}`}
@@ -170,8 +212,19 @@ export function CaseChat({
         onDrop={handleDrop}
       >
         <div className="attachment-row">
-          <span>附件</span>
+          <span>案件附件</span>
           <div className="attachment-chips">
+            {submittedAttachments.map((attachment) => (
+              <span
+                className="attachment-chip submitted"
+                key={attachment.path || `${attachment.name}:${attachment.content_type}`}
+                title={attachment.path || attachment.name}
+              >
+                <FileText size={14} />
+                <span>{attachment.name}</span>
+                <CheckCircle2 size={13} />
+              </span>
+            ))}
             <AnimatePresence initial={false}>
               {files.map((file) => (
                 <motion.button
@@ -253,7 +306,17 @@ function MessageItem({ item }: { item: ConversationItem }) {
           <strong>{isUser ? '你' : isSystem ? '系统' : 'Agent'}</strong>
           <time>{shortTime(item.ts)}</time>
         </div>
-        <p>{item.content}</p>
+        <p className="message-text">{plainChatText(item.content)}</p>
+        {item.attachments.length > 0 ? (
+          <div className="message-attachments" aria-label="本条消息的附件">
+            {item.attachments.map((attachment) => (
+              <span className="message-attachment" key={`${attachment.path}:${attachment.name}`} title={attachment.path || attachment.name}>
+                <Paperclip size={13} />
+                {attachment.name}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
     </motion.article>
   )
@@ -301,7 +364,7 @@ function ReportArtifactsRow({ caseId, artifacts }: { caseId: string; artifacts: 
               key={`${item.path}:${item.updated_at}`}
               role="button"
               tabIndex={0}
-              className="report-attachment-card"
+              className={`report-attachment-card ${isPdfArtifact(item) ? 'primary' : 'secondary'}`}
               onClick={() => void openArtifact(item)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
@@ -312,8 +375,8 @@ function ReportArtifactsRow({ caseId, artifacts }: { caseId: string; artifacts: 
             >
               <FileText size={18} />
               <span className="report-attachment-copy">
-                <strong>{item.name}</strong>
-                <span>{reportFormatLabel(item)} · {formatBytes(item.bytes)} · {item.path}</span>
+                <strong>{isPdfArtifact(item) ? `PDF 报告 · ${item.name}` : item.name}</strong>
+                <span>{isPdfArtifact(item) ? '推荐打开' : '源文件'} · {reportFormatLabel(item)} · {formatBytes(item.bytes)}</span>
               </span>
               <span className="report-attachment-actions" aria-label="报告文件操作">
                 <button
@@ -356,22 +419,40 @@ function ReportArtifactsRow({ caseId, artifacts }: { caseId: string; artifacts: 
   )
 }
 
-function ApprovalPanel({ approvals, running, onDecision }: { approvals: ApprovalInterrupt[]; running: boolean; onDecision: (approved: boolean) => void }) {
-  const approval = approvals[0]
+function ApprovalPanel({
+  approvals,
+  inFlight,
+  phase,
+  completedSteps,
+  running,
+  onDecision
+}: {
+  approvals: ApprovalInterrupt[]
+  inFlight: ApprovalInterrupt | null
+  phase: ApprovalPhase
+  completedSteps: number
+  running: boolean
+  onDecision: (approved: boolean) => void
+}) {
+  const approval = approvals[0] ?? inFlight
   if (!approval) return null
+  const executing = phase === 'executing'
+  const step = executing ? Math.max(1, completedSteps) : completedSteps + 1
   return (
-    <motion.section className="approval-panel" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+    <motion.section className={`approval-panel ${executing ? 'executing' : ''}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
       <div className="approval-icon"><ShieldAlert size={18} /></div>
       <div className="approval-copy">
-        <strong>工具调用需要确认</strong>
-        <span>{approval.tool} · {approval.risk_level}</span>
-        <p>{approval.reason}</p>
-        {approval.input_preview ? <pre>{approval.input_preview}</pre> : null}
+        <strong>{executing ? `第 ${step} 步已确认，正在执行` : completedSteps > 0 ? `下一步（第 ${step} 步）需要确认` : '第 1 步工具调用需要确认'}</strong>
+        <span>{approval.tool} · {approval.risk_level || '受控操作'}</span>
+        <p>{executing ? '执行完成后会自动继续；如有下一项高风险操作，会显示新的确认卡。' : approval.reason}</p>
+        {!executing && approval.input_preview ? <pre>{approval.input_preview}</pre> : null}
       </div>
-      <div className="approval-actions">
-        <button className="approval-reject" disabled={running} onClick={() => onDecision(false)}>拒绝</button>
-        <button className="approval-approve" disabled={running} onClick={() => onDecision(true)}>确认执行</button>
-      </div>
+      {!executing ? (
+        <div className="approval-actions">
+          <button className="approval-reject" disabled={running} onClick={() => onDecision(false)}>拒绝</button>
+          <button className="approval-approve" disabled={running} onClick={() => onDecision(true)}>确认执行</button>
+        </div>
+      ) : null}
     </motion.section>
   )
 }

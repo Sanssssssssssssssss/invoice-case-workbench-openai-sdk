@@ -83,16 +83,80 @@ def _strip_guardrail_echoes(value: str) -> str:
 
 def enforce_case_state_consistency(text: str, case_state: Any) -> str:
     value = str(text or "")
-    if _is_capability_introduction(value):
-        return text
     duplicate_error = _duplicate_history_claim_error(value, case_state)
     if duplicate_error:
         raise CaseStateConsistencyError(duplicate_error)
+    status_errors = _explicit_requirement_status_errors(value, case_state)
+    if status_errors:
+        raise CaseStateConsistencyError("; ".join(status_errors))
+    if _is_capability_introduction(value):
+        return text
     if not _claims_complete_case(value):
         return text
     errors = _complete_case_state_errors(case_state)
     if errors:
         raise CaseStateConsistencyError("; ".join(errors))
+    return text
+
+
+def _explicit_requirement_status_errors(text: str, case_state: Any) -> list[str]:
+    status_groups = {
+        "accepted": "supported",
+        "satisfied": "supported",
+        "conflict": "conflicted",
+        "weak": "unresolved",
+        "missing": "unresolved",
+    }
+    stated_groups = {
+        "supported": r"SUPPORTED|accepted|satisfied|已接受|已满足|满足",
+        "conflicted": r"CONTRADICTED|conflict|冲突|反驳",
+        "unresolved": r"NOT_FOUND|weak|missing|证据较弱|弱支撑|缺失|未完成",
+    }
+    status_token = "|".join(f"(?P<{name}>{pattern})" for name, pattern in stated_groups.items())
+    errors: list[str] = []
+    for requirement in list(getattr(case_state, "requirements", []) or []):
+        requirement_id = str(getattr(requirement, "id", "") or "")
+        actual = str(getattr(requirement, "status", "") or "")
+        expected_group = status_groups.get(actual)
+        if not requirement_id or expected_group is None:
+            continue
+        markers = [requirement_id, str(getattr(requirement, "label", "") or "")]
+        for marker in dict.fromkeys(item for item in markers if item):
+            pattern = re.compile(
+                rf"{re.escape(marker)}(?:\*\*)?\s*(?:状态\s*)?(?:[:：=|·])\s*(?:\*\*)?\s*(?:{status_token})",
+                re.I,
+            )
+            match = pattern.search(text)
+            if match is None:
+                continue
+            stated_group = next(name for name in stated_groups if match.group(name))
+            if stated_group != expected_group:
+                errors.append(
+                    f"requirement {requirement_id} is {actual}, but answer states {match.group(0)!r}"
+                )
+            break
+    return errors
+
+
+def enforce_report_proof_consistency(text: str, case_state: Any) -> str:
+    value = str(text or "")
+    proof = getattr(case_state, "compiled_proof", None)
+    contradicted = [
+        str(getattr(item, "requirement_id", "") or "")
+        for item in list(getattr(proof, "decisions", []) or [])
+        if str(getattr(item, "status", "") or "") == "CONTRADICTED"
+    ]
+    if not contradicted:
+        return text
+    if re.search(r"(?:无|没有|不存在|未发现)(?:任何|重大|实质性|已识别|证据)?(?:的)?冲突|\bno\s+(?:material\s+)?conflicts?\b", value, re.I):
+        raise CaseStateConsistencyError("report claims no conflict despite CONTRADICTED DecisionProof")
+    missing = [
+        requirement_id
+        for requirement_id in contradicted
+        if requirement_id not in value
+    ]
+    if missing:
+        raise CaseStateConsistencyError(f"report omits contradicted requirements: {missing}")
     return text
 
 

@@ -1,0 +1,104 @@
+{
+  "invoice_id": "INV-2026-0167",
+  "vendor": "Vandelay Industries GmbH",
+  "vendor_country": "AT",
+  "vendor_address": {
+    "street": "Silberknopfstraße 14",
+    "postal_code": "8010",
+    "city": "Graz"
+  },
+  "recipient": "Caledonian Moor Pension Management Ltd",
+  "recipient_country": "GB",
+  "recipient_address": {
+    "street": "25 Greywell Close",
+    "postal_code": "EC2R 6AA",
+    "city": "London"
+  },
+  "date": "2026-04-14",
+  "due_date": "2026-06-13",
+  "line_items": [
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 3,
+      "unit_price": "41032.40",
+      "vat_rate": "0.20",
+      "amount": "123097.20"
+    },
+    {
+      "description": "Professional indemnity insurance — pro rata",
+      "quantity": 1,
+      "unit_price": "32841.70",
+      "vat_rate": "0.20",
+      "amount": "32841.70"
+    },
+    {
+      "description": "Strategic advisory — Q1 2026 (PowerPoints not included)",
+      "quantity": 4,
+      "unit_price": "29215.80",
+      "vat_rate": "0.20",
+      "amount": "116863.20"
+    },
+    {
+      "description": "Consulting hours — Associate",
+      "quantity": 4,
+      "unit_price": "27120.40",
+      "vat_rate": "0.20",
+      "amount": "108481.60"
+    },
+    {
+      "description": "Incident response (post-mortem deliverable pending)",
+      "quantity": 1,
+      "unit_price": "8288.10",
+      "vat_rate": "0.20",
+      "amount": "8288.10"
+    },
+    {
+      "description": "External reviewer honorarium",
+      "quantity": 2,
+      "unit_price": "33100.80",
+      "vat_rate": "0.20",
+      "amount": "66201.60"
+    },
+    {
+      "description": "Database optimisation retainer — March",
+      "quantity": 2,
+      "unit_price": "9334.20",
+      "vat_rate": "0.20",
+      "amount": "18668.40"
+    },
+    {
+      "description": "Executive workshop (2 days)",
+      "quantity": 3,
+      "unit_price": "7601.20",
+      "vat_rate": "0.20",
+      "amount": "22803.60"
+    }
+  ],
+  "subtotal": "497245.40",
+  "vat_rate": "0.20",
+  "vat_amount": "99449.08",
+  "discount": {
+    "type": "percentage",
+    "value": "0.05",
+    "applied_to": "subtotal",
+    "description": "early payment discount",
+    "conditional": false
+  },
+  "discount_amount": "24862.27",
+  "total": "571832.21",
+  "currency": "EUR",
+  "payment_terms": "Net 60 days",
+  "bank_details": "Bank Austria | IBAN: AT99 3789 5654 4208 0640 | BIC: BKAUATWWXXX",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "explicit_percentage",
+    "number_format": "german",
+    "layout": "table",
+    "consistency": "correct",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "497245.40",
+  "rendered_total": "571832.21",
+  "error_note": null,
+  "is_credit_note": false
+}

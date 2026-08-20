@@ -1,0 +1,33 @@
+{
+  "dataset": "jngb-labs/InvoiceBenchmark",
+  "repository_type": "dataset",
+  "revision": "f0699d8c94468fb2fefaa22f669684b22e68c3d3",
+  "license": "MIT",
+  "license_evidence": "InvoiceBenchmark_README.md",
+  "files": [
+    {
+      "path": "invoice_generator.py",
+      "sha256": "3e3beeb97d24e41ef079e965a87b33b2852dc28dc2760ef4d0a516e746153c22",
+      "byte_size": 59633
+    },
+    {
+      "path": "run_benchmark.py",
+      "sha256": "b26d44c1608bf4faff906f47e2fe06326464fe7cb1babca44c2de8e0fa703291",
+      "byte_size": 28496
+    },
+    {
+      "path": "prompts/condition_b_engineered.txt",
+      "sha256": "3d782061940682175a61f3132302c19931035acdfe59df3c2d46428e7d3bc9c5",
+      "byte_size": 2842
+    },
+    {
+      "path": "prompts/condition_c_extraction.txt",
+      "sha256": "d02e49aac04d230f1fdc951b8249d9bab67c50732080ca23a070b05022d83ed7",
+      "byte_size": 2557
+    }
+  ],
+  "limitations": [
+    "invoice_generator.py emits Markdown invoices and JSON ground truth, not PDF or PNG files.",
+    "The pinned repository publishes rendered PDF and PNG outputs but no rendering script."
+  ]
+}

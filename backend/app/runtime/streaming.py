@@ -9,6 +9,11 @@ from typing import Any, AsyncIterator
 
 TERMINAL_KINDS = {"final", "error"}
 TERMINAL_STATUSES = {"completed", "error"}
+ACTIVE_STATUSES = {"accepted", "running", "waiting_approval"}
+
+
+class ActiveCaseRunError(RuntimeError):
+    """Raised when a case already has a live run."""
 
 
 @dataclass
@@ -34,6 +39,7 @@ class RunStreamRecord:
     events: list[RunStreamEvent] | None = None
     response: dict[str, Any] | None = None
     error: str = ""
+    pending_approval_event_id: str = ""
 
 
 @dataclass
@@ -75,6 +81,18 @@ class RunStreamHub:
     def create(self, *, run_id: str, case_id: str) -> RunStreamRecord:
         now = _utc_now()
         with self._lock:
+            active = next(
+                (
+                    record
+                    for record in self._runs.values()
+                    if record.case_id == case_id and record.status in ACTIVE_STATUSES
+                ),
+                None,
+            )
+            if active is not None:
+                raise ActiveCaseRunError(
+                    f"case {case_id!r} already has active run {active.run_id!r}"
+                )
             record = RunStreamRecord(
                 run_id=run_id,
                 case_id=case_id,
@@ -99,6 +117,10 @@ class RunStreamHub:
             record = self._runs.get(run_id)
             if record is None:
                 raise KeyError(run_id)
+            if record.status in TERMINAL_STATUSES:
+                raise RuntimeError(f"run {run_id!r} is already terminal")
+            if kind == "approval_required" and record.status == "waiting_approval":
+                raise RuntimeError(f"run {run_id!r} already has a pending approval")
             seq = record.next_seq
             record.next_seq += 1
             event = RunStreamEvent(
@@ -119,14 +141,17 @@ class RunStreamHub:
             record.updated_at = event.ts
             if kind == "approval_required":
                 record.status = "waiting_approval"
+                record.pending_approval_event_id = event.event_id
             elif kind == "final":
                 record.status = "completed"
+                record.pending_approval_event_id = ""
                 response = payload.get("response") if isinstance(payload, dict) else None
                 record.response = response if isinstance(response, dict) else None
             elif kind == "error":
                 record.status = "error"
+                record.pending_approval_event_id = ""
                 record.error = str((payload or {}).get("message") or summary or "streaming run failed")
-            elif record.status in {"accepted", "waiting_approval"}:
+            elif record.status == "accepted":
                 record.status = "running"
             subscribers = [subscriber for subscriber in self._subscribers.get(run_id, []) if subscriber.active]
             self._subscribers[run_id] = subscribers
@@ -153,6 +178,7 @@ class RunStreamHub:
             if record.status != "waiting_approval":
                 return False
             record.status = "running"
+            record.pending_approval_event_id = ""
             record.updated_at = _utc_now()
             return True
 
@@ -235,6 +261,7 @@ def _copy_record(record: RunStreamRecord) -> RunStreamRecord:
         events=list(record.events or []),
         response=dict(record.response or {}) if record.response else None,
         error=record.error,
+        pending_approval_event_id=record.pending_approval_event_id,
     )
 
 
@@ -244,14 +271,15 @@ def _safe_payload(value: Any, *, max_chars: int = 1200) -> Any:
         for key, item in value.items():
             text_key = str(key)
             lowered = text_key.lower()
+            if lowered in {"reasoning_excerpt", "reasoning_delta", "reasoning_content", "chain_of_thought"}:
+                continue
             if lowered in {"prompt", "raw_prompt", "raw_input", "raw_args", "full_input", "tool_input"}:
                 result[text_key] = "[redacted]"
                 continue
             if lowered in {"content", "attachments"} and text_key != "content_type":
                 result[text_key] = "[redacted]"
                 continue
-            child_max = 8000 if lowered in {"reasoning_excerpt", "reasoning_delta"} else max_chars
-            result[text_key] = _safe_payload(item, max_chars=child_max)
+            result[text_key] = _safe_payload(item, max_chars=max_chars)
         return result
     if isinstance(value, list):
         return [_safe_payload(item, max_chars=max_chars) for item in value[:20]]

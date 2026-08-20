@@ -61,6 +61,35 @@ class _NoSummaryLlm:
         raise AssertionError("short artifacts should not call the LLM summarizer")
 
 
+def test_reviewer_summary_counts_canonical_proof_contradictions(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    state = HarnessRuntime(store).begin_run("case_summary_truth", "review")
+    compiler = ContextCompiler(store, LlmClient())
+
+    observation = compiler.record_result(
+        state,
+        kind="role",
+        name="evidence_reviewer",
+        result={
+            "mode": "review",
+            "evidence_type": "invoice",
+            "credibility": "high",
+            "should_accept": True,
+            "supports": [],
+            "conflicts": [],
+            "risk_flags": ["template_match"],
+            "evidence_cards": [],
+            "suggested_patch": {
+                "add_evidence": [],
+                "risk_flags": ["template_match"],
+            },
+        },
+    )
+
+    assert "conflicts=1" in observation["summary"]
+    assert observation["risks"] == ["proof_contradiction:template_match"]
+
+
 def _runtime_artifact(
     *,
     requirement_id: str,
@@ -152,7 +181,13 @@ def test_planner_gets_versioned_explicit_requirement_profiles(tmp_path) -> None:
 
     catalog = context["requirement_catalog"]
     assert catalog["version"] == "aurora_requirement_pack_v1"
-    assert catalog["profiles"]["duplicate_control"] == ["invoice", "duplicate_payment_screen"]
+    assert catalog["profiles"]["duplicate_control"] == [
+        "invoice",
+        "invoice_calculation_valid",
+        "duplicate_payment_screen",
+    ]
+    assert "invoice_calculation_valid" in catalog["profiles"]["invoice_only"]
+    assert "invoice_calculation_valid" in catalog["profiles"]["duplicate_control"]
     assert "three_way_amount_match" not in catalog["profiles"]["three_way_control"]
 
 
@@ -273,6 +308,29 @@ def test_context_compiler_gives_terminal_hints_for_file_and_materials_results(tm
     assert "reports/final_report.md" in files_observation["summary"]
     assert advisor_observation["next_action_hint"] == "final_answer"
     assert "原始ERP截图" in advisor_observation["summary"]
+
+
+def test_write_case_patch_summary_returns_current_requirement_statuses(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    state = HarnessRuntime(store).begin_run("case_ctx_patch_status", "review")
+    compiler = ContextCompiler(store, LlmClient())
+
+    observation = compiler.record_result(
+        state,
+        kind="tool",
+        name="write_case_patch",
+        result={
+            "status": "collecting_materials",
+            "evidence_items": [{"id": "ev_1"}],
+            "requirements": [
+                {"id": "invoice", "status": "accepted"},
+                {"id": "no_active_duplicate", "status": "weak"},
+            ],
+        },
+    )
+
+    assert observation["key_facts"] == ["invoice=accepted", "no_active_duplicate=weak"]
+    assert observation["next_action_hint"] == "final_answer"
 
 
 def test_context_compiler_summarizes_structured_material_tasks(tmp_path) -> None:
@@ -537,6 +595,106 @@ def test_report_writer_context_includes_user_report_instructions(tmp_path) -> No
     assert "重复付款检查" in context["user_request"]
 
 
+def test_materials_advisor_receives_only_canonical_gap_context(tmp_path, monkeypatch) -> None:
+    store = CaseStore(tmp_path / "cases")
+    state = HarnessRuntime(store).begin_run("case_advisor_context", "还缺什么材料？")
+    case_state = store.load("case_advisor_context")
+    case_state.requirements = [Requirement(
+        id="invoice",
+        label="供应商发票",
+        kind="document",
+        required=True,
+        status="weak",
+        evidence_ids=["ev_invoice"],
+    )]
+    case_state.evidence_items = [EvidenceItem(
+        id="ev_invoice",
+        type="invoice",
+        summary="已提交一份来源较弱的发票材料",
+        content="RAW_FILE_CONTENT_MUST_NOT_REACH_ADVISOR",
+        metadata={
+            "extracted_fields": {"invoice_number": {"value": "INV-RAW-SECRET"}},
+            "field_inventory": [{"field": "invoice_number", "source_quote": "INV-RAW-SECRET"}],
+        },
+    )]
+    case_state.weak_materials = ["invoice"]
+    case_state.risk_flags = ["发票来源定位不足"]
+    case_state.review_artifact = _runtime_artifact(
+        requirement_id="invoice",
+        source_id="ev_invoice",
+        claims=[Claim(
+            id="CLM_UNRELATED_SECRET",
+            subject="unrelated",
+            predicate="raw_value",
+            value="IR_CLAIM_MUST_NOT_REACH_ADVISOR",
+            source_id="ev_invoice",
+            quote="IR quote secret",
+            locator="invoice.pdf:1",
+            confidence="high",
+        )],
+        status="NOT_FOUND",
+        missing_fact="可追溯的发票来源",
+    )
+    case_state.compiled_proof = compile_review_artifact(case_state.review_artifact)
+    monkeypatch.setattr(
+        "app.context.attachment_manifest_for_context",
+        lambda *_args, **_kwargs: {
+            "manifest_ref": "attachments/attachment_manifest.json",
+            "version": "v1",
+            "status_counts": {"active": 1},
+            "attachments": [{
+                "attachment_id": "att_invoice",
+                "name": "invoice.pdf",
+                "content_kind": "pdf",
+                "status": "active",
+                "summary": "已上传一份发票来源",
+                "risks": ["来源定位待加强"],
+                "original_ref": "attachments/original/invoice.pdf",
+                "evidence_ids": ["ev_invoice"],
+                "field_inventory": [{"field": "invoice_number", "value": "MANIFEST_FIELD_SECRET"}],
+                "page_summaries": [{"text": "MANIFEST_PAGE_CONTENT_SECRET"}],
+            }],
+        },
+    )
+
+    context = ContextCompiler(store, LlmClient()).build_role_context(
+        role="materials_advisor",
+        state=state,
+        payload={},
+        user_message="还缺什么材料？",
+        case_state=case_state,
+    )
+
+    advisor_case = context["case_state"]
+    serialized = json.dumps(context, ensure_ascii=False)
+    assert advisor_case["requirements"] == [{
+        "id": "invoice",
+        "label": "供应商发票",
+        "kind": "document",
+        "required": True,
+        "status": "weak",
+        "evidence_ids": ["ev_invoice"],
+    }]
+    assert advisor_case["weak_materials"] == ["invoice"]
+    assert advisor_case["compiled_proof"]["decisions"][0]["status"] == "NOT_FOUND"
+    assert advisor_case["compiled_proof"]["obligations"][0]["missing_fact"] == "可追溯的发票来源"
+    assert advisor_case["evidence_items"][0]["summary"] == "已提交一份来源较弱的发票材料"
+    assert context["attachment_manifest"]["attachments"][0]["summary"] == "已上传一份发票来源"
+    for forbidden in (
+        "RAW_FILE_CONTENT_MUST_NOT_REACH_ADVISOR",
+        "INV-RAW-SECRET",
+        "IR_CLAIM_MUST_NOT_REACH_ADVISOR",
+        "extracted_fields",
+        "field_inventory",
+        "MANIFEST_FIELD_SECRET",
+        "MANIFEST_PAGE_CONTENT_SECRET",
+        "review_artifact",
+        '"plan"',
+        '"claims"',
+    ):
+        assert forbidden not in serialized
+
+
 def test_report_writer_context_excludes_unreviewed_attachment_context(tmp_path) -> None:
     source = tmp_path / "invoice.md"
     source.write_text("Invoice INV-CHAIN-001 Supplier Atlas Buyer Northstar Total 1200 USD", encoding="utf-8")
@@ -559,6 +717,8 @@ def test_report_writer_context_excludes_unreviewed_attachment_context(tmp_path) 
     chain = context["evidence_chain_context"]
     assert chain["attachments"] == []
     assert chain["evidence_items"] == []
+    assert context["attachment_manifest"] == {"attachments": []}
+    assert "conversation_summary" not in context
     assert "full_text" not in json.dumps(chain, ensure_ascii=False)
 
 
@@ -604,6 +764,44 @@ def test_report_writer_receives_only_compiler_admitted_claims(tmp_path) -> None:
     assert "conflicts" not in row
     assert "claim_to_source_refs" not in row
     assert "CLM_REJECTED" not in json.dumps(context, ensure_ascii=False)
+
+
+def test_report_writer_receives_canonical_contradiction_without_plan_or_assessment(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    state = HarnessRuntime(store).begin_run("case_report_contradiction", "generate report")
+    case_state = store.load("case_report_contradiction")
+    case_state.evidence_items = [EvidenceItem(id="ev_vendor", type="vendor_record")]
+    case_state.review_artifact = _runtime_artifact(
+        requirement_id="vendor_identity",
+        source_id="ev_vendor",
+        claims=[Claim(
+            id="CLM_VENDOR_INACTIVE",
+            subject="vendor",
+            predicate="status",
+            value="inactive",
+            source_id="ev_vendor",
+            quote="Status: Inactive",
+            locator="vendor.md:4",
+            confidence="high",
+        )],
+        status="CONTRADICTED",
+    )
+    case_state.compiled_proof = compile_review_artifact(case_state.review_artifact)
+
+    context = ContextCompiler(store, LlmClient()).build_role_context(
+        role="report_writer",
+        state=state,
+        payload={},
+        user_message="generate report",
+        case_state=case_state,
+    )
+
+    assert context["case_state"]["reportable"] is True
+    assert context["case_state"]["compiled_proof"]["decisions"][0]["status"] == "CONTRADICTED"
+    assert "review_artifact" not in context["case_state"]
+    assert context["evidence_chain_context"]["decisions"][0]["status"] == "CONTRADICTED"
+    assert "plan" not in context["case_state"]["compiled_proof"]
+    assert "assessments" not in context["case_state"]["compiled_proof"]
 
 
 def test_report_content_ref_preserves_explicit_report_feedback(tmp_path) -> None:

@@ -25,7 +25,7 @@ from app.runtime.policy_gate import _report_requested as _policy_report_requeste
 from app.runtime.turn_runner import AgentRuntime, ManagerRunOutcome, SdkManagerRunner, TurnRunner, _latest_observation_index, _report_requested_message, _runtime_final_answer
 from app.state.attachment_manifest import save_attachment_manifest
 from app.state.case_store import CaseStore
-from app.state.schemas import AgentTurnRequest, Attachment, CaseState, EvidenceItem, Requirement
+from app.state.schemas import AgentTurnRequest, Attachment, CaseState, EvidenceItem, Requirement, SupervisorDecision
 
 
 def test_observation_index_tracks_latest_reviewer_for_patch_ordering() -> None:
@@ -251,6 +251,97 @@ def _fake_report_writer(role: str, role_input: dict[str, Any], **_kwargs: Any) -
     return {"title": "INV-5001 审核报告", "markdown": "# INV-5001 审核报告\n\n五项核心材料均已满足。\n"}
 
 
+@pytest.mark.parametrize(
+    ("role", "role_result"),
+    [
+        ("materials_advisor", {"answer": "请补充采购订单。", "tasks": [], "missing_materials": ["purchase_order"], "next_questions": []}),
+        ("report_writer", {"title": "审核报告", "markdown": "# 审核报告\n"}),
+    ],
+)
+def test_nondeterministic_specialist_persists_and_streams_public_progress_around_call(
+    tmp_path,
+    monkeypatch,
+    role: str,
+    role_result: dict[str, Any],
+) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    runner = runtime.runner
+    state = HarnessRuntime(runner.store).begin_run(
+        f"case_progress_{role}",
+        "处理当前案件",
+        run_id=f"run_progress_{role}",
+    )
+    streamed: list[tuple[str, dict[str, Any], str]] = []
+    runner._stream_emit = lambda kind, payload, summary="": streamed.append((kind, payload, summary))  # noqa: SLF001
+
+    def fake_call(called_role: str, _role_input: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        assert called_role == role
+        assert streamed[-1][0] == "model_thinking"
+        assert streamed[-1][1]["status"] == "started"
+        persisted = [
+            json.loads(line)
+            for line in runner.store.resolve_case_path(
+                state.case_id,
+                f"traces/{state.run_id}/events.jsonl",
+            ).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert persisted[-1]["payload"]["status"] == "started"
+        return role_result
+
+    monkeypatch.setattr(runner.roles, "call", fake_call)
+    result = runner._call_specialist(  # noqa: SLF001
+        state,
+        AgentTurnRequest(case_id=state.case_id, message="处理当前案件"),
+        {},
+        SupervisorDecision(action="delegate_agent", target=role, input={}),
+    )
+
+    statuses = [
+        payload["status"]
+        for kind, payload, _summary in streamed
+        if kind == "model_thinking" and payload.get("role") == role
+    ]
+    assert result["status"] == "success"
+    assert statuses[0] == "started"
+    assert statuses[-1] == "completed"
+    persisted_text = runner.store.resolve_case_path(
+        state.case_id,
+        f"traces/{state.run_id}/events.jsonl",
+    ).read_text(encoding="utf-8")
+    assert '"status": "completed"' in persisted_text
+    assert "reasoning_content" not in persisted_text
+
+
+def test_nondeterministic_specialist_streams_public_error_without_hidden_reasoning(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    runner = runtime.runner
+    state = HarnessRuntime(runner.store).begin_run(
+        "case_progress_error",
+        "整理补料建议",
+        run_id="run_progress_error",
+    )
+    streamed: list[tuple[str, dict[str, Any], str]] = []
+    runner._stream_emit = lambda kind, payload, summary="": streamed.append((kind, payload, summary))  # noqa: SLF001
+
+    def fail_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(runner.roles, "call", fail_call)
+    result = runner._call_specialist(  # noqa: SLF001
+        state,
+        AgentTurnRequest(case_id=state.case_id, message="整理补料建议"),
+        {},
+        SupervisorDecision(action="delegate_agent", target="materials_advisor", input={}),
+    )
+
+    progress = [payload for kind, payload, _summary in streamed if kind == "model_thinking"]
+    assert result["status"] == "error"
+    assert [item["status"] for item in progress] == ["started", "error"]
+    assert progress[-1]["error_type"] == "RuntimeError"
+    assert "reasoning_content" not in json.dumps(progress, ensure_ascii=False)
+
+
 def test_report_intent_respects_negative_generation_request() -> None:
     assert not _report_requested_message("请审查这一批材料，判断证据链是否完整，不要生成报告。")
     assert not _report_requested_message("review the evidence without report generation")
@@ -260,6 +351,26 @@ def test_report_intent_respects_negative_generation_request() -> None:
     chinese_report_pdf = "\u7ee7\u7eed\u5904\u7406\uff0c\u751f\u6210\u4e2d\u6587\u5ba1\u6838\u62a5\u544a\uff0c\u5e76\u6e32\u67d3 PDF\u3002"
     assert _report_requested_message(chinese_report_pdf)
     assert _policy_report_requested(chinese_report_pdf)
+
+
+def test_report_intent_recognizes_explicit_report_synonyms_consistently() -> None:
+    messages = (
+        "我是要出具报告的。",
+        "请制作一份审核报告。",
+        "我需要一份报告。",
+        "I need a report.",
+    )
+
+    for message in messages:
+        assert _report_requested_message(message)
+        assert _policy_report_requested(message)
+
+
+def test_report_intent_keeps_explicit_negation_authoritative() -> None:
+    message = "我是要审核的，但不需要报告。"
+
+    assert not _report_requested_message(message)
+    assert not _policy_report_requested(message)
 
 
 def test_sdk_manager_resume_passes_run_state_as_runner_input(monkeypatch) -> None:
@@ -365,6 +476,61 @@ def test_manager_tool_output_keeps_raw_attachment_in_artifact(tmp_path, monkeypa
     assert marker not in rendered
     artifact = runner.context.artifacts.read(state.case_id, result["artifact_ref"])
     assert marker in json.dumps(artifact, ensure_ascii=False, default=str)
+
+
+def test_materials_advisor_preview_keeps_late_policy_blocker(tmp_path, monkeypatch) -> None:
+    tasks = [
+        {
+            "task": f"补充材料 {index}",
+            "requirement": f"requirement_{index}",
+            "current_status": "missing",
+            "why_insufficient": "当前材料不足",
+        }
+        for index in range(12)
+    ]
+    tasks.append(
+        {
+            "task": "配置重复付款检索窗口",
+            "requirement": "duplicate_search_window",
+            "current_status": "missing",
+            "why_insufficient": "企业政策尚未配置该检索期限",
+        }
+    )
+    role_result = {
+        "answer": "很长的回答" * 3000,
+        "tasks": tasks,
+        "missing_materials": ["purchase_order", "duplicate_search_window"],
+        "next_questions": ["请确认企业要求的重复付款检索期限。"],
+    }
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    runner = runtime.runner
+    state = HarnessRuntime(runner.store).begin_run(
+        "case_advisor_preview",
+        "还缺什么？",
+        run_id="run_advisor_preview",
+    )
+    monkeypatch.setattr(runner.roles, "call", lambda *_args, **_kwargs: role_result)
+
+    result = runner._call_specialist(  # noqa: SLF001
+        state,
+        AgentTurnRequest(case_id=state.case_id, message="还缺什么？"),
+        {},
+        SupervisorDecision(action="delegate_agent", target="materials_advisor", input={}),
+    )
+
+    preview = result["result_preview"]
+    artifact = runner.context.artifacts.read(state.case_id, result["artifact_ref"])
+    assert artifact["answer"] == role_result["answer"]
+    assert len(preview["answer_summary"]) <= 480
+    assert len(preview["tasks"]) == len(tasks)
+    assert preview["tasks"][-1] == {
+        "requirement": "duplicate_search_window",
+        "current_status": "missing",
+        "task": "配置重复付款检索窗口",
+        "why_insufficient": "企业政策尚未配置该检索期限",
+    }
+    assert preview["missing_materials"][-1] == "duplicate_search_window"
+    assert preview["next_questions"][-1] == "请确认企业要求的重复付款检索期限。"
 
 
 def test_current_turn_attachment_read_normalizes_manager_path_to_batch(tmp_path, monkeypatch) -> None:
@@ -648,6 +814,37 @@ def test_manager_final_with_boundary_note_is_not_rewritten(tmp_path, monkeypatch
     assert "final_answer_guard_rewrite" not in events
 
 
+def test_manager_rewrites_meta_planning_preamble_in_same_run(tmp_path, monkeypatch) -> None:
+    manager = ScriptedManagerRunner(
+        [
+            {
+                "action": "final_answer",
+                "final_answer": "I have all the information needed. Let me provide a comprehensive final response.",
+            },
+            {
+                "action": "final_answer",
+                "final_answer": "现有材料不足以支持付款审查；请补充采购订单和收货或服务验收记录。",
+            },
+        ]
+    )
+    runtime = _runtime(tmp_path, monkeypatch, manager)
+
+    response = runtime.run_turn(AgentTurnRequest(case_id="case_manager_rewrite", message="请判断材料是否足够。"))
+
+    assert response.reply == "现有材料不足以支持付款审查；请补充采购订单和收货或服务验收记录。"
+    assert response.trace["run_id"]
+    assert response.trace["step_count"] == 2
+    assert any(
+        item.get("kind") == "guard" and item.get("name") == "final_answer_internal_retry_instruction"
+        for item in response.trace["observations"]
+    )
+    events = runtime.runner.store.resolve_case_path(
+        "case_manager_rewrite", f"traces/{response.trace['run_id']}/events.jsonl"
+    ).read_text(encoding="utf-8")
+    assert "manager_final_answer_rewrite_requested" in events
+    assert "final_answer_guard_rewrite" not in events
+
+
 def test_ungrounded_legacy_conflict_does_not_override_manager_or_compiler(tmp_path, monkeypatch) -> None:
     manager = ScriptedManagerRunner(
         [{"action": "final_answer", "final_answer": "重复付款筛查尚未形成可采信证明。"}]
@@ -761,6 +958,28 @@ def test_manager_cannot_finalize_attachment_review_before_case_patch(tmp_path, m
     assert "status=new" in response.reply
 
 
+def test_manager_stale_explicit_requirement_status_rewrites_from_canonical_case(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    request = AgentTurnRequest(case_id="case_stale_status", message="总结当前审核结果")
+    _seed_ready_case(runtime.runner.store, request.case_id)
+    state = runtime.runner.harness.begin_run(request.case_id, request.message)
+
+    response = runtime.runner._finalize_manager_answer(
+        request,
+        state,
+        "| invoice | weak |",
+    )
+
+    assert "invoice=SUPPORTED" in response.reply
+    assert "satisfied=invoice" in response.reply
+    assert "| invoice | weak |" not in response.reply
+    events = runtime.runner.store.resolve_case_path(
+        request.case_id,
+        f"traces/{response.trace['run_id']}/events.jsonl",
+    ).read_text(encoding="utf-8")
+    assert "final_answer_guard_rewrite" in events
+
+
 def test_attachment_review_waits_for_manager_scope_when_none_was_selected(tmp_path, monkeypatch) -> None:
     runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
     request = AgentTurnRequest(case_id="case_default_scope", message="review payment materials")
@@ -811,6 +1030,31 @@ def test_runtime_final_answer_renders_any_compiler_decision_generically(
         assert "需要权威来源确认政策前提" in answer
     else:
         assert "尚未完成的核查：无" in answer
+
+
+def test_runtime_final_answer_preserves_not_found_with_weak_projection(tmp_path) -> None:
+    store = CaseStore(tmp_path)
+    state = HarnessRuntime(store).begin_run("case_partial_proof", "审核", run_id="run_partial_proof")
+    case_state = CaseState(
+        case_id=state.case_id,
+        status="collecting_materials",
+        requirements=[Requirement(id="policy_alignment", status="weak", evidence_ids=["ev_partial"])],
+        evidence_items=[EvidenceItem(id="ev_partial", type="unknown", summary="Partial source only.")],
+        compiled_proof=_runtime_proof(
+            "policy_alignment",
+            "NOT_FOUND",
+            missing_fact="仍缺少完成核查所需的权威来源",
+        ),
+    )
+
+    answer = _runtime_final_answer(case_state, state)
+
+    # DecisionProof and Requirement projection are intentionally different layers:
+    # a NOT_FOUND proof with a partial source projects to weak, never SUPPORTED.
+    assert "policy_alignment=NOT_FOUND" in answer
+    assert "weak=policy_alignment" in answer
+    assert "仍有 NOT_FOUND 原子检查" in answer
+    assert "policy_alignment=SUPPORTED" not in answer
 
 
 def test_runtime_final_answer_keeps_uncompiled_requirement_blockers(tmp_path) -> None:
@@ -907,6 +1151,50 @@ def test_agent_runtime_interrupts_before_approved_tool_execution(tmp_path, monke
     assert resumed.reply == "已列出本地 case 文件。"
 
 
+def test_approval_resume_continues_after_events_flushed_past_checkpoint(tmp_path, monkeypatch) -> None:
+    manager = ScriptedManagerRunner(
+        [
+            {"action": "call_tool", "target": "list_case_files", "input": {}, "reason": "inspect files"},
+            {"action": "final_answer", "final_answer": "done"},
+        ]
+    )
+    runtime = _runtime(tmp_path, monkeypatch, manager)
+    runner = runtime.runner
+    runner.tools._specs["list_case_files"] = replace(runner.tools.get("list_case_files"), approval_mode="always")  # noqa: SLF001
+    waiting = runtime.run_turn(AgentTurnRequest(case_id="case_seq_resume", message="list files"))
+    stale_state, _request, _sdk_state, _interruptions = runner.checkpoints.load(
+        "case_seq_resume",
+        waiting.trace["run_id"],
+    )
+    runner.harness.append_debug_event(
+        stale_state,
+        kind="provider_call",
+        name="planner",
+        payload={"call_number": 7, "status": "OK"},
+        summary="late provider flush",
+    )
+
+    final = runtime.resume_approval(
+        "case_seq_resume",
+        waiting.trace["run_id"],
+        approved=True,
+        reason="ok",
+    )
+    rows = [
+        json.loads(line)
+        for line in runner.store.resolve_case_path(
+            "case_seq_resume",
+            f"traces/{waiting.trace['run_id']}/events.jsonl",
+        ).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert final.reply == "done"
+    assert sum(1 for row in rows if row["kind"] == "provider_call") == 1
+    assert len({row["event_id"] for row in rows}) == len(rows)
+    assert [row["run_seq"] for row in rows] == list(range(1, len(rows) + 1))
+
+
 def test_agent_runtime_rejected_approval_does_not_execute_tool(tmp_path, monkeypatch) -> None:
     manager = ScriptedManagerRunner(
         [
@@ -945,16 +1233,73 @@ def test_report_request_runs_file_and_pdf_approval_pipeline(tmp_path, monkeypatc
     assert resumed.trace["interrupts"][0]["tool"] == "render_pdf"
     assert list((tmp_path / "cases" / "case_report_approval" / "reports").glob("*.md"))
     assert not list((tmp_path / "cases" / "case_report_approval" / "reports").glob("*.pdf"))
+    checkpoint = tmp_path / "cases" / "case_report_approval" / "traces" / response.trace["run_id"] / "runtime_state.json"
+    checkpoint_data = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert checkpoint_data["interruptions"][0]["tool"] == "render_pdf"
 
     final = runtime.resume_approval("case_report_approval", resumed.trace["run_id"], approved=True, reason="ok")
 
     assert final.trace["phase"] == "finalized"
-    assert "PDF reports/final_report_" in final.reply
+    assert "PDF（主要交付）：reports/final_report_" in final.reply
+    assert "Markdown（辅助源文件）：reports/final_report_" in final.reply
+    assert "SUPPORTED 1；CONTRADICTED 0；NOT_FOUND 0" in final.reply
+    assert "不等于业务批准或拒绝" in final.reply
     assert {call["tool"] for call in final.trace["tool_calls"]} >= {"write_case_file", "render_pdf"}
     assert list((tmp_path / "cases" / "case_report_approval" / "reports").glob("*.pdf"))
     assert any(event["kind"] == "approval" and event["name"] == "approved" for event in final.trace["observations"])
     final_trace = json.loads((tmp_path / "cases" / "case_report_approval" / "traces" / f"{response.trace['run_id']}.json").read_text(encoding="utf-8"))
     assert final_trace["interrupts"] == []
+    assert not checkpoint.exists()
+    event_rows = [
+        json.loads(line)
+        for line in (tmp_path / "cases" / "case_report_approval" / "traces" / response.trace["run_id"] / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    run_seqs = [int(item["run_seq"]) for item in event_rows]
+    event_ids = [str(item["event_id"]) for item in event_rows]
+    assert run_seqs == list(range(1, len(run_seqs) + 1))
+    assert len(event_ids) == len(set(event_ids))
+    assert [item["name"] for item in event_rows if item["kind"] == "approval_interrupt"] == [
+        "write_case_file",
+        "render_pdf",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status", "missing_fact", "expected"),
+    [
+        ("CONTRADICTED", "", "首个已证实冲突：invoice"),
+        ("NOT_FOUND", "a supplier master record", "首个未决项：invoice（a supplier master record）"),
+    ],
+)
+def test_report_completion_summarizes_first_canonical_exception(
+    tmp_path,
+    monkeypatch,
+    status: str,
+    missing_fact: str,
+    expected: str,
+) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    state = HarnessRuntime(runtime.runner.store).begin_run(
+        f"case-report-summary-{status.lower()}",
+        "生成报告，只要 Markdown",
+        run_id=f"run-report-summary-{status.lower()}",
+    )
+    state.observations.append({"kind": "tool", "name": "write_case_file"})
+    case_state = CaseState(
+        case_id=state.case_id,
+        compiled_proof=_runtime_proof("invoice", status, missing_fact=missing_fact),
+    )
+    monkeypatch.setattr(runtime.runner.store, "load", lambda _case_id: case_state)
+
+    reply = runtime.runner._deterministic_final_after_report(  # noqa: SLF001
+        AgentTurnRequest(case_id=state.case_id, message="生成报告，只要 Markdown"),
+        state,
+    )
+
+    assert expected in reply
+    assert f"{status} 1" in reply
+    assert "不等于业务批准或拒绝" in reply
 
 
 def test_report_completion_wins_over_step_limit_after_pdf_render(tmp_path, monkeypatch) -> None:

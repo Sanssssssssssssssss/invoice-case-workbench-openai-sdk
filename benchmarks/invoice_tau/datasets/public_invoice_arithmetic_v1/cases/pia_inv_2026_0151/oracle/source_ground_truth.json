@@ -1,0 +1,63 @@
+{
+  "invoice_id": "INV-2026-0151",
+  "vendor": "Duff Beverages Ltd.",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "25 Greywell Close",
+    "postal_code": "EC2R 6AA",
+    "city": "London"
+  },
+  "recipient": "Rheintal Infrastruktur Holding AG",
+  "recipient_country": "AT",
+  "recipient_address": {
+    "street": "Holunderried 4",
+    "postal_code": "1020",
+    "city": "Wien"
+  },
+  "date": "2026-03-06",
+  "due_date": "2026-05-05",
+  "line_items": [
+    {
+      "description": "Compliance audit preparation (regulations may have changed since)",
+      "quantity": 2,
+      "unit_price": "31386.20",
+      "vat_rate": "0.20",
+      "amount": "62772.40"
+    },
+    {
+      "description": "Consulting hours — Senior Partner",
+      "quantity": 1,
+      "unit_price": "22544.70",
+      "vat_rate": "0.20",
+      "amount": "22544.70"
+    },
+    {
+      "description": "Quarterly newsletter design",
+      "quantity": 1,
+      "unit_price": "39800.00",
+      "vat_rate": "0.20",
+      "amount": "39800.00"
+    }
+  ],
+  "subtotal": "125117.10",
+  "vat_rate": "0.20",
+  "vat_amount": "25023.42",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "150140.52",
+  "currency": "EUR",
+  "payment_terms": "Net 60 days",
+  "bank_details": "Lloyds Bank | IBAN: GB44 8009 9293 7247 7911 62 | BIC: LOYDGB21XXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "none",
+    "number_format": "english",
+    "layout": "mixed",
+    "consistency": "subtotal_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "125127.10",
+  "rendered_total": "150140.52",
+  "error_note": "Displayed subtotal 125127.10 differs from true subtotal 125117.10 by +10.00.",
+  "is_credit_note": false
+}

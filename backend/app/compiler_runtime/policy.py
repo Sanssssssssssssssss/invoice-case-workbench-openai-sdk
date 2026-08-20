@@ -4,6 +4,7 @@ import hashlib
 import json
 from typing import Any, Sequence
 
+from app.compiler_runtime.models import CompiledProof
 from app.domain.invoice_requirements import (
     REQUIREMENT_DEFINITIONS,
     REQUIREMENT_PACK,
@@ -47,10 +48,12 @@ def requirement_context(requirement_ids: Sequence[str]) -> list[dict[str, Any]]:
     for requirement_id in requirement_ids:
         definition = REQUIREMENT_DEFINITIONS.get(requirement_id) or {}
         hint = REQUIREMENT_PLANNING_HINTS.get(requirement_id) or {}
+        label = requirement_label(requirement_id)
         result.append(
             {
                 "id": requirement_id,
-                "label": requirement_label(requirement_id),
+                "label": label,
+                "proof_target": {"requirement_id": requirement_id, "label": label},
                 "kind": requirement_kind(requirement_id),
                 "owner": requirement_owner(requirement_id),
                 "required": default_requirement_required(requirement_id),
@@ -97,6 +100,16 @@ def required_policy_refs(requirement_ids: Sequence[str]) -> set[str]:
     }
 
 
+def proof_is_reportable(proof: CompiledProof | None) -> bool:
+    """Return whether canonical proof has no required unresolved work."""
+
+    return bool(
+        proof
+        and proof.decisions
+        and not any(obligation.blocking for obligation in proof.obligations)
+    )
+
+
 def _unique(values: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
 
@@ -105,6 +118,7 @@ __all__ = [
     "expand_active_requirements",
     "policy_excerpt_for",
     "policy_hash",
+    "proof_is_reportable",
     "required_policy_refs",
     "requirement_context",
 ]

@@ -1,0 +1,83 @@
+{
+  "invoice_id": "INV-2026-0026",
+  "vendor": "Hooli Enterprise Solutions GmbH",
+  "vendor_country": "DE",
+  "vendor_address": {
+    "street": "Eichkätzchenweg 12",
+    "postal_code": "40990",
+    "city": "Düsseldorf"
+  },
+  "recipient": "Benelux Windmill Automation B.V.",
+  "recipient_country": "NL",
+  "recipient_address": {
+    "street": "Walvisgracht 421",
+    "postal_code": "1017 BP",
+    "city": "Amsterdam"
+  },
+  "date": "2026-02-06",
+  "due_date": "2026-03-08",
+  "line_items": [
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 2,
+      "unit_price": "7817.50",
+      "vat_rate": "0.20",
+      "amount": "15635.00"
+    },
+    {
+      "description": "Quarterly newsletter design",
+      "quantity": 4,
+      "unit_price": "23332.10",
+      "vat_rate": "0.20",
+      "amount": "93328.40"
+    },
+    {
+      "description": "Retainer fee — ongoing counsel",
+      "quantity": 3,
+      "unit_price": "17856.60",
+      "vat_rate": "0.20",
+      "amount": "53569.80"
+    },
+    {
+      "description": "Marketing collateral refresh",
+      "quantity": 2,
+      "unit_price": "44296.60",
+      "vat_rate": "0.20",
+      "amount": "88593.20"
+    },
+    {
+      "description": "Board meeting facilitation",
+      "quantity": 3,
+      "unit_price": "29914.10",
+      "vat_rate": "0.20",
+      "amount": "89742.30"
+    }
+  ],
+  "subtotal": "340868.70",
+  "vat_rate": "0.20",
+  "vat_amount": "68173.74",
+  "discount": {
+    "type": "percentage",
+    "value": "0.05",
+    "applied_to": "subtotal",
+    "description": "early payment discount",
+    "conditional": false
+  },
+  "discount_amount": "17043.44",
+  "total": "391999.00",
+  "currency": "EUR",
+  "payment_terms": "Net 30 days",
+  "bank_details": "Sparkasse | IBAN: DE82 7076 3049 1451 3074 80 | BIC: SPKADEFFXXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "explicit_percentage",
+    "number_format": "german",
+    "layout": "table",
+    "consistency": "total_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "340868.70",
+  "rendered_total": "384159.02",
+  "error_note": "Displayed total 384159.02 differs from true total 391999.00 by -7839.98 (-2.00%).",
+  "is_credit_note": false
+}

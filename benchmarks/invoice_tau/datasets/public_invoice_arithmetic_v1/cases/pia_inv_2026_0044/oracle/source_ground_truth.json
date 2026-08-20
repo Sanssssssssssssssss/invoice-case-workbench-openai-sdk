@@ -1,0 +1,83 @@
+{
+  "invoice_id": "INV-2026-0044",
+  "vendor": "Nakatomi Trading Corporation",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "19 Whitcomb-Stead Mews",
+    "postal_code": "E1 6BG",
+    "city": "London"
+  },
+  "recipient": "Benelux Windmill Automation B.V.",
+  "recipient_country": "NL",
+  "recipient_address": {
+    "street": "Walvisgracht 421",
+    "postal_code": "1017 BP",
+    "city": "Amsterdam"
+  },
+  "date": "2026-02-04",
+  "due_date": "2026-02-04",
+  "line_items": [
+    {
+      "description": "Data room hosting — February 2026",
+      "quantity": 2,
+      "unit_price": "334.60",
+      "vat_rate": "0.20",
+      "amount": "669.20"
+    },
+    {
+      "description": "Penetration testing — scope per SOW 2026-03",
+      "quantity": 1,
+      "unit_price": "46049.70",
+      "vat_rate": "0.10",
+      "amount": "46049.70"
+    },
+    {
+      "description": "Consulting hours — Associate",
+      "quantity": 10,
+      "unit_price": "281.20",
+      "vat_rate": "0.10",
+      "amount": "2812.00"
+    },
+    {
+      "description": "Training materials — onboarding programme",
+      "quantity": 3,
+      "unit_price": "16585.80",
+      "vat_rate": "0.20",
+      "amount": "49757.40"
+    },
+    {
+      "description": "Backup verification (annual)",
+      "quantity": 1,
+      "unit_price": "18889.60",
+      "vat_rate": "0.20",
+      "amount": "18889.60"
+    }
+  ],
+  "subtotal": "118177.90",
+  "vat_rate": null,
+  "vat_amount": "18749.41",
+  "discount": {
+    "type": "percentage",
+    "value": "0.075",
+    "applied_to": "subtotal",
+    "description": "adjustment per framework agreement ref. FA-2021-856",
+    "conditional": false
+  },
+  "discount_amount": "8863.34",
+  "total": "128063.97",
+  "currency": "EUR",
+  "payment_terms": "Due upon receipt",
+  "bank_details": "Barclays | IBAN: GB36 3687 7371 5809 7097 82 | BIC: BARCGB22XXX",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "obfuscated",
+    "number_format": "swiss",
+    "layout": "paragraph",
+    "consistency": "subtotal_error",
+    "edge_case": "mixed_vat"
+  },
+  "rendered_subtotal": "118167.90",
+  "rendered_total": "128063.97",
+  "error_note": "Displayed subtotal 118167.90 differs from true subtotal 118177.90 by -10.00.",
+  "is_credit_note": false
+}

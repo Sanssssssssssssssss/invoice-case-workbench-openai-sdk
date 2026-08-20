@@ -1,9 +1,10 @@
-import { createWriteStream, existsSync, mkdirSync } from 'node:fs'
+import { createWriteStream, mkdirSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { app } from 'electron'
+import { resolvePythonRuntime } from './pythonRuntime.js'
 
 export interface BackendHandle {
   baseUrl: string
@@ -30,10 +31,11 @@ export async function startBackend(): Promise<BackendHandle> {
   mkdirSync(logDir, { recursive: true })
   const logPath = join(logDir, `backend-${new Date().toISOString().replace(/[:.]/g, '-')}.log`)
   const log = createWriteStream(logPath, { flags: 'a' })
-  const python = resolvePython(root)
+  const python = resolvePythonRuntime(root)
+  log.write(`[desktop] python source=${python.source} command=${python.command}\n`)
   const child = spawn(
-    python,
-    ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)],
+    python.command,
+    [...python.prefixArgs, '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)],
     {
       cwd: root,
       windowsHide: true,
@@ -48,16 +50,22 @@ export async function startBackend(): Promise<BackendHandle> {
 
   child.stdout.pipe(log)
   child.stderr.pipe(log)
+  child.on('error', (error) => {
+    log.write(`\n[desktop] backend process error: ${error.message}\n`)
+  })
   child.on('exit', (code, signal) => {
     log.write(`\n[desktop] backend exited code=${code ?? ''} signal=${signal ?? ''}\n`)
     log.end()
   })
 
   try {
-    await waitForHealth(baseUrl, 60_000)
+    await waitForBackend(baseUrl, child, 60_000)
   } catch (error) {
-    child.kill()
-    throw new Error(`Python backend did not become ready. See ${logPath}. ${String(error)}`)
+    if (!child.killed) child.kill()
+    throw new Error(
+      `Python backend did not become ready using ${python.source} (${python.command}). ` +
+        `See ${logPath}. ${String(error)}`
+    )
   }
 
   return {
@@ -90,14 +98,6 @@ async function findFreePort(): Promise<number> {
   })
 }
 
-function resolvePython(root: string): string {
-  const winVenv = join(root, '.venv', 'Scripts', 'python.exe')
-  const posixVenv = join(root, '.venv', 'bin', 'python')
-  if (existsSync(winVenv)) return winVenv
-  if (existsSync(posixVenv)) return posixVenv
-  return process.platform === 'win32' ? 'python.exe' : 'python3'
-}
-
 async function waitForHealth(baseUrl: string, timeoutMs: number): Promise<void> {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
@@ -110,4 +110,28 @@ async function waitForHealth(baseUrl: string, timeoutMs: number): Promise<void> 
     await new Promise((resolveWait) => setTimeout(resolveWait, 350))
   }
   throw new Error(`Timed out waiting for ${baseUrl}/health from ${__dirname}`)
+}
+
+async function waitForBackend(
+  baseUrl: string,
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs: number
+): Promise<void> {
+  let onError: ((error: Error) => void) | undefined
+  let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined
+  const processFailure = new Promise<never>((_resolve, reject) => {
+    onError = (error) => reject(new Error(`Could not start backend process: ${error.message}`))
+    onExit = (code, signal) => {
+      reject(new Error(`Backend exited before health check (code=${code ?? ''}, signal=${signal ?? ''})`))
+    }
+    child.once('error', onError)
+    child.once('exit', onExit)
+  })
+
+  try {
+    await Promise.race([waitForHealth(baseUrl, timeoutMs), processFailure])
+  } finally {
+    if (onError) child.off('error', onError)
+    if (onExit) child.off('exit', onExit)
+  }
 }

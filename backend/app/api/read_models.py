@@ -17,6 +17,15 @@ from app.state.session_repository import SessionRepository
 
 READY_STATUSES = {"accepted", "satisfied"}
 SAFE_TRACE_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
+_HIDDEN_TRACE_KEYS = {
+    "chain_of_thought",
+    "encrypted_content",
+    "reasoning",
+    "reasoning_content",
+    "reasoning_delta",
+    "reasoning_excerpt",
+}
+_DROP_TRACE_VALUE = object()
 GENERATED_FILE_PREFIXES = (
     "reports/",
     "traces/artifacts/",
@@ -273,8 +282,12 @@ def normalize_trace_events(rows: list[dict[str, Any]]) -> list[TraceEvent]:
 
 
 def normalize_trace_event(raw: dict[str, Any]) -> TraceEvent:
+    public_raw = _public_trace_value(raw)
+    raw = public_raw if isinstance(public_raw, dict) else {}
     payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
     raw_kind = str(raw.get("kind") or "observation")
+    if raw_kind == "model_thinking":
+        raw["payload_preview"] = str(payload.get("action") or payload.get("public_reason") or "")
     kind = _event_kind(raw_kind, payload)
     status = _event_status(raw_kind, payload)
     seq = _int_value(raw.get("seq", raw.get("run_seq", 0)))
@@ -301,7 +314,7 @@ def normalize_trace_event(raw: dict[str, Any]) -> TraceEvent:
             payload.get("output")
             or payload.get("result")
             or payload.get("final_answer")
-            or payload.get("reasoning_excerpt")
+            or payload.get("action")
         ),
         payload=payload,
         raw=raw,
@@ -419,24 +432,42 @@ def _event_kind(raw_kind: str, payload: dict[str, Any]) -> str:
 
 
 def _event_id(raw: dict[str, Any], raw_kind: str, seq: int, case_seq: int) -> str:
-    if raw_kind == "model_thinking":
-        role = str((raw.get("payload") or {}).get("role") or raw.get("name") or "model")
-        parent = str(raw.get("parent_event_id") or raw.get("caused_by_event_id") or "")
-        step = str(raw.get("step_count") or 0)
-        group = parent or f"root_step_{step}"
-        return f"{raw.get('run_id') or 'run'}:thinking:{_slug(role)}:{_slug(group)}"
     return str(raw.get("event_id") or f"{raw.get('run_id') or 'run'}:{seq or case_seq}")
+
+
+def _public_trace_value(value: Any, *, key: str = "") -> Any:
+    if key.lower() in _HIDDEN_TRACE_KEYS:
+        return _DROP_TRACE_VALUE
+    if isinstance(value, dict):
+        item_type = str(value.get("type") or "").lower()
+        if item_type == "reasoning" or item_type.endswith(".reasoning"):
+            return _DROP_TRACE_VALUE
+        result: dict[str, Any] = {}
+        for item_key, item_value in value.items():
+            public = _public_trace_value(item_value, key=str(item_key))
+            if public is not _DROP_TRACE_VALUE:
+                result[str(item_key)] = public
+        return result
+    if isinstance(value, list):
+        return [
+            public
+            for item in value
+            if (public := _public_trace_value(item)) is not _DROP_TRACE_VALUE
+        ]
+    return value
 
 
 def _event_summary(raw_kind: str, raw: dict[str, Any], payload: dict[str, Any]) -> str:
     if raw_kind == "model_call" and str(payload.get("role") or "").lower() == "summarizer":
         return "Attachment artifact summary completed"
     if raw_kind == "model_thinking":
+        action = str(payload.get("action") or "").strip()
+        if action:
+            return action
         role = title_case(str(payload.get("role") or raw.get("name") or "model"))
-        chars = _optional_int(payload.get("reasoning_chars")) or 0
         status = str(payload.get("status") or "streaming")
         label = "completed" if status == "completed" else "streaming"
-        return f"{role} thinking {label}; {chars} chars"
+        return f"{role} work {label}"
     return str(raw.get("summary") or raw.get("payload_preview") or "")
 
 
@@ -526,8 +557,3 @@ def _payload_preview(value: Any) -> str:
     if isinstance(value, str):
         return value[:500]
     return json_preview(value, max_chars=500)
-
-
-def _slug(value: str) -> str:
-    text = re.sub(r"[^A-Za-z0-9_.:-]+", "_", str(value or "").strip())
-    return text[:96] or "root"

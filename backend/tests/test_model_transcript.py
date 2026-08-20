@@ -9,11 +9,14 @@ from openai.types.responses.response_usage import InputTokensDetails, OutputToke
 from pydantic import BaseModel
 
 import app.compiler_runtime.transcript as transcript_module
+from app.agents.capabilities import ROLE_CAPABILITIES
+from app.compiler_runtime.runtime import PROMPT_VERSIONS
 from app.compiler_runtime.transcript import ModelTranscriptHooks
 from app.config import Settings
 from app.harness import HarnessRuntime
 from app.llm import LlmClient
 from app.runtime.context_partition import usage_from_result
+from app.runtime.turn_runner import MANAGER_PROMPT_VERSION, TurnRunner
 from app.state.case_store import CaseStore
 
 
@@ -147,6 +150,58 @@ def test_hooks_record_every_call_and_provider_error(tmp_path) -> None:
     events_path = store.resolve_case_path("case_calls", "traces/run_calls/events.jsonl")
     events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
     assert [event["payload"]["call_number"] for event in events] == [1, 2]
+
+
+def test_hooks_use_each_agent_prompt_version(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    harness = HarnessRuntime(store)
+    state = harness.begin_run("case_versions", "test", run_id="run_versions")
+    hooks = ModelTranscriptHooks(
+        harness,
+        state,
+        prompt_version="fallback_v1",
+        prompt_versions={
+            "task_compiler": "plan_v1",
+            "executor": "executor_v2",
+            "fine_verifier": "verifier_v3",
+            "case_manager": "manager_v4",
+            "report_writer": "writer_v5",
+        },
+    )
+
+    for name in ("task_compiler", "executor", "fine_verifier", "case_manager", "report_writer"):
+        agent = SimpleNamespace(name=name, model="deepseek-v4-flash")
+        _run(hooks.on_llm_start(SimpleNamespace(), agent, name, []))
+        hooks.record_error(RuntimeError("test"))
+
+    events_path = store.resolve_case_path("case_versions", "traces/run_versions/events.jsonl")
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+    assert [event["payload"]["prompt_version"] for event in events] == [
+        "plan_v1",
+        "executor_v2",
+        "verifier_v3",
+        "manager_v4",
+        "writer_v5",
+    ]
+
+
+def test_turn_runner_wires_current_prompt_versions(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    runner = TurnRunner(
+        store=store,
+        llm=LlmClient(Settings(llm_api_key="test", llm_model="deepseek-v4-flash")),
+    )
+    state = runner.harness.begin_run("case_versions", "test", run_id="run_versions")
+
+    assert runner.transcript_hooks(state).prompt_versions == {
+        "case_manager": MANAGER_PROMPT_VERSION,
+        "planner": MANAGER_PROMPT_VERSION,
+        "task_compiler": PROMPT_VERSIONS["task_compiler"],
+        "executor": PROMPT_VERSIONS["executor"],
+        "fine_verifier": PROMPT_VERSIONS["verifier"],
+        "materials_advisor": ROLE_CAPABILITIES["materials_advisor"].prompt_version,
+        "report_writer": ROLE_CAPABILITIES["report_writer"].prompt_version,
+    }
 
 
 def test_transcript_write_failure_is_only_a_trace_warning(tmp_path, monkeypatch) -> None:

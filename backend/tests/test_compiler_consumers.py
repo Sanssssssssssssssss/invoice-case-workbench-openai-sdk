@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.compiler_runtime import (
     CheckAssessment,
     Claim,
@@ -11,7 +13,11 @@ from app.compiler_runtime import (
 )
 from app.context import _case_brief, _report_case_state
 from app.evals.oracle import complete_claim_consistency_errors
-from app.guards import enforce_case_state_consistency
+from app.guards import (
+    CaseStateConsistencyError,
+    enforce_case_state_consistency,
+    enforce_report_proof_consistency,
+)
 from app.state.schemas import CaseState, EvidenceItem, Requirement
 
 
@@ -91,7 +97,10 @@ def test_context_consumes_runtime_proof_without_legacy_fields() -> None:
 
     assert "invoice=SUPPORTED" in brief
     assert report_state["compiled_proof"]["decisions"][0]["status"] == "SUPPORTED"
-    assert report_state["review_artifact"]["evidence_ir"]["claims"][0]["quote"] == "Invoice INV-1"
+    assert report_state["reportable"] is True
+    assert "review_artifact" not in report_state
+    assert "plan" not in report_state
+    assert "assessments" not in report_state
     assert report_state["evidence_items"] == [
         {
             "id": "ev.invoice",
@@ -108,3 +117,22 @@ def test_complete_claim_guards_use_decision_root_and_grounded_claims() -> None:
 
     assert enforce_case_state_consistency("status = ready_for_report", case_state) == "status = ready_for_report"
     assert complete_claim_consistency_errors(case_state) == []
+
+
+def test_report_guard_requires_each_canonical_contradiction_and_rejects_no_conflict() -> None:
+    case_state = _case_with_supported_runtime_proof()
+    assessment = case_state.review_artifact.assessments[0].model_copy(
+        update={"status": "CONTRADICTED"}
+    )
+    case_state.review_artifact = case_state.review_artifact.model_copy(
+        update={"assessments": [assessment]}
+    )
+    case_state.compiled_proof = compile_review_artifact(case_state.review_artifact)
+
+    with pytest.raises(CaseStateConsistencyError, match="no conflict"):
+        enforce_report_proof_consistency("invoice 未发现冲突。", case_state)
+    with pytest.raises(CaseStateConsistencyError, match="omits contradicted requirements"):
+        enforce_report_proof_consistency("已发现一个证据冲突。", case_state)
+
+    report = "Requirement invoice：证据明确反驳该项要求。"
+    assert enforce_report_proof_consistency(report, case_state) == report

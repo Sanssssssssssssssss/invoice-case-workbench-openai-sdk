@@ -1,0 +1,84 @@
+{
+  "invoice_id": "INV-2026-0020",
+  "vendor": "Bluth Development Company LLC",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "19 Whitcomb-Stead Mews",
+    "postal_code": "E1 6BG",
+    "city": "London"
+  },
+  "recipient": "Mittelstand Digital Solutions GmbH",
+  "recipient_country": "DE",
+  "recipient_address": {
+    "street": "Roggenfeldallee 42",
+    "postal_code": "60311",
+    "city": "Frankfurt am Main"
+  },
+  "date": "2026-01-02",
+  "due_date": "2026-01-16",
+  "line_items": [
+    {
+      "description": "Travel expenses (Frankfurt–Zürich)",
+      "quantity": 1,
+      "unit_price": "19961.00",
+      "vat_rate": "0.00",
+      "amount": "19961.00"
+    },
+    {
+      "description": "Database optimisation retainer — March",
+      "quantity": 5,
+      "unit_price": "793.50",
+      "vat_rate": "0.00",
+      "amount": "3967.50"
+    },
+    {
+      "description": "Retainer fee — ongoing counsel",
+      "quantity": 4,
+      "unit_price": "37716.10",
+      "vat_rate": "0.00",
+      "amount": "150864.40"
+    },
+    {
+      "description": "Server maintenance — March 2026",
+      "quantity": 4,
+      "unit_price": "33219.10",
+      "vat_rate": "0.00",
+      "amount": "132876.40"
+    },
+    {
+      "description": "Consulting hours — Senior Partner",
+      "quantity": 1,
+      "unit_price": "12345.40",
+      "vat_rate": "0.00",
+      "amount": "12345.40"
+    },
+    {
+      "description": "Annual subscription — enterprise tier (unused features included)",
+      "quantity": 5,
+      "unit_price": "203.10",
+      "vat_rate": "0.00",
+      "amount": "1015.50"
+    }
+  ],
+  "subtotal": "321030.20",
+  "vat_rate": "0.00",
+  "vat_amount": "0.00",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "321030.20",
+  "currency": "EUR",
+  "payment_terms": "Payable within 14 days",
+  "bank_details": "HSBC UK | IBAN: GB33 6619 2995 6320 3116 09 | BIC: HBUKGB4BXXX",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "none",
+    "number_format": "english",
+    "layout": "table",
+    "consistency": "correct",
+    "edge_case": "reverse_charge"
+  },
+  "rendered_subtotal": "321030.20",
+  "rendered_total": "321030.20",
+  "error_note": null,
+  "is_credit_note": false
+}

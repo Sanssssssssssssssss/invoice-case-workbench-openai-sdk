@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from graphlib import CycleError, TopologicalSorter
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-NodeKind = Literal["CHECK", "ALL", "ANY", "NOT"]
+NodeKind = Literal["CHECK", "ALL", "ANY"]
 AssessmentStatus = Literal["SUPPORTED", "CONTRADICTED", "NOT_FOUND"]
 
 
@@ -69,9 +70,7 @@ class ProofNode(_CompilerModel):
             raise ValueError(f"{self.kind} node {self.id!r} cannot contain a check statement")
         if self.requirement_refs or self.policy_refs:
             raise ValueError(f"{self.kind} node {self.id!r} cannot contain requirement or policy refs")
-        if self.kind == "NOT" and len(self.depends_on) != 1:
-            raise ValueError(f"NOT node {self.id!r} requires exactly one dependency")
-        if self.kind in {"ALL", "ANY"} and not self.depends_on:
+        if not self.depends_on:
             raise ValueError(f"{self.kind} node {self.id!r} requires at least one dependency")
         return self
 
@@ -266,12 +265,14 @@ class EvidenceIR(_CompilerModel):
 
 class CheckAssessment(_CompilerModel):
     check_id: str
-    status: AssessmentStatus
     claim_ids: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
     examined_source_ids: list[str] = Field(default_factory=list)
     reason: str = ""
     missing_fact: str = ""
+    # Keep the verdict last in the structured output. Autoregressive models must
+    # finish checking the evidence before committing to the classification.
+    status: AssessmentStatus
 
     @field_validator("check_id")
     @classmethod
@@ -288,6 +289,23 @@ class CheckAssessment(_CompilerModel):
         self.reason = self.reason.strip()
         self.missing_fact = self.missing_fact.strip()
         return self
+
+
+_EXPLICIT_FINAL_STATUS = re.compile(
+    r"\b(?:final\s+(?:classification|status)|verdict)\s*(?:is|:|=|should\s+be|must\s+be)?\s*"
+    r"`?(SUPPORTED|CONTRADICTED|NOT_FOUND)`?\b"
+    r"|\b(?:the\s+)?check\s+(?:is|should\s+be|must\s+be|is\s+classified\s+as)\s*"
+    r"`?(SUPPORTED|CONTRADICTED|NOT_FOUND)`?\b",
+    flags=re.IGNORECASE,
+)
+
+
+def explicit_final_statuses(reason: str) -> set[str]:
+    """Return only statuses the verifier explicitly presents as its conclusion."""
+    return {
+        next(value for value in match if value).upper()
+        for match in _EXPLICIT_FINAL_STATUS.findall(reason)
+    }
 
 
 class ReviewArtifact(_CompilerModel):

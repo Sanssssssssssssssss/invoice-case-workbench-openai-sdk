@@ -12,6 +12,7 @@ from app.compiler_runtime import (
     ReviewArtifact,
     compile_review_artifact,
 )
+from app.compiler_runtime.policy import proof_is_reportable
 
 
 def _plan(*, root_kind: str = "ALL", reverse: bool = False) -> ProofPlan:
@@ -291,42 +292,9 @@ def test_kernel_uses_pure_three_value_aggregation(
     assert bool(proof.obligations) is (expected == "NOT_FOUND")
 
 
-@pytest.mark.parametrize(
-    ("child_status", "expected"),
-    [
-        ("SUPPORTED", "CONTRADICTED"),
-        ("CONTRADICTED", "SUPPORTED"),
-        ("NOT_FOUND", "NOT_FOUND"),
-    ],
-)
-def test_not_node_preserves_three_value_semantics(child_status: str, expected: str) -> None:
-    plan = ProofPlan(
-        plan_id="not-plan",
-        objective="Establish the negation of one grounded check.",
-        active_requirement_ids=["req.not"],
-        roots={"req.not": "root.not"},
-        nodes=[
-            ProofNode(
-                id="check.fact",
-                kind="CHECK",
-                statement="The prohibited fact exists.",
-                requirement_refs=["req.not"],
-            ),
-            ProofNode(id="root.not", kind="NOT", depends_on=["check.fact"]),
-        ],
-    )
-    assessment = CheckAssessment(
-        check_id="check.fact",
-        status=child_status,
-        claim_ids=["claim.total"] if child_status != "NOT_FOUND" else [],
-        source_ids=["source.invoice"] if child_status != "NOT_FOUND" else [],
-        examined_source_ids=["source.invoice"],
-        missing_fact="whether the prohibited fact exists" if child_status == "NOT_FOUND" else "",
-    )
-
-    proof = compile_review_artifact(_artifact([assessment], plan=plan))
-
-    assert proof.decision_for("req.not").status == expected
+def test_proof_node_rejects_removed_not_kind() -> None:
+    with pytest.raises(ValidationError, match="CHECK|ALL|ANY"):
+        ProofNode(id="root.not", kind="NOT", depends_on=["check.fact"])
 
 
 def test_strong_assessment_with_invalid_refs_fails_closed_once() -> None:
@@ -349,6 +317,39 @@ def test_strong_assessment_with_invalid_refs_fails_closed_once() -> None:
     assert [item.check_id for item in proof.obligations] == ["check.invoice_total"]
 
 
+def test_explicit_status_reason_conflict_fails_closed_at_kernel_boundary() -> None:
+    assessment = _assessment("check.invoice_total", "SUPPORTED").model_copy(
+        update={
+            "reason": (
+                "The recomputed total differs from the printed total beyond tolerance, "
+                "so the check is CONTRADICTED."
+            )
+        }
+    )
+
+    proof = compile_review_artifact(
+        _artifact([assessment, _assessment("check.currency", "SUPPORTED")])
+    )
+
+    assert proof.decision_for("req.invoice_review").status == "NOT_FOUND"
+    assert [item.code for item in proof.diagnostics] == [
+        "ASSESSMENT_STATUS_REASON_CONFLICT"
+    ]
+
+
+def test_negated_status_word_is_not_treated_as_an_explicit_final_status() -> None:
+    assessment = _assessment("check.invoice_total", "SUPPORTED").model_copy(
+        update={"reason": "The evidence is not CONTRADICTED; it directly supports the check."}
+    )
+
+    proof = compile_review_artifact(
+        _artifact([assessment, _assessment("check.currency", "SUPPORTED")])
+    )
+
+    assert proof.decision_for("req.invoice_review").status == "SUPPORTED"
+    assert proof.diagnostics == []
+
+
 def test_unconfigured_policy_forces_its_check_to_not_found() -> None:
     proof = compile_review_artifact(
         _artifact(
@@ -363,6 +364,83 @@ def test_unconfigured_policy_forces_its_check_to_not_found() -> None:
     assert proof.decision_for("req.invoice_review").status == "NOT_FOUND"
     assert [item.code for item in proof.diagnostics] == ["POLICY_NOT_CONFIGURED"]
     assert [item.check_id for item in proof.obligations] == ["check.invoice_total"]
+    result = next(item for item in proof.node_results if item.node_id == "check.invoice_total")
+    assert result.claim_ids == ["claim.total"]
+    assert result.source_ids == ["source.invoice"]
+
+
+def test_optional_not_found_obligation_is_non_blocking() -> None:
+    artifact = _artifact(
+        [
+            _assessment("check.invoice_total", "NOT_FOUND"),
+            _assessment("check.currency", "SUPPORTED"),
+        ]
+    )
+
+    proof = compile_review_artifact(
+        artifact,
+        requirement_requiredness={"req.invoice_review": False},
+    )
+
+    assert proof.decision_for("req.invoice_review").status == "NOT_FOUND"
+    assert proof.decision_for("req.invoice_review").stop_reason == "optional evidence remains unresolved"
+    assert proof.obligations
+    assert all(item.blocking is False for item in proof.obligations)
+    assert proof_is_reportable(proof)
+
+
+def test_flipkart_template_without_comparison_baseline_stays_optional_not_found() -> None:
+    plan = ProofPlan(
+        plan_id="plan.flipkart.template",
+        objective="Establish the template-match Requirement without reversing its polarity.",
+        active_requirement_ids=["template_match"],
+        roots={"template_match": "check.template_match"},
+        nodes=[
+            ProofNode(
+                id="check.template_match",
+                kind="CHECK",
+                statement="The invoice conforms to an admitted expected template baseline.",
+                requirement_refs=["template_match"],
+            )
+        ],
+    )
+    assessment = CheckAssessment(
+        check_id="check.template_match",
+        status="NOT_FOUND",
+        claim_ids=["claim.total"],
+        source_ids=["source.invoice"],
+        examined_source_ids=["source.invoice"],
+        reason="The invoice resembles an invoice, but no comparison baseline was admitted.",
+        missing_fact="an admitted expected template baseline",
+    )
+    proof = compile_review_artifact(
+        _artifact(
+            [assessment],
+            plan=plan,
+            submitted_claim_refs={"check.template_match": ["claim.total"]},
+        ),
+        requirement_requiredness={"template_match": False},
+    )
+
+    decision = proof.decision_for("template_match")
+    assert decision.status == "NOT_FOUND"
+    assert decision.root_node_id == "check.template_match"
+    assert proof.obligations[0].blocking is False
+    assert proof_is_reportable(proof)
+
+
+def test_direct_contradiction_is_reportable() -> None:
+    proof = compile_review_artifact(
+        _artifact(
+            [
+                _assessment("check.invoice_total", "CONTRADICTED"),
+                _assessment("check.currency", "SUPPORTED"),
+            ]
+        )
+    )
+
+    assert proof.decision_for("req.invoice_review").status == "CONTRADICTED"
+    assert proof_is_reportable(proof)
 
 
 @pytest.mark.parametrize(
@@ -489,6 +567,62 @@ def test_assessment_must_cite_the_sources_of_its_claims() -> None:
 
     assert proof.decision_for("req.invoice_review").status == "NOT_FOUND"
     assert [item.code for item in proof.diagnostics] == ["CLAIM_SOURCE_NOT_CITED"]
+
+
+def test_strong_assessment_cannot_add_sources_not_used_by_its_claims() -> None:
+    evidence_ir = EvidenceIR(
+        source_ids=["source.invoice", "source.other"],
+        source_fingerprints={
+            "source.invoice": "sha256:invoice-v1",
+            "source.other": "sha256:other-v1",
+        },
+        claims=_ir().claims,
+    )
+    assessment = _assessment("check.invoice_total", "SUPPORTED").model_copy(
+        update={
+            "source_ids": ["source.invoice", "source.other"],
+            "examined_source_ids": ["source.invoice", "source.other"],
+        }
+    )
+    currency = _assessment("check.currency", "SUPPORTED").model_copy(
+        update={"examined_source_ids": ["source.invoice", "source.other"]}
+    )
+
+    proof = compile_review_artifact(
+        _artifact([assessment, currency], evidence_ir=evidence_ir)
+    )
+
+    assert proof.decision_for("req.invoice_review").status == "NOT_FOUND"
+    assert [item.code for item in proof.diagnostics] == ["UNSUPPORTED_SOURCE_REFERENCE"]
+
+
+def test_not_found_may_record_examined_sources_beyond_its_partial_claims() -> None:
+    evidence_ir = EvidenceIR(
+        source_ids=["source.invoice", "source.other"],
+        source_fingerprints={
+            "source.invoice": "sha256:invoice-v1",
+            "source.other": "sha256:other-v1",
+        },
+        claims=_ir().claims,
+    )
+    assessment = CheckAssessment(
+        check_id="check.invoice_total",
+        status="NOT_FOUND",
+        claim_ids=["claim.total"],
+        source_ids=["source.invoice", "source.other"],
+        examined_source_ids=["source.invoice", "source.other"],
+        missing_fact="a comparable baseline",
+    )
+    currency = _assessment("check.currency", "SUPPORTED").model_copy(
+        update={"examined_source_ids": ["source.invoice", "source.other"]}
+    )
+
+    proof = compile_review_artifact(
+        _artifact([assessment, currency], evidence_ir=evidence_ir)
+    )
+
+    assert proof.decision_for("req.invoice_review").status == "NOT_FOUND"
+    assert proof.diagnostics == []
 
 
 def test_strong_assessment_requires_exact_source_coverage() -> None:

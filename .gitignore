@@ -20,6 +20,10 @@ backend/storage/*.sqlite
 backend/storage/checkpoints/
 workspace/cases/
 /workspace/
+/output/
+/.cache/
+/.pnpm-store/
+/.playwright-cli/
 /reports/live_golden_cases/
 /reports/migrations/
 reports/evals/latest_session_eval.*

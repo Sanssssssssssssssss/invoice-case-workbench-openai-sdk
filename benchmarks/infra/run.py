@@ -28,7 +28,7 @@ from app.state.schemas import AgentTurnRequest, AgentTurnResponse, CaseState
 
 
 DEFAULT_SCENARIOS = ["simple", "material_advice", "small_attachment", "multi_attachment", "case_patch", "report_approval"]
-DEFAULT_VARIANTS = ["blocking", "streaming"]
+DEFAULT_VARIANTS = ["streaming"]
 
 
 @dataclass
@@ -83,9 +83,7 @@ def _run_fake_benchmark(*, scenarios: list[str], variants: list[str], iterations
         store = CaseStore(tmp_path / "workspace" / "cases")
         fake = _FakeRuntime(store)
         original_stream_runtime = agent_runs.AgentRuntime
-        original_turn_runtime = main_app.AgentRuntime
         agent_runs.AgentRuntime = lambda: fake  # type: ignore[assignment]
-        main_app.AgentRuntime = lambda: fake  # type: ignore[assignment]
         try:
             with TestClient(main_app.app) as client:
                 for iteration in range(1, iterations + 1):
@@ -95,7 +93,6 @@ def _run_fake_benchmark(*, scenarios: list[str], variants: list[str], iterations
                             rows.append(_run_one(client, tmp_path, scenario=scenario, variant=variant, iteration=iteration, transport=transport))
         finally:
             agent_runs.AgentRuntime = original_stream_runtime  # type: ignore[assignment]
-            main_app.AgentRuntime = original_turn_runtime  # type: ignore[assignment]
             get_settings.cache_clear()
     return rows
 
@@ -106,25 +103,6 @@ def _run_one(client: TestClient, tmp_path: Path, *, scenario: str, variant: str,
     attachments = _upload_attachments(client, tmp_path, case_id, scenario)
     started = time.perf_counter()
     try:
-        if variant == "blocking":
-            response = client.post(
-                "/api/agent/turn",
-                json={"case_id": case_id, "message": message, "attachments": attachments},
-            )
-            response.raise_for_status()
-            return BenchRow(
-                scenario=scenario,
-                variant=variant,
-                transport="none",
-                iteration=iteration,
-                accepted_ms=None,
-                first_sse_ms=None,
-                first_delta_ms=None,
-                final_ms=_elapsed_ms(started),
-                approval_ms=None,
-                event_loop_lag_ms=None,
-                event_count=0,
-            )
         if variant != "streaming":
             raise ValueError(f"unknown variant: {variant}")
         accepted = client.post(
@@ -171,7 +149,7 @@ def _run_one(client: TestClient, tmp_path: Path, *, scenario: str, variant: str,
         return BenchRow(
             scenario=scenario,
             variant=variant,
-            transport=transport if variant == "streaming" else "none",
+            transport=transport,
             iteration=iteration,
             accepted_ms=None,
             first_sse_ms=None,
@@ -280,15 +258,6 @@ class _FakeRuntime:
     def __init__(self, store: CaseStore) -> None:
         self.runner = SimpleNamespace(store=store, harness=HarnessRuntime(store))
 
-    def run_turn(self, request: AgentTurnRequest) -> AgentTurnResponse:
-        _sleep_for(request.message)
-        return AgentTurnResponse(
-            case_id=request.case_id,
-            reply=f"blocking final: {request.message}",
-            case_state=CaseState(case_id=request.case_id),
-            trace={"run_id": "blocking", "status": "completed", "observability": _fake_observability()},
-        )
-
     async def run_turn_streamed(self, request: AgentTurnRequest, *, run_id: str, event_sink: Any | None = None) -> AgentTurnResponse:
         assert event_sink is not None
         event_sink("context_loaded", {"case_id": request.case_id}, summary="context loaded")
@@ -342,10 +311,6 @@ def _message_for(scenario: str) -> str:
         "case_patch": "review and patch case",
         "report_approval": "generate report approval",
     }.get(scenario, scenario)
-
-
-def _sleep_for(message: str) -> None:
-    time.sleep(0.035 + _async_delay_for(message))
 
 
 def _async_delay_for(message: str) -> float:

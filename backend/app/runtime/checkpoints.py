@@ -41,11 +41,44 @@ class RuntimeCheckpointStore:
             if not path.exists():
                 raise FileNotFoundError(run_id)
             payload = json.loads(path.read_text(encoding="utf-8"))
-        state = _run_state_from_json(payload.get("run_state") or {})
-        request = AgentTurnRequest.model_validate(payload.get("request") or {"case_id": case_id, "message": ""})
-        sdk_state = str(payload.get("sdk_state") or "")
-        interruptions = payload.get("interruptions") if isinstance(payload.get("interruptions"), list) else []
-        return state, request, sdk_state, [item for item in interruptions if isinstance(item, dict)]
+        return _checkpoint_from_json(payload, case_id)
+
+    def consume(self, case_id: str, run_id: str) -> tuple[HarnessRunState, AgentTurnRequest, str, list[dict[str, Any]]]:
+        """Atomically take the one pending approval checkpoint.
+
+        A later approval in the same run writes a new checkpoint. Replaying an
+        already answered approval is therefore impossible even if the caller
+        bypasses the in-memory stream hub.
+        """
+
+        with PERSISTENCE_LOCK:
+            case_id = self.store.validate_case_id(case_id)
+            path = self.store.resolve_case_path(case_id, f"traces/{run_id}/runtime_state.json")
+            if not path.exists():
+                raise FileNotFoundError(run_id)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            path.unlink()
+        return _checkpoint_from_json(payload, case_id)
+
+    def clear(self, case_id: str, run_id: str) -> None:
+        with PERSISTENCE_LOCK:
+            path = self.store.resolve_case_path(
+                self.store.validate_case_id(case_id),
+                f"traces/{run_id}/runtime_state.json",
+            )
+            if path.exists():
+                path.unlink()
+
+
+def _checkpoint_from_json(
+    payload: dict[str, Any],
+    case_id: str,
+) -> tuple[HarnessRunState, AgentTurnRequest, str, list[dict[str, Any]]]:
+    state = _run_state_from_json(payload.get("run_state") or {})
+    request = AgentTurnRequest.model_validate(payload.get("request") or {"case_id": case_id, "message": ""})
+    sdk_state = str(payload.get("sdk_state") or "")
+    interruptions = payload.get("interruptions") if isinstance(payload.get("interruptions"), list) else []
+    return state, request, sdk_state, [item for item in interruptions if isinstance(item, dict)]
 
 
 def _run_state_from_json(data: dict[str, Any]) -> HarnessRunState:

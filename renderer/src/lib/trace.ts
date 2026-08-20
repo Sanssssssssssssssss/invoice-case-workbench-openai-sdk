@@ -1,19 +1,21 @@
 import type { TraceEvent } from '@/types'
 
-export function eventTone(event: Pick<TraceEvent, 'kind' | 'status'>) {
+export function eventTone(event: Pick<TraceEvent, 'kind' | 'status' | 'raw_kind'>) {
   if (event.status === 'error' || event.kind === 'error') return 'danger'
   if (event.kind === 'checkpoint' || event.status === 'saved') return 'success'
   if (event.kind === 'tool') return 'teal'
   if (event.kind === 'thinking') return 'thinking'
-  if (event.kind === 'model') return 'blue'
+  if (event.kind === 'model' || event.raw_kind === 'provider_call') return 'blue'
   if (event.kind === 'artifact_summary') return 'violet'
   if (event.kind === 'artifact') return 'violet'
   return 'neutral'
 }
 
 export function eventTitle(event: TraceEvent) {
+  if (event.raw_kind === 'provider_call') return `Provider API 调用：${roleLabel(event.name)}`
   if (event.raw_kind === 'model_thinking' || event.kind === 'thinking') return `模型思考：${roleLabel(event.name)}`
   if (event.kind === 'artifact_summary') return '附件摘要'
+  if (event.raw_kind === 'model_call' && event.kind === 'model') return `角色调用统计：${roleLabel(event.name)}`
   if (event.kind === 'tool') return `工具：${event.name}`
   if (event.kind === 'planner') return '规划器'
   if (event.kind === 'model') return `模型调用：${roleLabel(event.name)}`
@@ -52,6 +54,9 @@ export function timelinePositionClass(index: number, total: number) {
 export function roleLabel(value: string) {
   return {
     planner: '规划器',
+    task_compiler: 'Task Compiler',
+    executor: 'Executor',
+    fine_verifier: 'Fine Verifier',
     materials_advisor: '材料顾问',
     evidence_reviewer: '证据审核员',
     case_patch_writer: '案件更新员',

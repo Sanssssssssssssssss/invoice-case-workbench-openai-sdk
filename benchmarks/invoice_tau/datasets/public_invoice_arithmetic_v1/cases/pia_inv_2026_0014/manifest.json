@@ -1,0 +1,65 @@
+{
+  "schema_version": "1",
+  "case_id": "pia_inv_2026_0014",
+  "split": "dev",
+  "capabilities": [
+    "invoice_document_reading",
+    "invoice_arithmetic"
+  ],
+  "lineage": {
+    "kind": "public_original",
+    "content_origin": "synthetic",
+    "parent_case_ids": [],
+    "mutation": "",
+    "generator": "InvoiceBenchmark invoice_generator.py seed=42"
+  },
+  "sources": [
+    {
+      "source_id": "src_inv_2026_0014",
+      "origin": "public_synthetic",
+      "title": "InvoiceBenchmark INV-2026-0014",
+      "canonical_url": "https://huggingface.co/datasets/jngb-labs/InvoiceBenchmark/blob/f0699d8c94468fb2fefaa22f669684b22e68c3d3/output/pdf/INV-2026-0014.pdf",
+      "repository_commit": "f0699d8c94468fb2fefaa22f669684b22e68c3d3",
+      "retrieved_at": "2026-08-20",
+      "original_filename": "INV-2026-0014.pdf",
+      "sha256": "75761c5ad6ddf1f2cd0f37d0d4cc5ca6a2c17a26bc1080c470d0bbc38e79692c",
+      "license": {
+        "spdx": "MIT",
+        "url": "https://huggingface.co/datasets/jngb-labs/InvoiceBenchmark/blob/f0699d8c94468fb2fefaa22f669684b22e68c3d3/README.md#licence",
+        "redistribution_allowed": true,
+        "reviewed_at": "2026-08-20",
+        "evidence": "Dataset card front matter and Licence section declare MIT."
+      }
+    }
+  ],
+  "attachments": [
+    {
+      "id": "invoice",
+      "path": "attachments/invoice.pdf",
+      "media_type": "application/pdf",
+      "byte_size": 2584,
+      "sha256": "75761c5ad6ddf1f2cd0f37d0d4cc5ca6a2c17a26bc1080c470d0bbc38e79692c",
+      "page_count": 1,
+      "role": "invoice",
+      "source_id": "src_inv_2026_0014",
+      "derivation": {
+        "kind": "unchanged",
+        "parent_sha256": "75761c5ad6ddf1f2cd0f37d0d4cc5ca6a2c17a26bc1080c470d0bbc38e79692c",
+        "tool": "",
+        "version": "",
+        "description": "Byte-identical copy of the pinned upstream PDF."
+      }
+    }
+  ],
+  "annotation": {
+    "version": "1",
+    "annotated_at": "2026-08-20",
+    "annotators": [
+      "upstream-generator",
+      "local-validator"
+    ],
+    "ground_truth_basis": "Upstream Decimal/ROUND_HALF_UP generator truth plus local hash and quote validation.",
+    "independent_review": false,
+    "review_state": "machine_verified"
+  }
+}

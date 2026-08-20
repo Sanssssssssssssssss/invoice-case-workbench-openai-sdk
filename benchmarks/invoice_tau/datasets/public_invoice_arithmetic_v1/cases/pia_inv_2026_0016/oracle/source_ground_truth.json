@@ -1,0 +1,70 @@
+{
+  "invoice_id": "INV-2026-0016",
+  "vendor": "Sterling Cooper Draper Pryce",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "14 Pembroke-Brook Passage",
+    "postal_code": "EC1R 0AA",
+    "city": "London"
+  },
+  "recipient": "Rheintal Infrastruktur Holding AG",
+  "recipient_country": "AT",
+  "recipient_address": {
+    "street": "Stummfuchsgasse 47",
+    "postal_code": "1100",
+    "city": "Wien"
+  },
+  "date": "2026-01-12",
+  "due_date": "2026-02-11",
+  "line_items": [
+    {
+      "description": "Software licence renewal — 50 seats",
+      "quantity": 2,
+      "unit_price": "-42070.90",
+      "vat_rate": "0.20",
+      "amount": "-84141.80"
+    },
+    {
+      "description": "Legal opinion — cross-border financing",
+      "quantity": 100,
+      "unit_price": "-184.10",
+      "vat_rate": "0.20",
+      "amount": "-18410.00"
+    },
+    {
+      "description": "Due-diligence memorandum — Project Thornbury",
+      "quantity": 5,
+      "unit_price": "-1999.40",
+      "vat_rate": "0.20",
+      "amount": "-9997.00"
+    },
+    {
+      "description": "Consulting hours — Senior Partner",
+      "quantity": 2,
+      "unit_price": "-4633.60",
+      "vat_rate": "0.20",
+      "amount": "-9267.20"
+    }
+  ],
+  "subtotal": "-121816.00",
+  "vat_rate": "0.20",
+  "vat_amount": "-24363.20",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "-146179.20",
+  "currency": "EUR",
+  "payment_terms": "Net 30 days",
+  "bank_details": "HSBC UK | IBAN: GB07 1357 9685 5164 3596 79 | BIC: HBUKGB4BXXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "none",
+    "number_format": "swiss",
+    "layout": "table",
+    "consistency": "total_error",
+    "edge_case": "credit_note"
+  },
+  "rendered_subtotal": "-121816.00",
+  "rendered_total": "-144717.41",
+  "error_note": "Displayed total -144717.41 differs from true total -146179.20 by +1461.79 (-1.00%).",
+  "is_credit_note": true
+}

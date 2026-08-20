@@ -1,0 +1,429 @@
+{
+  "schema_version": "1",
+  "dataset_id": "public_invoice_arithmetic_v1",
+  "title": "Public Invoice Arithmetic Benchmark v1",
+  "status": "machine_qualified",
+  "description": "Fifty unique, redistributable public synthetic invoice PDFs with cent-perfect oracle data.",
+  "case_count": 50,
+  "unique_pdf_count": 50,
+  "split_counts": {
+    "dev": 30,
+    "validation": 10,
+    "holdout": 10
+  },
+  "source_dataset": {
+    "id": "jngb-labs/InvoiceBenchmark",
+    "commit": "f0699d8c94468fb2fefaa22f669684b22e68c3d3",
+    "license": "MIT",
+    "url": "https://huggingface.co/datasets/jngb-labs/InvoiceBenchmark/tree/f0699d8c94468fb2fefaa22f669684b22e68c3d3"
+  },
+  "qualification": {
+    "all_hashes_verified": true,
+    "all_oracles_present": true,
+    "all_pdf_signatures_verified": true,
+    "all_pdf_parseable": true,
+    "all_pdf_page_counts": {
+      "1": 50
+    },
+    "all_pdf_text_layers_present": true,
+    "minimum_extracted_text_characters": 613,
+    "representative_visual_review_count": 4,
+    "visual_reviewed_case_ids": [
+      "pia_inv_2026_0002",
+      "pia_inv_2026_0005",
+      "pia_inv_2026_0014",
+      "pia_inv_2026_0044"
+    ],
+    "visual_reviewed_at": "2026-08-20",
+    "full_independent_human_review": false
+  },
+  "coverage": {
+    "number_format": {
+      "english": 18,
+      "german": 16,
+      "swiss": 16
+    },
+    "layout": {
+      "mixed": 16,
+      "paragraph": 18,
+      "table": 16
+    },
+    "vat_variant": {
+      "explicit_excluded": 15,
+      "explicit_included": 12,
+      "implicit_no_rate": 10,
+      "implicit_rate_stated": 13
+    },
+    "discount_variant": {
+      "explicit_amount": 7,
+      "explicit_percentage": 10,
+      "none": 15,
+      "obfuscated": 11,
+      "trade_terms": 7
+    },
+    "consistency": {
+      "correct": 20,
+      "subtotal_error": 15,
+      "total_error": 15
+    },
+    "edge_case": {
+      "credit_note": 5,
+      "mixed_vat": 5,
+      "none": 30,
+      "reverse_charge": 5,
+      "single_item": 5
+    }
+  },
+  "cases": [
+    {
+      "case_id": "pia_inv_2026_0005",
+      "path": "cases/pia_inv_2026_0005",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0005",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0006",
+      "path": "cases/pia_inv_2026_0006",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0006",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0011",
+      "path": "cases/pia_inv_2026_0011",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0011",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0013",
+      "path": "cases/pia_inv_2026_0013",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0013",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0014",
+      "path": "cases/pia_inv_2026_0014",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0014",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0016",
+      "path": "cases/pia_inv_2026_0016",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0016",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0020",
+      "path": "cases/pia_inv_2026_0020",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0020",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0024",
+      "path": "cases/pia_inv_2026_0024",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0024",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0025",
+      "path": "cases/pia_inv_2026_0025",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0025",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0044",
+      "path": "cases/pia_inv_2026_0044",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0044",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0051",
+      "path": "cases/pia_inv_2026_0051",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0051",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0053",
+      "path": "cases/pia_inv_2026_0053",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0053",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0062",
+      "path": "cases/pia_inv_2026_0062",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0062",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0071",
+      "path": "cases/pia_inv_2026_0071",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0071",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0075",
+      "path": "cases/pia_inv_2026_0075",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0075",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0080",
+      "path": "cases/pia_inv_2026_0080",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0080",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0094",
+      "path": "cases/pia_inv_2026_0094",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0094",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0104",
+      "path": "cases/pia_inv_2026_0104",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0104",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0107",
+      "path": "cases/pia_inv_2026_0107",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0107",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0110",
+      "path": "cases/pia_inv_2026_0110",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0110",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0113",
+      "path": "cases/pia_inv_2026_0113",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0113",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0132",
+      "path": "cases/pia_inv_2026_0132",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0132",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0138",
+      "path": "cases/pia_inv_2026_0138",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0138",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0145",
+      "path": "cases/pia_inv_2026_0145",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0145",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0151",
+      "path": "cases/pia_inv_2026_0151",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0151",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0158",
+      "path": "cases/pia_inv_2026_0158",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0158",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0160",
+      "path": "cases/pia_inv_2026_0160",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0160",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0164",
+      "path": "cases/pia_inv_2026_0164",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0164",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0166",
+      "path": "cases/pia_inv_2026_0166",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0166",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0167",
+      "path": "cases/pia_inv_2026_0167",
+      "split": "dev",
+      "source_invoice_id": "INV-2026-0167",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0026",
+      "path": "cases/pia_inv_2026_0026",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0026",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0038",
+      "path": "cases/pia_inv_2026_0038",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0038",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0063",
+      "path": "cases/pia_inv_2026_0063",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0063",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0077",
+      "path": "cases/pia_inv_2026_0077",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0077",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0084",
+      "path": "cases/pia_inv_2026_0084",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0084",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0149",
+      "path": "cases/pia_inv_2026_0149",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0149",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0165",
+      "path": "cases/pia_inv_2026_0165",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0165",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0171",
+      "path": "cases/pia_inv_2026_0171",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0171",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0187",
+      "path": "cases/pia_inv_2026_0187",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0187",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0190",
+      "path": "cases/pia_inv_2026_0190",
+      "split": "validation",
+      "source_invoice_id": "INV-2026-0190",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0002",
+      "path": "cases/pia_inv_2026_0002",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0002",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0032",
+      "path": "cases/pia_inv_2026_0032",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0032",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0033",
+      "path": "cases/pia_inv_2026_0033",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0033",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0057",
+      "path": "cases/pia_inv_2026_0057",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0057",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0085",
+      "path": "cases/pia_inv_2026_0085",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0085",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0090",
+      "path": "cases/pia_inv_2026_0090",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0090",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0108",
+      "path": "cases/pia_inv_2026_0108",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0108",
+      "expected_status": "CONTRADICTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0114",
+      "path": "cases/pia_inv_2026_0114",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0114",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0154",
+      "path": "cases/pia_inv_2026_0154",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0154",
+      "expected_status": "SUPPORTED"
+    },
+    {
+      "case_id": "pia_inv_2026_0183",
+      "path": "cases/pia_inv_2026_0183",
+      "split": "holdout",
+      "source_invoice_id": "INV-2026-0183",
+      "expected_status": "SUPPORTED"
+    }
+  ]
+}

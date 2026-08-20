@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.compiler_runtime.policy import proof_is_reportable
+from app.domain.invoice_requirements import is_known_requirement
 from app.state.attachment_manifest import resolve_manifest_attachment
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, PolicyCheck, SupervisorDecision
@@ -54,6 +56,10 @@ class PolicyGate:
         payload_error = _decision_payload_error(decision, self.tool_catalog)
         if payload_error:
             return payload_error
+
+        requirement_scope_error = _reviewer_requirement_scope_error(decision, planner_context)
+        if requirement_scope_error:
+            return requirement_scope_error
 
         if decision.action in {"final_answer", "ask_user"} and not str(decision.final_answer or "").strip():
             return block(
@@ -200,7 +206,31 @@ class PolicyGate:
         approved_report_tool = decision.action == "call_tool" and decision.target in {"write_case_file", "render_pdf"} and _last_approval_approved_same_tool(
             state, decision.target
         )
-        if not _report_requested(user_message) and not report_pipeline_started and not approved_report_tool:
+        report_requested = _report_requested(user_message)
+        evidence_pipeline_pending = _evidence_pipeline_pending(request, state)
+        case_state = self.store.load(request.case_id) if report_requested and not evidence_pipeline_pending else None
+        reportable = proof_is_reportable(getattr(case_state, "compiled_proof", None))
+        report_action = (
+            decision.action == "delegate_agent" and decision.target == "report_writer"
+        ) or (
+            decision.action == "call_tool" and decision.target in {"write_case_file", "render_pdf"}
+        )
+        if report_requested and not evidence_pipeline_pending and not reportable and report_action:
+            blocking = [
+                item.missing_fact
+                for item in list(getattr(getattr(case_state, "compiled_proof", None), "obligations", []) or [])
+                if item.blocking
+            ]
+            return block(
+                "report_blocked_by_proof",
+                "A report requires canonical proof with no required unresolved checks.",
+                constraints=[
+                    "Use final_answer to explain the unresolved proof work instead of drafting a report.",
+                    *[f"Blocking: {item}" for item in blocking[:5]],
+                ],
+            )
+
+        if not report_requested and not report_pipeline_started and not approved_report_tool:
             if decision.action == "delegate_agent" and decision.target == "report_writer":
                 return block(
                     "report_not_requested",
@@ -215,7 +245,7 @@ class PolicyGate:
                     risk_level="local_write",
                 )
 
-        if _report_requested(user_message) and not _evidence_pipeline_pending(request, state):
+        if report_requested and not evidence_pipeline_pending and reportable:
             if not has_observation(state, kind="role", name="report_writer"):
                 if not (decision.action == "delegate_agent" and decision.target == "report_writer"):
                     return block("report_requires_writer", "Report generation must start with report_writer.", constraints=["Choose delegate_agent target=report_writer."])
@@ -226,11 +256,11 @@ class PolicyGate:
                 if not (decision.action == "call_tool" and decision.target == "render_pdf"):
                     return block("report_requires_pdf", "Default report output is PDF. Render PDF after Markdown unless the user asked Markdown only.", constraints=["Choose call_tool target=render_pdf."], risk_level="local_write")
 
-        if has_observation(state, kind="role", name="report_writer") and not has_observation(state, kind="tool", name="write_case_file"):
+        if reportable and has_observation(state, kind="role", name="report_writer") and not has_observation(state, kind="tool", name="write_case_file"):
             if decision.action == "final_answer":
                 return block("report_writer_requires_file_write", "report_writer produced Markdown; write it before final answer.", constraints=["Choose call_tool target=write_case_file."], risk_level="local_write")
 
-        if has_observation(state, kind="tool", name="write_case_file") and not _markdown_only(user_message) and not has_observation(state, kind="tool", name="render_pdf"):
+        if reportable and has_observation(state, kind="tool", name="write_case_file") and not _markdown_only(user_message) and not has_observation(state, kind="tool", name="render_pdf"):
             if decision.action == "final_answer":
                 return block("report_file_requires_pdf", "A report Markdown file was written. Render the default PDF before final answer.", constraints=["Choose call_tool target=render_pdf."], risk_level="local_write")
 
@@ -287,6 +317,66 @@ def _decision_payload_error(decision: SupervisorDecision, tool_catalog: ToolCata
             constraints=[
                 f"Allowed keys for {decision.target}: {', '.join(allowed) if allowed else '(none)'}",
                 "For current-turn read_attachment, use input={} unless reopening by attachment_id/original_ref.",
+            ],
+        )
+    return None
+
+
+def _reviewer_requirement_scope_error(
+    decision: SupervisorDecision,
+    planner_context: dict[str, Any],
+) -> PolicyCheck | None:
+    if decision.action != "delegate_agent" or decision.target != "evidence_reviewer":
+        return None
+    raw_ids = (decision.input or {}).get("active_requirement_ids") or []
+    requested = list(
+        dict.fromkeys(
+            str(item or "").strip()
+            for item in raw_ids
+            if str(item or "").strip()
+        )
+    )
+    profiles = ((planner_context.get("requirement_catalog") or {}).get("profiles") or {})
+    catalog_ids = {
+        str(item or "").strip()
+        for rows in profiles.values()
+        for item in (rows if isinstance(rows, list) else [])
+        if str(item or "").strip()
+    }
+    unknown = [
+        item
+        for item in requested
+        if item not in catalog_ids and (catalog_ids or not is_known_requirement(item))
+    ]
+    if unknown:
+        profile_keys = [item for item in unknown if item in profiles]
+        feedback = f"active_requirement_ids contains unknown Requirement ids: {', '.join(unknown)}."
+        if profile_keys:
+            feedback += " The matching values are profile grouping keys, not Requirement ids."
+        return block(
+            "unknown_active_requirement_ids",
+            feedback,
+            constraints=[
+                "Retry evidence_reviewer with only actual Requirement ids found inside context_pack.requirement_catalog.profiles value lists.",
+                "Do not pass a profile key and do not rely on PolicyGate to expand or choose a profile.",
+            ],
+        )
+
+    calculation_requirement = "invoice_calculation_valid"
+    invoice_scope_ids = {
+        str(item or "").strip()
+        for rows in profiles.values()
+        if isinstance(rows, list) and calculation_requirement in rows
+        for item in rows
+        if str(item or "").strip() != calculation_requirement
+    }
+    if set(requested).intersection(invoice_scope_ids) and calculation_requirement not in requested:
+        return block(
+            "invoice_calculation_required",
+            "Invoice review scope omitted the mandatory internal-calculation check.",
+            constraints=[
+                "Retry evidence_reviewer with invoice_calculation_valid included in active_requirement_ids.",
+                "Internal invoice arithmetic is mandatory for invoice review and cannot be omitted based on user wording.",
             ],
         )
     return None
@@ -371,10 +461,6 @@ def requires_materials_advice(message: str) -> bool:
         "材料类型",
         "案例类型",
         "发票类型",
-        "规则",
-        "模板",
-        "样例",
-        "版式",
         "保证发票",
         "发票里有什么",
         "发票里面有什么",
@@ -389,7 +475,7 @@ def requires_materials_advice(message: str) -> bool:
         return True
     explicit_advisor_terms = (
         "advisor", "materials_advisor", "材料顾问", "问一下顾问", "问一下advisor", "rag一下", "rag 一下",
-        "规则", "模板", "样例", "案例", "材料类型", "案例类型", "发票类型", "版式", "缺口", "补料",
+        "缺口", "补料",
         "缺什么", "还缺", "补什么", "需要什么", "需要准备", "准备什么", "怎么满足", "哪里不完整",
         "为什么不符合", "为什么不合规", "保证发票", "发票里有什么", "发票里面有什么",
     )
@@ -484,7 +570,16 @@ def forbids_materials_advice(message: str) -> bool:
     compact = re.sub(r"\s+", "", str(message or "").lower())
     return any(
         term in compact
-        for term in ("不要advisor", "不调用advisor", "无需advisor", "不用advisor", "noadvisor", "withoutadvisor")
+        for term in (
+            "不要advisor",
+            "不要调用advisor",
+            "别调用advisor",
+            "不调用advisor",
+            "无需advisor",
+            "不用advisor",
+            "noadvisor",
+            "withoutadvisor",
+        )
     )
 
 
@@ -583,6 +678,8 @@ def _role_failed_nonretryable(state: Any, role: str) -> bool:
                 "timeout",
                 "timed out",
                 "apitimeouterror",
+                "apiconnectionerror",
+                "connection error",
             )
         )
     return False
@@ -621,11 +718,30 @@ def _report_requested(message: str) -> bool:
     if not text:
         return False
     compact = re.sub(r"\s+", "", text)
-    if any(term in compact for term in ("不要生成报告", "不要生成pdf", "不生成报告", "先不生成", "不用生成")):
+    if any(
+        term in text
+        for term in (
+            "不要生成报告",
+            "不要报告",
+            "不生成报告",
+            "不需要报告",
+            "无需生成报告",
+            "无需报告",
+            "不用生成报告",
+            "不用报告",
+            "别生成报告",
+            "no report",
+            "without report",
+            "do not generate report",
+            "don't generate report",
+        )
+    ) or any(term in compact for term in ("不要生成报告", "不要生成pdf", "不生成报告", "不需要报告", "无需报告", "不用生成报告", "不用报告", "别生成报告")):
         return False
     text = text.replace("ready_for_report", "")
     compact = compact.replace("ready_for_report", "")
-    if re.search(r"(生成|撰写|写入|写|输出|导出|渲染).{0,16}(报告|pdf)", text, flags=re.I):
+    if re.search(r"(生成|撰写|写入|写|输出|导出|渲染|出具|制作).{0,16}(报告|pdf)", text, flags=re.I):
+        return True
+    if re.search(r"(我要|要|需要|给我|来一份).{0,8}(一份)?(报告|pdf)", text, flags=re.I):
         return True
     return any(
         term in text
@@ -641,8 +757,10 @@ def _report_requested(message: str) -> bool:
             "write report",
             "render report",
             "export report",
+            "i need a report",
+            "give me a report",
         )
-    ) or any(term in compact for term in ("生成报告", "最终报告", "导出报告", "渲染pdf", "生成pdf", "导出pdf"))
+    ) or any(term in compact for term in ("生成报告", "最终报告", "导出报告", "出具报告", "制作报告", "渲染pdf", "生成pdf", "导出pdf"))
 
 
 def _evidence_pipeline_pending(request: AgentTurnRequest, state: HarnessRunState) -> bool:

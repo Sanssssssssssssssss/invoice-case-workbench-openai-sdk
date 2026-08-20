@@ -89,7 +89,7 @@ class RecoveryPolicy:
                 exc,
                 runtime_feedback=route_policy.guard_retry_feedback(
                     "final_answer_case_state_consistency",
-                    "错误类型：回复与 case_state 不一致。为什么拦截：最终回复把 missing、weak 或 conflict 的 requirement 说成已满足。下一轮必须：以 case_state 为唯一业务真相，明确当前 satisfied、weak、conflict 和 missing 状态。",
+                    "错误类型：回复与 case_state 不一致。为什么拦截：最终回复明确写出的 requirement 状态与当前案卷不一致。下一轮必须：以最新 case_state 为唯一业务真相，准确复述 accepted、satisfied、weak、conflict 和 missing 状态。",
                 ),
             )
 
@@ -150,8 +150,18 @@ def enforce_no_internal_retry_instruction_leak(final_answer: str) -> None:
         r"previous final answer",
         r"runtime feedback",
         r"policy_feedback",
+        r"PolicyGate",
         r"guard retry",
         r"case_state facts only",
+        r"\bLet me (?:think|reconsider|re-read)\b",
+        r"\bI (?:now )?have (?:all|enough) (?:of )?(?:the )?information (?:I )?(?:need|needed)\b",
+        r"\bLet me (?:now )?(?:provide|prepare|draft|write|compose|craft|formulate|present)\b",
+        r"\bI(?:'ll| will) (?:now )?(?:provide|prepare|draft|write|compose|craft|formulate|present) "
+        r"(?:the |a |an |my )?(?:final )?(?:answer|response)\b",
+        r"(?:^|\n)\s*(?:现在|接下来|下面)?(?:让我|我来|我将|我会)(?:现在|接下来)?(?:为你|给你)?"
+        r"(?:提供|给出|整理|撰写|生成)(?:一份)?(?:最终)?(?:答复|回答|回复|分析|总结|报告)\b",
+        r"\bThe user (?:wants|asked) me to\b",
+        r"\bI'll provide a final answer\b",
     )
     if any(re.search(pattern, text, flags=re.I) for pattern in leaked_patterns):
         raise InternalRetryInstructionLeakError("Final answer leaked internal retry or guard instruction")

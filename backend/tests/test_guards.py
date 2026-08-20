@@ -111,6 +111,29 @@ def test_case_state_consistency_allows_capability_introduction_without_case_trut
         enforce_case_state_consistency("五项核心材料均已满足，可以进入报告阶段。", state)
 
 
+def test_case_state_consistency_rejects_explicit_stale_requirement_status() -> None:
+    state = SimpleNamespace(
+        requirements=[
+            SimpleNamespace(id="invoice", label="发票文档", status="accepted", required=True),
+            SimpleNamespace(id="no_active_duplicate", label="无仍具经济效力的重复付款", status="weak", required=True),
+        ],
+    )
+
+    with pytest.raises(CaseStateConsistencyError, match="requirement invoice is accepted"):
+        enforce_case_state_consistency("- **invoice**：weak（证明未成立）", state)
+
+    with pytest.raises(CaseStateConsistencyError, match="requirement invoice is accepted"):
+        enforce_case_state_consistency("按要求未生成报告。\n\n- **invoice**：weak（证明未成立）", state)
+
+    assert (
+        enforce_case_state_consistency(
+            "invoice=accepted；no_active_duplicate=NOT_FOUND",
+            state,
+        )
+        == "invoice=accepted；no_active_duplicate=NOT_FOUND"
+    )
+
+
 def test_case_state_consistency_accepts_compiler_derived_requirement_support() -> None:
     compiled = _supported_runtime_proof(
         "three_way_amount_match",

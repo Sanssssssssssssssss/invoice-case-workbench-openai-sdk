@@ -1,0 +1,43 @@
+{
+  "schema_version": "1",
+  "id": "pia_inv_2026_0032",
+  "name": "公开发票计算审核 - INV-2026-0032",
+  "description": "自然语言付款前审核；预期答案不会进入模型上下文。",
+  "case_type": "invoice_payment_review",
+  "tags": [
+    "public_pdf",
+    "invoice_arithmetic",
+    "german",
+    "mixed",
+    "subtotal_error",
+    "none"
+  ],
+  "initial_case_state": {
+    "requirements": [
+      {
+        "id": "invoice",
+        "required": true
+      },
+      {
+        "id": "invoice_calculation_valid",
+        "required": true
+      }
+    ]
+  },
+  "policy_overrides": {
+    "invoice_calculation_rounding_tolerance": {
+      "configured": true,
+      "value": "0.01",
+      "unit": "EUR"
+    }
+  },
+  "user_script": [
+    {
+      "message": "帮我判断附件中的票面计算是否可靠，可以形成结论时说明理由，不需要生成正式报告。",
+      "attach": [
+        "attachments/invoice.pdf"
+      ],
+      "approvals": {}
+    }
+  ]
+}

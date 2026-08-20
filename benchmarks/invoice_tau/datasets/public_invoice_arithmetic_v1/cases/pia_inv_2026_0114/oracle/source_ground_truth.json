@@ -1,0 +1,69 @@
+{
+  "invoice_id": "INV-2026-0114",
+  "vendor": "Umbrella Corporation Europe AG",
+  "vendor_country": "CH",
+  "vendor_address": {
+    "street": "Rebenhangweg 91",
+    "postal_code": "8001",
+    "city": "Zürich"
+  },
+  "recipient": "Nordic Lighthouse Infrastructure AS",
+  "recipient_country": "NO",
+  "recipient_address": {
+    "street": "Tyttebærgaten 45",
+    "postal_code": "0182",
+    "city": "Oslo"
+  },
+  "date": "2026-04-12",
+  "due_date": "2026-05-12",
+  "line_items": [
+    {
+      "description": "Regulatory filing — Companies House",
+      "quantity": 3,
+      "unit_price": "35410.10",
+      "vat_rate": "0.20",
+      "amount": "106230.30"
+    },
+    {
+      "description": "Strategic advisory — Q1 2026 (PowerPoints not included)",
+      "quantity": 1,
+      "unit_price": "15721.00",
+      "vat_rate": "0.20",
+      "amount": "15721.00"
+    },
+    {
+      "description": "Professional indemnity insurance — pro rata",
+      "quantity": 1,
+      "unit_price": "15038.80",
+      "vat_rate": "0.20",
+      "amount": "15038.80"
+    }
+  ],
+  "subtotal": "136990.10",
+  "vat_rate": "0.20",
+  "vat_amount": "27398.02",
+  "discount": {
+    "type": "percentage",
+    "value": "0.05",
+    "applied_to": "subtotal",
+    "description": "adjustment per framework agreement ref. FA-2021-897",
+    "conditional": false
+  },
+  "discount_amount": "6849.51",
+  "total": "157538.61",
+  "currency": "EUR",
+  "payment_terms": "Net 30 days",
+  "bank_details": "Raiffeisen Schweiz | IBAN: CH49 8049 8742 1242 1015 2 | BIC: RAIFCH22XXX",
+  "variants": {
+    "vat_variant": "implicit_no_rate",
+    "discount_variant": "obfuscated",
+    "number_format": "english",
+    "layout": "paragraph",
+    "consistency": "correct",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "136990.10",
+  "rendered_total": "157538.61",
+  "error_note": null,
+  "is_credit_note": false
+}

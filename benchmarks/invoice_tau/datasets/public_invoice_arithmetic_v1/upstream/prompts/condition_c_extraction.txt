@@ -1,0 +1,55 @@
+You are a data extraction assistant. Your task is to read the invoice below and extract the structured fields. Do NOT calculate or verify any totals — just extract exactly what is written.
+
+INSTRUCTIONS:
+
+1. Extract each line item with its description, quantity, unit price, and line amount as written on the invoice.
+
+2. Extract the VAT information:
+   - vat_phrasing: copy the exact VAT-related text from the invoice (e.g., "All prices include 20% VAT" or "Plus 20% VAT")
+   - vat_rate: the rate as a decimal if stated (e.g., 0.20), or null if not explicitly stated
+   - vat_included_in_prices: true if prices are stated as including VAT, false if VAT is added separately, null if ambiguous
+
+3. Extract discount information:
+   - discount_phrasing: copy the exact discount-related text from the invoice, or null if no discount is mentioned
+   - discount_rate: the discount percentage as a decimal if stated (e.g., 0.05 for 5%), or null
+   - discount_amount: the discount amount if stated as a fixed number, or null
+   - discount_is_conditional: true if the discount depends on payment timing (e.g., "2/10 net 30"), false if it has been applied unconditionally, null if unclear
+
+4. All monetary values must be plain numbers with exactly two decimal places. Do not include currency symbols or text.
+
+5. CRITICAL: Pay close attention to number formatting. In some European invoices:
+   - A dot (.) is a THOUSANDS separator, not a decimal point
+   - A comma (,) is the DECIMAL separator
+   - Example: "1.234,56" = one thousand two hundred thirty-four and 56 cents
+   - Example: "83.301,70" = eighty-three thousand three hundred one and 70 cents
+   - An apostrophe (') may also be a thousands separator: "1'234.56" = 1234.56
+   Look at the context and other numbers on the invoice to determine which convention is being used.
+
+6. Do NOT perform any arithmetic. Do NOT verify whether numbers add up. Just extract what is written.
+
+Respond with ONLY a JSON object in this exact format, no other text:
+
+{
+  "line_items": [
+    {"description": "...", "quantity": 1, "unit_price": 4800.00, "amount": 4800.00},
+    ...
+  ],
+  "stated_subtotal": 7542.50,
+  "vat_phrasing": "Plus 20% VAT on the subtotal",
+  "vat_rate": 0.20,
+  "vat_included_in_prices": false,
+  "stated_vat_amount": 1508.50,
+  "discount_phrasing": "5% early payment discount applied",
+  "discount_rate": 0.05,
+  "discount_amount": 377.13,
+  "discount_is_conditional": false,
+  "stated_total": 8673.87,
+  "currency": "EUR",
+  "is_credit_note": false
+}
+
+---
+
+INVOICE TO EXTRACT FROM:
+
+{invoice_text}

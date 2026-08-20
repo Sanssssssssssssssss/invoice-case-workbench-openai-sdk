@@ -1,0 +1,55 @@
+{
+  "invoice_id": "INV-2026-0077",
+  "vendor": "Duff Beverages Ltd.",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "14 Pembroke-Brook Passage",
+    "postal_code": "EC1R 0AA",
+    "city": "London"
+  },
+  "recipient": "Bergkristall Maschinenbau GmbH",
+  "recipient_country": "DE",
+  "recipient_address": {
+    "street": "Eichkätzchenweg 12",
+    "postal_code": "40990",
+    "city": "Düsseldorf"
+  },
+  "date": "2026-02-23",
+  "due_date": "2026-03-09",
+  "line_items": [
+    {
+      "description": "Photocopier toner (see framework agreement)",
+      "quantity": 5,
+      "unit_price": "1905.70",
+      "vat_rate": "0.20",
+      "amount": "9528.50"
+    }
+  ],
+  "subtotal": "9528.50",
+  "vat_rate": "0.20",
+  "vat_amount": "1905.70",
+  "discount": {
+    "type": "percentage",
+    "value": "0.05",
+    "applied_to": "subtotal",
+    "description": "early payment discount",
+    "conditional": false
+  },
+  "discount_amount": "476.43",
+  "total": "10957.77",
+  "currency": "EUR",
+  "payment_terms": "Payable within 14 days",
+  "bank_details": "Lloyds Bank | IBAN: GB97 3799 5833 8742 2557 68 | BIC: LOYDGB21XXX",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "explicit_percentage",
+    "number_format": "swiss",
+    "layout": "mixed",
+    "consistency": "correct",
+    "edge_case": "single_item"
+  },
+  "rendered_subtotal": "9528.50",
+  "rendered_total": "10957.77",
+  "error_note": null,
+  "is_credit_note": false
+}

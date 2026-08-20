@@ -30,7 +30,7 @@ def _packet(role: str, *, context_payload: dict[str, Any] | None = None) -> Any:
     if role == "planner":
         return build_context_packet(
             role="planner",
-            prompt_version="case_manager_agents_sdk_v1",
+            prompt_version="supervisor_planner_v2.4_native_tools",
             prompt_file="backend/app/agents/planner/prompt.md",
             system_prompt=MANAGER_PROMPT,
             context_payload=context_payload or {"user_message": "x", "context_pack": {"case_brief": "case", "current_goal": "goal"}},
@@ -102,7 +102,7 @@ def test_prompt_cache_key_binds_stable_prefix_hash() -> None:
     base = _packet("planner")
     changed = build_context_packet(
         role="planner",
-        prompt_version="case_manager_agents_sdk_v1",
+        prompt_version="supervisor_planner_v2.4_native_tools",
         prompt_file="backend/app/agents/planner/prompt.md",
         system_prompt=MANAGER_PROMPT + "\nAdditional stable instruction.",
         context_payload={"user_message": "x", "context_pack": {"case_brief": "case", "current_goal": "goal"}},
@@ -118,7 +118,7 @@ def test_prompt_cache_key_binds_stable_prefix_hash() -> None:
 def test_unknown_context_keys_warn_in_prod_and_fail_in_strict() -> None:
     packet = build_context_packet(
         role="planner",
-        prompt_version="case_manager_agents_sdk_v1",
+        prompt_version="supervisor_planner_v2.4_native_tools",
         prompt_file="backend/app/agents/planner/prompt.md",
         system_prompt=MANAGER_PROMPT,
         context_payload={"context_pack": {"case_brief": "case", "current_user_message_raw": "raw"}},

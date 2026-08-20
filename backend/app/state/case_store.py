@@ -11,7 +11,12 @@ from typing import Any
 from app.config import get_settings
 from app.compiler_runtime.kernel import compile_review_artifact
 from app.compiler_runtime.models import CompiledProof, ReviewArtifact
-from app.compiler_runtime.policy import expand_active_requirements, policy_excerpt_for, policy_hash
+from app.compiler_runtime.policy import (
+    expand_active_requirements,
+    policy_excerpt_for,
+    policy_hash,
+    proof_is_reportable,
+)
 from app.domain.invoice_requirements import (
     AP_LITE_REQUIREMENTS,
     AP_THREE_WAY_REQUIREMENTS,
@@ -371,12 +376,33 @@ class CaseStore:
             active_requirement_ids=active_ids,
             active_source_fingerprints=_compiler_source_fingerprints(active_evidence),
         ):
-            compiled = compile_review_artifact(artifact)
+            requiredness = {item.id: item.required for item in state.requirements}
+            compiled = compile_review_artifact(
+                artifact,
+                requirement_requiredness={
+                    requirement_id: requiredness.get(
+                        requirement_id,
+                        default_requirement_required(requirement_id),
+                    )
+                    for requirement_id in active_ids
+                },
+            )
         state.compiled_proof = compiled
         if compiled is not None:
             _ensure_compiled_requirements(state, compiled)
-        reportable = _project_compiled_requirements(state, compiled)
-        _refresh_workflow_status(state, reportable)
+        _project_compiled_requirements(state, compiled)
+        if artifact is not None:
+            state.risk_flags = _unique_strings(
+                [item.requirement_id for item in compiled.decisions if item.status == "CONTRADICTED"]
+                if compiled
+                else []
+            )
+            state.next_questions = _unique_strings(
+                [item.missing_fact for item in compiled.obligations]
+                if compiled
+                else []
+            )
+        _refresh_workflow_status(state)
 
 
 def _ensure_compiled_requirements(state: CaseState, compiled: CompiledProof) -> None:
@@ -395,10 +421,9 @@ def _ensure_compiled_requirements(state: CaseState, compiled: CompiledProof) -> 
 def _project_compiled_requirements(
     state: CaseState,
     compiled: CompiledProof | None,
-) -> set[str]:
+) -> None:
     decisions = {item.requirement_id: item for item in compiled.decisions} if compiled else {}
     results = {item.node_id: item for item in compiled.node_results} if compiled else {}
-    reportable: set[str] = set()
     for requirement in state.requirements:
         decision = decisions.get(requirement.id)
         root = results.get(decision.root_node_id) if decision else None
@@ -406,16 +431,26 @@ def _project_compiled_requirements(
             requirement.status = "missing"
             requirement.evidence_ids = []
             continue
-        requirement.evidence_ids = _unique_strings(root.source_ids)
+        requirement.evidence_ids = _decision_source_ids(decision, results)
         evidence_leaf = requirement_owner(requirement.id) == "evidence"
         requirement.status = {
             "SUPPORTED": "accepted" if evidence_leaf else "satisfied",
             "CONTRADICTED": "conflict",
             "NOT_FOUND": "weak" if requirement.evidence_ids else "missing",
         }[decision.status]
-        if not evidence_leaf and decision.status == "CONTRADICTED":
-            reportable.add(requirement.id)
-    return reportable
+
+
+def _decision_source_ids(decision: Any, results: dict[str, Any]) -> list[str]:
+    check_ids = (
+        decision.supporting_check_ids
+        if decision.status == "SUPPORTED"
+        else decision.contradicting_check_ids
+        if decision.status == "CONTRADICTED"
+        else decision.unresolved_check_ids
+    )
+    return _unique_strings(
+        [source_id for check_id in check_ids for source_id in getattr(results.get(check_id), "source_ids", [])]
+    )
 
 
 def _artifact_matches_case(
@@ -441,20 +476,18 @@ def _artifact_matches_case(
     return artifact.policy_hash == policy_hash(expected_policy)
 
 
-def _refresh_workflow_status(state: CaseState, reportable_conflicts: set[str]) -> None:
+def _refresh_workflow_status(state: CaseState) -> None:
     buckets = _material_buckets(state)
     state.missing_materials = buckets["missing_materials"]
     state.weak_materials = buckets["weak_materials"]
     state.conflict_materials = buckets["conflict_materials"]
     state.satisfied_materials = buckets["satisfied_materials"]
-    blocking_conflicts = [item for item in state.conflict_materials if item not in reportable_conflicts]
-    blockers = state.missing_materials + state.weak_materials + blocking_conflicts
-    if blockers:
-        state.status = "collecting_materials" if state.evidence_items else "new"
-    elif state.evidence_items and state.requirements:
+    if state.evidence_items and state.requirements and proof_is_reportable(state.compiled_proof):
         state.status = "ready_for_report"
     elif state.evidence_items:
         state.status = "collecting_materials"
+    else:
+        state.status = "new"
 
 
 def _unique_strings(values: list[Any]) -> list[str]:

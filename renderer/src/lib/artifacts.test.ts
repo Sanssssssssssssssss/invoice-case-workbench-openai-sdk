@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ArtifactItem } from '@/types'
-import { runArtifactAction } from './artifacts'
+import { latestReportArtifacts, runArtifactAction } from './artifacts'
 
 const artifact: ArtifactItem = {
   name: 'final_report.md',
@@ -16,6 +16,19 @@ const artifact: ArtifactItem = {
 }
 
 describe('artifact actions', () => {
+  it('keeps PDF as the primary report entry ahead of Markdown', () => {
+    const markdown = { ...artifact, updated_at: '2026-06-02T10:00:00+00:00' }
+    const pdf = {
+      ...artifact,
+      name: 'final_report.pdf',
+      path: 'reports/final_report.pdf',
+      content_type: 'application/pdf',
+      updated_at: '2026-06-01T10:00:00+00:00'
+    }
+
+    expect(latestReportArtifacts([markdown, pdf]).map((item) => item.name)).toEqual(['final_report.pdf', 'final_report.md'])
+  })
+
   it('opens generated files through Electron IPC when available', async () => {
     const openCaseFile = vi.fn(async () => undefined)
 

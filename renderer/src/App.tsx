@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api, createEventSource } from '@/lib/api'
@@ -6,7 +6,21 @@ import { approvalInterruptsFromEvents, approvalInterruptsFromTrace } from '@/lib
 import { createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic } from '@/lib/chat'
 import { isNewAgentRunStreamEvent, parseAgentRunStreamMessage, parseLiveStatusMessage, parseTraceEventMessage } from '@/lib/eventStream'
 import { mergeEvents } from '@/lib/trace'
-import type { AgentRunStreamEvent, AgentTurnResponse, ApprovalInterrupt, ArtifactItem, AttachmentUpload, ConversationItem, LiveStatus, TraceEvent } from '@/types'
+import type { AgentRunStreamEvent, AgentTurnResponse, ApprovalInterrupt, LiveStatus, TraceEvent } from '@/types'
+import { latestReportArtifacts } from '@/lib/artifacts'
+import {
+  acceptApproval,
+  beginApproval,
+  canStartRun,
+  caseRuntime,
+  createCaseRuntimeState,
+  finishRun,
+  receiveApprovals,
+  replaceCaseRuntime,
+  retryApproval,
+  type CaseRuntimeMap,
+  type CaseRuntimeState
+} from '@/lib/caseRuntime'
 import { useUiStore } from '@/store/uiStore'
 import { TitleBar } from '@/components/TitleBar'
 import { CaseRail } from '@/components/CaseRail'
@@ -15,30 +29,29 @@ import { Inspector } from '@/components/Inspector'
 
 export default function App() {
   const queryClient = useQueryClient()
-  const [running, setRunning] = useState(false)
-  const [liveEvents, setLiveEvents] = useState<TraceEvent[]>([])
-  const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null)
-  const [optimisticMessages, setOptimisticMessages] = useState<ConversationItem[]>([])
-  const [pendingApprovals, setPendingApprovals] = useState<ApprovalInterrupt[]>([])
-  const liveEventsRef = useRef<TraceEvent[]>([])
+  const [runtimeByCase, setRuntimeByCase] = useState<CaseRuntimeMap>({})
+  const runtimeByCaseRef = useRef<CaseRuntimeMap>({})
   const streamSeqByRunRef = useRef<Record<string, number>>({})
-  const selectedRunIdRef = useRef<string>('')
   const selectedCaseId = useUiStore((state) => state.selectedCaseId)
-  const selectedRunId = useUiStore((state) => state.selectedRunId)
   const selectedEvent = useUiStore((state) => state.selectedEvent)
   const inspectorTab = useUiStore((state) => state.inspectorTab)
   const setSelectedCaseId = useUiStore((state) => state.setSelectedCaseId)
-  const setSelectedRunId = useUiStore((state) => state.setSelectedRunId)
   const setSelectedEvent = useUiStore((state) => state.setSelectedEvent)
   const setInspectorTab = useUiStore((state) => state.setInspectorTab)
 
-  useEffect(() => {
-    liveEventsRef.current = liveEvents
-  }, [liveEvents])
+  const updateCaseRuntime = useCallback((caseId: string, update: (current: CaseRuntimeState) => CaseRuntimeState) => {
+    if (!caseId) return
+    const next = replaceCaseRuntime(runtimeByCaseRef.current, caseId, update)
+    runtimeByCaseRef.current = next
+    setRuntimeByCase(next)
+  }, [])
+  const runtime = caseRuntime(runtimeByCase, selectedCaseId)
+  const { running, liveEvents, liveStatus, optimisticMessages, pendingApprovals, selectedRunId } = runtime
 
-  useEffect(() => {
-    selectedRunIdRef.current = selectedRunId
-  }, [selectedRunId])
+  const setSelectedRunId = useCallback((caseId: string, runId: string) => {
+    updateCaseRuntime(caseId, (current) => ({ ...current, selectedRunId: runId }))
+    if (caseId === useUiStore.getState().selectedCaseId) setSelectedEvent(null)
+  }, [setSelectedEvent, updateCaseRuntime])
 
   const casesQuery = useQuery({ queryKey: ['cases'], queryFn: api.listCases })
   const caseQuery = useQuery({
@@ -86,21 +99,24 @@ export default function App() {
 
   useEffect(() => {
     if (runsQuery.data?.length && (!selectedRunId || !runsQuery.data.some((run) => run.run_id === selectedRunId))) {
-      setSelectedRunId(runsQuery.data[0].run_id)
+      setSelectedRunId(selectedCaseId, runsQuery.data[0].run_id)
     }
-  }, [runsQuery.data, selectedRunId, setSelectedRunId])
+  }, [runsQuery.data, selectedCaseId, selectedRunId, setSelectedRunId])
 
   useEffect(() => {
     if (liveStatusQuery.data) {
-      setLiveStatus(liveStatusQuery.data)
+      updateCaseRuntime(selectedCaseId, (current) => ({
+        ...current,
+        liveStatus: mergeLiveStatusFromServer(liveStatusQuery.data!, current.liveStatus)
+      }))
     }
-  }, [liveStatusQuery.data])
+  }, [liveStatusQuery.data, selectedCaseId, updateCaseRuntime])
 
   useEffect(() => {
     if (!running || !selectedCaseId) return
     let closed = false
     let source: EventSource | null = null
-    const lastCaseSeq = liveEventsRef.current.reduce((max, event) => Math.max(max, event.case_seq), 0)
+    const lastCaseSeq = caseRuntime(runtimeByCaseRef.current, selectedCaseId).liveEvents.reduce((max, event) => Math.max(max, event.case_seq), 0)
 
     createEventSource(`/api/cases/${encodeURIComponent(selectedCaseId)}/events/stream?after_case_seq=${lastCaseSeq}`).then((eventSource) => {
       if (closed) {
@@ -110,11 +126,11 @@ export default function App() {
       source = eventSource
       source.addEventListener('trace_event', (event) => {
         const traceEvent = parseTraceEventMessage((event as MessageEvent).data)
-        setLiveEvents((current) => mergeEvents(current, [traceEvent]))
-        if (!selectedRunIdRef.current && traceEvent.run_id) {
-          selectedRunIdRef.current = traceEvent.run_id
-          setSelectedRunId(traceEvent.run_id)
-        }
+        updateCaseRuntime(selectedCaseId, (current) => ({
+          ...current,
+          liveEvents: mergeEvents(current.liveEvents, [traceEvent]),
+          selectedRunId: current.selectedRunId || traceEvent.run_id
+        }))
         if (traceEvent.run_id) {
           queryClient.setQueryData<TraceEvent[]>(['runEvents', selectedCaseId, traceEvent.run_id], (current = []) =>
             mergeEvents(current, [traceEvent])
@@ -127,13 +143,13 @@ export default function App() {
       closed = true
       source?.close()
     }
-  }, [running, selectedCaseId, queryClient, setSelectedRunId])
+  }, [running, selectedCaseId, queryClient, updateCaseRuntime])
 
   useEffect(() => {
     if (!selectedCaseId || !agentRunning) return
     let closed = false
     let source: EventSource | null = null
-    const afterCaseSeq = liveEventsRef.current.reduce((max, event) => Math.max(max, event.case_seq), 0)
+    const afterCaseSeq = caseRuntime(runtimeByCaseRef.current, selectedCaseId).liveEvents.reduce((max, event) => Math.max(max, event.case_seq), 0)
 
     createEventSource(`/api/cases/${encodeURIComponent(selectedCaseId)}/live-status/stream?after_case_seq=${afterCaseSeq}`).then((eventSource) => {
       if (closed) {
@@ -143,7 +159,10 @@ export default function App() {
       source = eventSource
       source.addEventListener('live_status', (event) => {
         const status = parseLiveStatusMessage((event as MessageEvent).data)
-        setLiveStatus((current) => mergeLiveStatusFromServer(status, current))
+        updateCaseRuntime(selectedCaseId, (current) => ({
+          ...current,
+          liveStatus: mergeLiveStatusFromServer(status, current.liveStatus)
+        }))
       })
     })
 
@@ -151,7 +170,7 @@ export default function App() {
       closed = true
       source?.close()
     }
-  }, [agentRunning, selectedCaseId])
+  }, [agentRunning, selectedCaseId, updateCaseRuntime])
 
   const visibleEvents = useMemo(() => {
     const base = eventsQuery.data ?? []
@@ -169,31 +188,25 @@ export default function App() {
   )
 
   useEffect(() => {
-    if (!selectedCaseId || pendingApprovals.length > 0) return
+    if (!selectedCaseId || pendingApprovals.length > 0 || runtime.approvalPhase === 'executing') return
     const waitingRun = (runsQuery.data ?? []).find((run) => run.status === 'waiting_approval')
     if (!waitingRun) return
     if (selectedRunId !== waitingRun.run_id) {
-      setSelectedRunId(waitingRun.run_id)
+      setSelectedRunId(selectedCaseId, waitingRun.run_id)
       return
     }
     const approvals = approvalInterruptsFromEvents(selectedCaseId, waitingRun.run_id, visibleEvents)
     if (approvals.length) {
-      setPendingApprovals(approvals)
+      updateCaseRuntime(selectedCaseId, (current) => receiveApprovals(current, approvals))
     }
-  }, [pendingApprovals.length, runsQuery.data, selectedCaseId, selectedRunId, setSelectedRunId, visibleEvents])
-
-  useEffect(() => {
-    if (!selectedEvent && visibleEvents.length) {
-      setSelectedEvent(visibleEvents[visibleEvents.length - 1])
-    }
-  }, [selectedEvent, setSelectedEvent, visibleEvents])
+  }, [pendingApprovals.length, runsQuery.data, runtime.approvalPhase, selectedCaseId, selectedRunId, setSelectedRunId, updateCaseRuntime, visibleEvents])
 
   const createCase = useMutation({
     mutationFn: api.createCase,
     onSuccess: (created) => {
       queryClient.setQueryData(['cases'], (current: unknown) => [created, ...((current as typeof casesQuery.data) ?? [])])
       setSelectedCaseId(created.case_id)
-      setPendingApprovals([])
+      updateCaseRuntime(created.case_id, () => createCaseRuntimeState())
     }
   })
 
@@ -204,18 +217,15 @@ export default function App() {
       if (selectedCaseId === caseId) {
         const next = (casesQuery.data ?? []).find((item) => item.case_id !== caseId)
         setSelectedCaseId(next?.case_id ?? '')
-        setPendingApprovals([])
       }
+      const nextRuntimes = { ...runtimeByCaseRef.current }
+      delete nextRuntimes[caseId]
+      runtimeByCaseRef.current = nextRuntimes
+      setRuntimeByCase(nextRuntimes)
     }
   })
 
   const selectCase = (caseId: string) => {
-    if (caseId !== selectedCaseId) {
-      setOptimisticMessages([])
-      setLiveEvents([])
-      setLiveStatus(null)
-      setPendingApprovals([])
-    }
     setSelectedCaseId(caseId)
   }
 
@@ -241,24 +251,24 @@ export default function App() {
 
   const applyResponse = async (response: AgentTurnResponse) => {
     const approvals = approvalInterruptsFromTrace(response.case_id, response.trace)
-    setPendingApprovals(approvals)
     const runId = approvals[0]?.run_id || stringValue(response.trace.run_id)
-    if (runId) {
-      setSelectedRunId(runId)
-    }
-    if (response.case_id !== selectedCaseId) {
-      setSelectedCaseId(response.case_id)
-    }
+    updateCaseRuntime(response.case_id, (current) => {
+      const withRun = { ...current, selectedRunId: runId || current.selectedRunId }
+      return approvals.length ? receiveApprovals(withRun, approvals) : finishRun(withRun)
+    })
     await refreshCaseData(response.case_id, runId, { deferSecondary: true })
   }
 
   const updateFromRunStreamEvent = (event: AgentRunStreamEvent) => {
     streamSeqByRunRef.current[event.run_id] = Math.max(streamSeqByRunRef.current[event.run_id] ?? 0, event.seq)
-    if (!selectedRunIdRef.current && event.run_id) {
-      selectedRunIdRef.current = event.run_id
-      setSelectedRunId(event.run_id)
-    }
-    setLiveStatus((current) => liveStatusFromRunStream(event, current))
+    updateCaseRuntime(event.case_id, (current) => {
+      const updated = {
+        ...current,
+        selectedRunId: current.selectedRunId || event.run_id,
+        liveStatus: liveStatusFromRunStream(event, current.liveStatus)
+      }
+      return event.kind === 'final' || event.kind === 'error' ? finishRun(updated) : updated
+    })
   }
 
   const waitForRunStream = async (caseId: string, runId: string, streamUrl: string) => {
@@ -289,7 +299,7 @@ export default function App() {
             return
           } else if (event.kind === 'approval_required') {
             const approvals = approvalsFromRunStream(event, caseId, runId)
-            setPendingApprovals(approvals)
+            updateCaseRuntime(caseId, (current) => receiveApprovals(current, approvals))
             await refreshCaseData(caseId, runId, { deferSecondary: true })
             finish('approval')
           } else if (event.kind === 'final') {
@@ -318,63 +328,69 @@ export default function App() {
   const sendTurn = async (message: string, files: File[]) => {
     const caseId = selectedCaseId || caseQuery.data?.case_id
     if (!caseId) return
+    const currentRuntime = caseRuntime(runtimeByCaseRef.current, caseId)
+    if (!canStartRun(currentRuntime, runsQuery.data?.some((run) => run.status === 'running'))) return
     const userText = message || '请复核已上传的材料。'
-    setRunning(true)
-    setPendingApprovals([])
-    setLiveEvents([])
-    setLiveStatus(null)
-    setOptimisticMessages((current) => [
+    updateCaseRuntime(caseId, (current) => ({
       ...current,
-      createOptimisticUserMessage({
-        content: userText,
-        fileCount: files.length
-      })
-    ])
+      running: true,
+      liveEvents: [],
+      liveStatus: null,
+      pendingApprovals: [],
+      approvalPhase: 'idle',
+      approvalInFlight: null,
+      resolvedApprovalKeys: [],
+      optimisticMessages: [
+        ...current.optimisticMessages,
+        createOptimisticUserMessage({
+          content: userText,
+          attachments: files.map((file) => ({ name: file.name, path: '', content_type: file.type || 'application/octet-stream' }))
+        })
+      ]
+    }))
     let completed = false
     try {
       const uploads = await Promise.all(files.map((file) => api.uploadAttachment(caseId, file)))
-      let runStarted = false
-      try {
-        const run = await api.startRun(caseId, userText, uploads)
-        runStarted = true
-        setSelectedRunId(run.run_id)
-        selectedRunIdRef.current = run.run_id
-        const result = await waitForRunStream(run.case_id, run.run_id, run.stream_url)
-        completed = result === 'final' || result === 'approval'
-      } catch (streamError) {
-        if (runStarted) {
-          throw streamError
-        }
-        const response = await api.sendTurn(caseId, userText, uploads)
-        await applyResponse(response)
-        completed = true
-      }
+      const run = await api.startRun(caseId, userText, uploads)
+      setSelectedRunId(caseId, run.run_id)
+      const result = await waitForRunStream(run.case_id, run.run_id, run.stream_url)
+      completed = result === 'final' || result === 'approval'
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
-      setOptimisticMessages((current) => [...current, createOptimisticSystemMessage(`发送失败：${detail}`)])
+      updateCaseRuntime(caseId, (current) => ({
+        ...finishRun(current),
+        optimisticMessages: [...current.optimisticMessages, createOptimisticSystemMessage(`发送失败：${detail}`)]
+      }))
     } finally {
-      if (completed) {
-        setOptimisticMessages([])
-      }
-      setRunning(false)
+      updateCaseRuntime(caseId, (current) => ({
+        ...current,
+        running: false,
+        optimisticMessages: completed ? [] : current.optimisticMessages
+      }))
     }
   }
 
   const resumeApproval = async (approved: boolean) => {
-    const approval = pendingApprovals[0]
-    const caseId = approval?.case_id || selectedCaseId
-    const runId = approval?.run_id || selectedRunId
+    const caseId = selectedCaseId
+    const current = caseRuntime(runtimeByCaseRef.current, caseId)
+    const approval = current.pendingApprovals[0]
+    const runId = approval?.run_id || current.selectedRunId
     if (!caseId || !runId) return
-    setRunning(true)
-    setPendingApprovals([])
+    updateCaseRuntime(caseId, beginApproval)
+    let accepted = false
     try {
       const run = await api.resumeRunApproval(caseId, runId, approved, approved ? 'approved_from_desktop' : 'rejected_from_desktop')
+      accepted = true
+      updateCaseRuntime(caseId, acceptApproval)
       await waitForRunStream(caseId, run.run_id, run.stream_url)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
-      setOptimisticMessages((current) => [...current, createOptimisticSystemMessage(`审批恢复失败：${detail}`)])
+      updateCaseRuntime(caseId, (state) => ({
+        ...(accepted ? finishRun(state) : retryApproval(state)),
+        optimisticMessages: [...state.optimisticMessages, createOptimisticSystemMessage(`审批恢复失败：${detail}`)]
+      }))
     } finally {
-      setRunning(false)
+      updateCaseRuntime(caseId, (state) => ({ ...state, running: false }))
     }
   }
 
@@ -401,11 +417,18 @@ export default function App() {
             reportArtifacts={reportArtifacts}
             liveEvents={liveEvents}
             liveStatus={liveStatus}
-            running={running}
+            running={agentRunning}
             agentRunning={agentRunning}
             pendingApprovals={pendingApprovals}
+            approvalPhase={runtime.approvalPhase}
+            approvalInFlight={runtime.approvalInFlight}
+            completedApprovalSteps={runtime.resolvedApprovalKeys.length}
+            draft={runtime.draft}
+            files={runtime.files}
             onOpenRequirements={() => setInspectorTab('requirements')}
             onSend={(message, files) => void sendTurn(message, files)}
+            onDraftChange={(draft) => updateCaseRuntime(selectedCaseId, (current) => ({ ...current, draft }))}
+            onFilesChange={(files) => updateCaseRuntime(selectedCaseId, (current) => ({ ...current, files }))}
             onApprovalDecision={(approved) => void resumeApproval(approved)}
           />
         </Panel>
@@ -421,7 +444,7 @@ export default function App() {
             selectedEvent={selectedEvent}
             tab={inspectorTab}
             onTabChange={setInspectorTab}
-            onRunSelect={setSelectedRunId}
+            onRunSelect={(runId) => setSelectedRunId(selectedCaseId, runId)}
             onEventSelect={setSelectedEvent}
           />
         </Panel>
@@ -458,12 +481,12 @@ function liveStatusFromRunStream(event: AgentRunStreamEvent, current: LiveStatus
   const isDone = event.kind === 'final' || event.kind === 'error' || event.kind === 'approval_required'
   const thoughtSummary = streamThoughtSummary(event, label)
   const isThinking = event.kind === 'model_thinking'
-  const reasoningText = isThinking ? stringValue(event.payload.reasoning_excerpt || event.payload.thinking || event.payload.thought) : ''
+  const reasoningText = isThinking ? stringValue(event.payload.public_reason || event.payload.action || event.summary) : ''
   const sameRun = current?.runId === event.run_id
   const latestThinking = reasoningText || (sameRun ? current.latestThinking : '')
   const latestThoughtSummary = isThinking && reasoningText ? thoughtSummary || current?.latestThoughtSummary || '' : sameRun ? current.latestThoughtSummary || '' : ''
   const activeStep = isThinking && reasoningText ? thoughtSummary || event.summary || label : sameRun ? current.activeStep || '' : ''
-  const hasCurrentReasoning = sameRun && current?.thinkingSource === 'reasoning_content' && Boolean(current.latestThinking?.trim())
+  const hasCurrentReasoning = sameRun && current?.thinkingSource === 'public_work_log' && Boolean(current.latestThinking?.trim())
   return {
     runId: event.run_id,
     phase: event.kind,
@@ -474,9 +497,9 @@ function liveStatusFromRunStream(event: AgentRunStreamEvent, current: LiveStatus
     latestThinking,
     latestEventId: event.event_id,
     isRunning: !isDone,
-    thinkingSource: isThinking && reasoningText ? 'reasoning_content' : sameRun ? current.thinkingSource : '',
-    reasoningChars: isThinking ? numberValue(event.payload.reasoning_chars) : sameRun ? current.reasoningChars : 0,
-    reasoningChunks: isThinking ? numberValue(event.payload.reasoning_chunks) : sameRun ? current.reasoningChunks : 0,
+    thinkingSource: isThinking && reasoningText ? 'public_work_log' : sameRun ? current.thinkingSource : '',
+    reasoningChars: isThinking ? reasoningText.length : sameRun ? current.reasoningChars : 0,
+    reasoningChunks: isThinking && reasoningText ? 1 : sameRun ? current.reasoningChunks : 0,
     runStartedAt: stringValue(event.payload.run_started_at) || event.ts,
     elapsedMs: numberValue(event.payload.duration_ms),
     activeStep,
@@ -488,9 +511,9 @@ function liveStatusFromRunStream(event: AgentRunStreamEvent, current: LiveStatus
 function mergeLiveStatusFromServer(status: LiveStatus, current: LiveStatus | null): LiveStatus {
   if (
     current?.runId === status.runId &&
-    current.thinkingSource === 'reasoning_content' &&
+    current.thinkingSource === 'public_work_log' &&
     current.latestThinking?.trim() &&
-    status.thinkingSource !== 'reasoning_content'
+    status.thinkingSource !== 'public_work_log'
   ) {
     return {
       ...status,
@@ -505,8 +528,8 @@ function mergeLiveStatusFromServer(status: LiveStatus, current: LiveStatus | nul
   }
   if (
     current?.runId === status.runId &&
-    current.thinkingSource === 'reasoning_content' &&
-    status.thinkingSource === 'reasoning_content' &&
+    current.thinkingSource === 'public_work_log' &&
+    status.thinkingSource === 'public_work_log' &&
     current.reasoningChars > status.reasoningChars
   ) {
     return {
@@ -520,14 +543,6 @@ function mergeLiveStatusFromServer(status: LiveStatus, current: LiveStatus | nul
     }
   }
   return status
-}
-
-function latestReportArtifacts(artifacts: ArtifactItem[]): ArtifactItem[] {
-  return artifacts
-    .filter((item) => item.type === 'report' || item.path.startsWith('reports/'))
-    .slice()
-    .sort((left, right) => Date.parse(right.updated_at || '') - Date.parse(left.updated_at || ''))
-    .slice(0, 6)
 }
 
 function streamThoughtSummary(event: AgentRunStreamEvent, label: string) {

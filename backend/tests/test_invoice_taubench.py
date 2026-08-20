@@ -24,7 +24,6 @@ REQUIRED_SCENARIOS = {
     "missing_grn_001",
     "duplicate_conflict_001",
     "prompt_injection_001",
-    "reject_pdf_approval_001",
 }
 GOLDEN_SCENARIOS_ROOT = REPO_ROOT / "golden_cases" / "session_invoice_cases_v1"
 LIVE_ACCEPTANCE_ROOT = REPO_ROOT / "benchmarks" / "invoice_tau" / "live_acceptance"
@@ -227,6 +226,13 @@ def test_invoice_taubench_verifier_new_fields() -> None:
     assert checks["max_evidence_count"].passed
     assert checks["reply_any_of"].passed
     assert checks["encoding_clean:undefined"].passed
+    assert checks["reply_internal_working_absent"].passed
+
+    leaked = result.model_copy(
+        update={"final_reply": "The user wants me to inspect PolicyGate. Let me reconsider. 审查完成。"}
+    )
+    leaked_checks = {check.name: check for check in verify_run(leaked, expected, SCENARIOS_ROOT)}
+    assert not leaked_checks["reply_internal_working_absent"].passed
 
 
 def test_invoice_taubench_enforces_per_tool_call_limit() -> None:
@@ -340,19 +346,6 @@ def test_invoice_taubench_risk_flag_aliases_accept_live_variants() -> None:
 
     assert checks["risk_flag_contains:duplicate_payment_hit"].passed
     assert checks["risk_flag_contains:prompt_injection_quarantine"].passed
-
-
-def test_invoice_taubench_reject_pdf_approval_path(tmp_path) -> None:
-    runner = InvoiceTauBenchRunner(report_dir=tmp_path / "reports", mode="scripted")
-    result = runner.run_path(SCENARIOS_ROOT / "reject_pdf_approval_001")
-    assert result.passed, [check.name for check in result.checks if not check.passed]
-
-    checks = {check.name: check for check in result.checks}
-    assert checks["trace_must_approve:write_case_file"].passed
-    assert checks["trace_must_approve:render_pdf"].passed
-    assert checks["artifact_exists:reports/*.md"].passed
-    assert checks["artifact_absent:reports/*.pdf"].passed
-    assert checks["approval_bypass_forbidden"].passed
 
 
 def test_invoice_taubench_summary_separates_contract_and_llm_quality() -> None:

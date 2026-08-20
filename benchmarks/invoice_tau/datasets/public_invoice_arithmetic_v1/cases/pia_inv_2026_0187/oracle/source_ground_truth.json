@@ -1,0 +1,76 @@
+{
+  "invoice_id": "INV-2026-0187",
+  "vendor": "Tyrell Corporation Europe S.à r.l.",
+  "vendor_country": "FR",
+  "vendor_address": {
+    "street": "47 rue des Lilas Perdus",
+    "postal_code": "75008",
+    "city": "Paris"
+  },
+  "recipient": "Bergkristall Maschinenbau GmbH",
+  "recipient_country": "DE",
+  "recipient_address": {
+    "street": "Beispielgasse 34",
+    "postal_code": "80331",
+    "city": "München"
+  },
+  "date": "2026-04-15",
+  "due_date": "2026-05-15",
+  "line_items": [
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 100,
+      "unit_price": "54.10",
+      "vat_rate": "0.20",
+      "amount": "5410.00"
+    },
+    {
+      "description": "Documentation cleanup (Sisyphean endeavour)",
+      "quantity": 2,
+      "unit_price": "38533.10",
+      "vat_rate": "0.20",
+      "amount": "77066.20"
+    },
+    {
+      "description": "Due-diligence memorandum — Project Thornbury",
+      "quantity": 3,
+      "unit_price": "37693.30",
+      "vat_rate": "0.20",
+      "amount": "113079.90"
+    },
+    {
+      "description": "Cloud infrastructure migration — Phase 2 of 7 (estimated)",
+      "quantity": 2,
+      "unit_price": "38073.00",
+      "vat_rate": "0.20",
+      "amount": "76146.00"
+    }
+  ],
+  "subtotal": "271702.10",
+  "vat_rate": "0.20",
+  "vat_amount": "54340.42",
+  "discount": {
+    "type": "trade_terms",
+    "value": "0.02",
+    "applied_to": "subtotal",
+    "description": "2/10 net 30 — conditional early-payment discount",
+    "conditional": true
+  },
+  "discount_amount": "0.00",
+  "total": "326042.52",
+  "currency": "EUR",
+  "payment_terms": "2/10 net 30",
+  "bank_details": "Crédit Agricole | IBAN: FR36 8888 0700 0775 9373 3901 207 | BIC: AGRIFRPPXXX",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "trade_terms",
+    "number_format": "english",
+    "layout": "mixed",
+    "consistency": "subtotal_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "271677.10",
+  "rendered_total": "326042.52",
+  "error_note": "Displayed subtotal 271677.10 differs from true subtotal 271702.10 by -25.00.",
+  "is_credit_note": false
+}

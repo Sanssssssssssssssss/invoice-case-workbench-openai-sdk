@@ -22,7 +22,7 @@ from app.llm import LlmClient
 from app.state.case_store import CaseStore
 
 
-FREEZE_COMMIT = "2df8b60"
+FREEZE_SEED = "compiler-runtime-freeze-20260821"
 LIVE_ROOT = PROJECT_ROOT / "benchmarks" / "invoice_tau" / "live_acceptance"
 
 
@@ -41,6 +41,12 @@ def main() -> int:
         choices=("connect", "plan", "execute", "hooks", "verify", "e2e"),
     )
     parser.add_argument("--case-id", default="")
+    parser.add_argument(
+        "--canary",
+        default="",
+        choices=("amount_conflict", "duplicate_reversal", "partial_receipt", "vendor_identity_active"),
+        help="Run a specific live-acceptance canary instead of the reproducible random pick.",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
@@ -72,7 +78,7 @@ def main() -> int:
         ).model_dump(mode="json")
         selection = None
     else:
-        selection = _select_canary(args.stage)
+        selection = _select_canary(args.stage, args.canary)
         harness.append_debug_event(
             state,
             kind="compiler_gate_selection",
@@ -140,11 +146,13 @@ def main() -> int:
                 prepared_sources=prepared,
                 policy_excerpt=policy,
             )
+            expected_check = _assert_expected_proof(result.proof, selection["expected"])
             output = {
                 "artifact": result.artifact.model_dump(mode="json"),
                 "proof": result.proof.model_dump(mode="json"),
                 "retry_count": result.retry_count,
                 "review_result": result.review_result,
+                "expected_check": expected_check,
             }
 
     hooks.flush()
@@ -167,15 +175,21 @@ def main() -> int:
     return 0
 
 
-def _select_canary(stage: str) -> dict[str, object]:
+def _select_canary(stage: str, canary_id: str = "") -> dict[str, object]:
     candidates = sorted(
         path for path in LIVE_ROOT.iterdir() if path.is_dir() and (path / "scenario.json").exists()
     )
     if not candidates:
         raise FileNotFoundError(f"No live Compiler canaries under {LIVE_ROOT}")
-    digest = hashlib.sha256(f"{FREEZE_COMMIT}:{stage}".encode("utf-8")).hexdigest()
-    picked = random.Random(int(digest, 16)).choice(candidates)
+    digest = hashlib.sha256(f"{FREEZE_SEED}:{stage}".encode("utf-8")).hexdigest()
+    if canary_id:
+        picked = next((path for path in candidates if path.name == canary_id), None)
+        if picked is None:
+            raise ValueError(f"Unknown live Compiler canary: {canary_id}")
+    else:
+        picked = random.Random(int(digest, 16)).choice(candidates)
     scenario = json.loads((picked / "scenario.json").read_text(encoding="utf-8"))
+    expected = json.loads((picked / "expected.json").read_text(encoding="utf-8"))
     requirements = [
         str(item.get("id") or "")
         for item in (scenario.get("initial_case_state") or {}).get("requirements") or []
@@ -196,7 +210,7 @@ def _select_canary(stage: str) -> dict[str, object]:
         )
     return {
         "selection": {
-            "freeze_commit": FREEZE_COMMIT,
+            "freeze_seed": FREEZE_SEED,
             "gate_name": stage,
             "seed_sha256": digest,
             "candidate_ids": [path.name for path in candidates],
@@ -204,6 +218,58 @@ def _select_canary(stage: str) -> dict[str, object]:
         },
         "requirement_ids": requirements,
         "source_items": source_items,
+        "expected": expected,
+    }
+
+
+def _assert_expected_proof(proof: object, expected: object) -> dict[str, object]:
+    if not isinstance(expected, dict):
+        raise TypeError("Canary expected.json must contain an object")
+    requirement_id = str(expected.get("proof_requirement_id") or "")
+    expected_status = str(expected.get("decision_status") or "")
+    decisions = {
+        item.requirement_id: item
+        for item in getattr(proof, "decisions", [])
+    }
+    decision = decisions.get(requirement_id)
+    if decision is None:
+        raise RuntimeError(f"Expected proof decision missing for {requirement_id!r}")
+    if decision.status != expected_status:
+        raise RuntimeError(
+            f"Decision mismatch for {requirement_id}: expected={expected_status}, actual={decision.status}"
+        )
+
+    scoped_obligations = [
+        item
+        for item in getattr(proof, "obligations", [])
+        if item.requirement_id == requirement_id
+    ]
+    expected_blocking = bool(expected.get("proof_has_blocking_obligations", False))
+    actual_blocking = bool(scoped_obligations)
+    if actual_blocking != expected_blocking:
+        raise RuntimeError(
+            f"Blocking-obligation mismatch for {requirement_id}: "
+            f"expected={expected_blocking}, actual={actual_blocking}"
+        )
+
+    minimum_sources = int(expected.get("proof_min_source_count") or 0)
+    node_results = {
+        item.node_id: item
+        for item in getattr(proof, "node_results", [])
+    }
+    root = node_results.get(decision.root_node_id)
+    source_count = len(root.source_ids) if root is not None else 0
+    if source_count < minimum_sources:
+        raise RuntimeError(
+            f"Proof source coverage too small for {requirement_id}: "
+            f"expected>={minimum_sources}, actual={source_count}"
+        )
+    return {
+        "requirement_id": requirement_id,
+        "decision_status": decision.status,
+        "blocking_obligations": actual_blocking,
+        "root_source_count": source_count,
+        "passed": True,
     }
 
 

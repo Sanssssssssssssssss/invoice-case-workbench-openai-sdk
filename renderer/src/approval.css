@@ -12,6 +12,26 @@
   box-shadow: 0 12px 26px rgba(209, 139, 0, 0.1);
 }
 
+.approval-panel.executing {
+  grid-template-columns: auto minmax(0, 1fr);
+  border-color: #9fcfca;
+  background: #f1fbfa;
+}
+
+.approval-panel.executing .approval-icon {
+  background: var(--teal-soft);
+  color: var(--teal);
+  animation: approval-pulse 1.4s ease-in-out infinite;
+}
+
+.approval-panel.executing .approval-copy strong {
+  color: var(--teal);
+}
+
+@keyframes approval-pulse {
+  50% { opacity: 0.55; }
+}
+
 .approval-icon {
   display: grid;
   width: 34px;

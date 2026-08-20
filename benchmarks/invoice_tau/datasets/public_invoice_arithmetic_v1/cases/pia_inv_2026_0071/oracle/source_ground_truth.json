@@ -1,0 +1,91 @@
+{
+  "invoice_id": "INV-2026-0071",
+  "vendor": "Goliath National Bank",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "42 Fenfell Rise",
+    "postal_code": "EC1M 3JB",
+    "city": "London"
+  },
+  "recipient": "Europäische Verwaltungskontor AG",
+  "recipient_country": "AT",
+  "recipient_address": {
+    "street": "Feldspatplatz 9",
+    "postal_code": "5020",
+    "city": "Salzburg"
+  },
+  "date": "2026-02-03",
+  "due_date": "2026-03-05",
+  "line_items": [
+    {
+      "description": "Retainer fee — ongoing counsel",
+      "quantity": 1,
+      "unit_price": "-48963.00",
+      "vat_rate": "0.20",
+      "amount": "-48963.00"
+    },
+    {
+      "description": "Emergency weekend support call (45 minutes, felt longer)",
+      "quantity": 10,
+      "unit_price": "-472.60",
+      "vat_rate": "0.20",
+      "amount": "-4726.00"
+    },
+    {
+      "description": "Cloud infrastructure migration — Phase 2 of 7 (estimated)",
+      "quantity": 3,
+      "unit_price": "-39489.40",
+      "vat_rate": "0.20",
+      "amount": "-118468.20"
+    },
+    {
+      "description": "Architecture review (whiteboarding session)",
+      "quantity": 2,
+      "unit_price": "-35414.10",
+      "vat_rate": "0.20",
+      "amount": "-70828.20"
+    },
+    {
+      "description": "Consulting hours — Senior Partner",
+      "quantity": 50,
+      "unit_price": "-272.40",
+      "vat_rate": "0.20",
+      "amount": "-13620.00"
+    },
+    {
+      "description": "Software licence renewal — 50 seats",
+      "quantity": 1,
+      "unit_price": "-20975.00",
+      "vat_rate": "0.20",
+      "amount": "-20975.00"
+    },
+    {
+      "description": "Due-diligence memorandum — Project Thornbury",
+      "quantity": 1,
+      "unit_price": "-7117.40",
+      "vat_rate": "0.20",
+      "amount": "-7117.40"
+    }
+  ],
+  "subtotal": "-284697.80",
+  "vat_rate": "0.20",
+  "vat_amount": "-56939.56",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "-341637.36",
+  "currency": "EUR",
+  "payment_terms": "Net 30 days",
+  "bank_details": "Barclays | IBAN: GB47 8743 8799 1339 5950 41 | BIC: BARCGB22XXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "none",
+    "number_format": "english",
+    "layout": "paragraph",
+    "consistency": "subtotal_error",
+    "edge_case": "credit_note"
+  },
+  "rendered_subtotal": "-284722.80",
+  "rendered_total": "-341637.36",
+  "error_note": "Displayed subtotal -284722.80 differs from true subtotal -284697.80 by -25.00.",
+  "is_credit_note": true
+}

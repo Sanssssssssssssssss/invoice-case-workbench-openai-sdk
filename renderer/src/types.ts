@@ -58,13 +58,134 @@ export interface CaseState {
   next_questions: string[]
   next_action_hint: string
   reply_brief: string
+  review_artifact?: ReviewArtifact | null
+  compiled_proof?: CompiledProof | null
+}
+
+export type ProofNodeKind = 'CHECK' | 'ALL' | 'ANY'
+export type ProofStatus = 'SUPPORTED' | 'CONTRADICTED' | 'NOT_FOUND'
+
+export interface ProofNode {
+  id: string
+  kind: ProofNodeKind
+  statement: string
+  depends_on: string[]
+  requirement_refs: string[]
+  policy_refs: string[]
+}
+
+export interface ProofPlan {
+  plan_id: string
+  version: string
+  objective: string
+  active_requirement_ids: string[]
+  policy_refs: string[]
+  roots: Record<string, string>
+  nodes: ProofNode[]
+}
+
+export interface EvidenceClaim {
+  id: string
+  subject: string
+  predicate: string
+  value: unknown
+  source_id: string
+  quote: string
+  locator: string
+  confidence: 'low' | 'medium' | 'high'
+  attributes: Record<string, unknown>
+}
+
+export interface EvidenceIR {
+  schema_version: string
+  source_ids: string[]
+  source_fingerprints: Record<string, string>
+  claims: EvidenceClaim[]
+}
+
+export interface CheckAssessment {
+  check_id: string
+  status: ProofStatus
+  claim_ids: string[]
+  source_ids: string[]
+  examined_source_ids: string[]
+  reason: string
+  missing_fact: string
+}
+
+export interface ReviewArtifact {
+  plan: ProofPlan
+  plan_hash: string
+  evidence_ir: EvidenceIR
+  evidence_snapshot_hash: string
+  assessments: CheckAssessment[]
+  submitted_claim_refs: Record<string, string[]>
+  policy_hash: string
+  unconfigured_policy_refs: string[]
+  compiler_version: string
+  model: string
+  prompt_versions: Record<string, string>
+}
+
+export interface ProofNodeResult {
+  node_id: string
+  kind: ProofNodeKind
+  status: ProofStatus
+  reason: string
+  claim_ids: string[]
+  source_ids: string[]
+}
+
+export interface DecisionProof {
+  requirement_id: string
+  root_node_id: string
+  status: ProofStatus
+  supporting_check_ids: string[]
+  contradicting_check_ids: string[]
+  unresolved_check_ids: string[]
+  obligation_ids: string[]
+  plan_hash: string
+  evidence_snapshot_hash: string
+  policy_hash: string
+  stop_reason: string
+}
+
+export interface ProofObligation {
+  id: string
+  requirement_id: string
+  check_id: string
+  missing_fact: string
+  blocking: boolean
+  candidate_actions: string[]
+}
+
+export interface CompilationDiagnostic {
+  code: string
+  message: string
+  node_id: string
+  requirement_id: string
+  blocking: boolean
+}
+
+export interface CompiledProof {
+  node_results: ProofNodeResult[]
+  decisions: DecisionProof[]
+  obligations: ProofObligation[]
+  diagnostics: CompilationDiagnostic[]
 }
 
 export interface ConversationItem {
   ts: string
   role: 'user' | 'assistant' | 'system' | string
   content: string
+  attachments: ConversationAttachment[]
   metadata: Record<string, unknown>
+}
+
+export interface ConversationAttachment {
+  name: string
+  path: string
+  content_type: string
 }
 
 export interface AttachmentUpload {

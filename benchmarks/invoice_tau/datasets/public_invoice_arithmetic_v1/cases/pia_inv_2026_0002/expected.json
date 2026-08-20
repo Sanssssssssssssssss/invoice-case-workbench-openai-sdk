@@ -1,0 +1,134 @@
+{
+  "schema_version": "1",
+  "case_id": "pia_inv_2026_0002",
+  "oracle_sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::pia_inv_2026_0002",
+  "case_status": "ready_for_report",
+  "requirements": {
+    "invoice": "accepted",
+    "invoice_calculation_valid": "conflict"
+  },
+  "oracle_facts": [
+    {
+      "id": "fact_invoice_id",
+      "semantic_key": "invoice.id",
+      "value": "INV-2026-0002",
+      "evidence": [
+        {
+          "attachment_id": "invoice",
+          "locator": "page=1",
+          "quote": "ACME Laboratories International S.A.        Invoice No: INV-2026-0002"
+        }
+      ]
+    },
+    {
+      "id": "fact_reported_subtotal",
+      "semantic_key": "invoice.reported_subtotal_text",
+      "value": "Subtotal: 155'350.70 EUR",
+      "evidence": [
+        {
+          "attachment_id": "invoice",
+          "locator": "page=1",
+          "quote": "Subtotal: 155'350.70 EUR"
+        }
+      ]
+    },
+    {
+      "id": "fact_visible_total",
+      "semantic_key": "invoice.rendered_total",
+      "value": "188813.24",
+      "currency": "EUR",
+      "evidence": [
+        {
+          "attachment_id": "invoice",
+          "locator": "page=1",
+          "quote": "TOTAL: 188'813.24 EUR"
+        }
+      ]
+    },
+    {
+      "id": "fact_canonical_total",
+      "semantic_key": "oracle.invoice_canonical_total",
+      "value": "183313.83",
+      "currency": "EUR",
+      "derivation": {
+        "kind": "upstream_decimal_oracle",
+        "oracle_path": "oracle/source_ground_truth.json",
+        "inputs": [
+          "line_items",
+          "vat_rate",
+          "discount"
+        ],
+        "rounding": "ROUND_HALF_UP"
+      }
+    },
+    {
+      "id": "fact_consistency",
+      "semantic_key": "oracle.invoice_arithmetic_consistency",
+      "value": "total_error",
+      "derivation": {
+        "kind": "oracle_comparison",
+        "oracle_path": "oracle/source_ground_truth.json",
+        "compares": [
+          "rendered_subtotal",
+          "rendered_total",
+          "subtotal",
+          "total"
+        ]
+      }
+    }
+  ],
+  "proofs": {
+    "invoice": {
+      "status": "SUPPORTED",
+      "required_fact_ids": [
+        "fact_invoice_id",
+        "fact_visible_total"
+      ],
+      "min_source_count": 1,
+      "blocking_obligations": false
+    },
+    "invoice_calculation_valid": {
+      "status": "CONTRADICTED",
+      "required_fact_ids": [
+        "fact_reported_subtotal",
+        "fact_visible_total",
+        "fact_canonical_total",
+        "fact_consistency"
+      ],
+      "min_source_count": 1,
+      "blocking_obligations": false,
+      "grounding": {
+        "all_claims_have_quote": true,
+        "all_claims_have_locator": true,
+        "all_sources_admitted": true
+      }
+    }
+  },
+  "forbidden_strong_conclusions": {
+    "invoice_calculation_valid": [
+      "SUPPORTED"
+    ]
+  },
+  "trace_acceptance": {
+    "required_stages": [
+      "task_compiler",
+      "executor",
+      "fine_verifier",
+      "proof_kernel"
+    ],
+    "required_tools": [
+      "read_source",
+      "bind_claim",
+      "submit_check"
+    ],
+    "forbidden_roles": [
+      "report_writer"
+    ],
+    "max_errors": 0
+  },
+  "cost_budget": {
+    "max_provider_calls": 8,
+    "max_total_tokens": 70000,
+    "max_wall_time_ms": 240000
+  }
+}

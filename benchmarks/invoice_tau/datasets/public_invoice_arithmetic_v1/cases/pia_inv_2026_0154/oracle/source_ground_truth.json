@@ -1,0 +1,55 @@
+{
+  "invoice_id": "INV-2026-0154",
+  "vendor": "Stark Industries Europe Ltd",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "25 Greywell Close",
+    "postal_code": "EC2R 6AA",
+    "city": "London"
+  },
+  "recipient": "Europäische Verwaltungskontor AG",
+  "recipient_country": "AT",
+  "recipient_address": {
+    "street": "Zinnpfeifferallee 33",
+    "postal_code": "1080",
+    "city": "Wien"
+  },
+  "date": "2026-03-23",
+  "due_date": "2026-04-22",
+  "line_items": [
+    {
+      "description": "Annual subscription — enterprise tier (unused features included)",
+      "quantity": 2,
+      "unit_price": "11767.90",
+      "vat_rate": "0.20",
+      "amount": "23535.80"
+    }
+  ],
+  "subtotal": "23535.80",
+  "vat_rate": "0.20",
+  "vat_amount": "4707.16",
+  "discount": {
+    "type": "trade_terms",
+    "value": "0.02",
+    "applied_to": "subtotal",
+    "description": "2/10 net 30 — conditional early-payment discount",
+    "conditional": true
+  },
+  "discount_amount": "0.00",
+  "total": "28242.96",
+  "currency": "EUR",
+  "payment_terms": "2/10 net 30",
+  "bank_details": "HSBC UK | IBAN: GB25 5710 5948 6349 9389 92 | BIC: HBUKGB4BXXX",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "trade_terms",
+    "number_format": "swiss",
+    "layout": "mixed",
+    "consistency": "correct",
+    "edge_case": "mixed_vat"
+  },
+  "rendered_subtotal": "23535.80",
+  "rendered_total": "28242.96",
+  "error_note": null,
+  "is_credit_note": false
+}

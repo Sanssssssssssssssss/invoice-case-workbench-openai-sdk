@@ -1,0 +1,55 @@
+{
+  "invoice_id": "INV-2026-0108",
+  "vendor": "Massive Dynamic Europe Ltd",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "7 Merrowdale Lane",
+    "postal_code": "EC2V 5AQ",
+    "city": "London"
+  },
+  "recipient": "Caledonian Moor Pension Management Ltd",
+  "recipient_country": "GB",
+  "recipient_address": {
+    "street": "19 Whitcomb-Stead Mews",
+    "postal_code": "E1 6BG",
+    "city": "London"
+  },
+  "date": "2026-01-14",
+  "due_date": "2026-02-13",
+  "line_items": [
+    {
+      "description": "Cloud infrastructure migration — Phase 2 of 7 (estimated)",
+      "quantity": 1,
+      "unit_price": "9961.90",
+      "vat_rate": "0.20",
+      "amount": "9961.90"
+    }
+  ],
+  "subtotal": "9961.90",
+  "vat_rate": "0.20",
+  "vat_amount": "1992.38",
+  "discount": {
+    "type": "trade_terms",
+    "value": "0.02",
+    "applied_to": "subtotal",
+    "description": "2/10 net 30 — conditional early-payment discount",
+    "conditional": true
+  },
+  "discount_amount": "0.00",
+  "total": "11954.28",
+  "currency": "EUR",
+  "payment_terms": "2/10 net 30",
+  "bank_details": "Barclays | IBAN: GB47 5314 5797 7926 5522 04 | BIC: BARCGB22XXX",
+  "variants": {
+    "vat_variant": "explicit_included",
+    "discount_variant": "trade_terms",
+    "number_format": "english",
+    "layout": "paragraph",
+    "consistency": "subtotal_error",
+    "edge_case": "single_item"
+  },
+  "rendered_subtotal": "9911.90",
+  "rendered_total": "11954.28",
+  "error_note": "Displayed subtotal 9911.90 differs from true subtotal 9961.90 by -50.00.",
+  "is_credit_note": false
+}

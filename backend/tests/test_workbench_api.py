@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
-
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.state.case_store import CaseStore, utc_now
-from app.state.schemas import AgentTurnResponse, CaseState, EvidenceItem, Requirement
+from app.state.schemas import CaseState, EvidenceItem, Requirement
 from app.state.session_repository import SessionRepository
 
 
@@ -39,6 +37,30 @@ def test_workbench_case_reads_and_archive(tmp_path, monkeypatch) -> None:
     archived = client.delete("/api/cases/case_cockpit")
     assert archived.status_code == 200
     assert not store.case_dir("case_cockpit").exists()
+
+
+def test_workbench_conversation_keeps_safe_attachment_metadata(tmp_path, monkeypatch) -> None:
+    _configure_tmp_settings(tmp_path, monkeypatch)
+    from app.main import app
+
+    store = CaseStore()
+    source = store.resolve_case_path("case_attachment", "attachments/originals/invoice.pdf")
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"%PDF")
+    sessions = SessionRepository(store)
+    sessions.append_user_turn(
+        "case_attachment",
+        "review",
+        [{"name": "invoice.pdf", "path": str(source), "content_type": "application/pdf"}],
+        "run_attachment",
+    )
+
+    item = TestClient(app).get("/api/cases/case_attachment/conversation").json()[0]
+
+    assert item["attachments"] == [
+        {"name": "invoice.pdf", "path": "attachments/originals/invoice.pdf", "content_type": "application/pdf"}
+    ]
+    assert str(tmp_path) not in json.dumps(item)
 
 
 def test_workbench_runs_events_and_sse_payload(tmp_path, monkeypatch) -> None:
@@ -78,24 +100,9 @@ def test_workbench_waiting_approval_run_status(tmp_path, monkeypatch) -> None:
     assert runs[0]["phase"] == "waiting_approval"
 
 
-def test_workbench_approval_resume_endpoint_delegates_to_agent_runtime(tmp_path, monkeypatch) -> None:
+def test_blocking_approval_resume_endpoint_is_removed(tmp_path, monkeypatch) -> None:
     _configure_tmp_settings(tmp_path, monkeypatch)
     from app.main import app
-    import app.api.workbench as workbench
-
-    calls: list[dict[str, Any]] = []
-
-    class FakeRuntime:
-        def resume_approval(self, case_id: str, run_id: str, approved: bool, reason: str = "") -> AgentTurnResponse:
-            calls.append({"case_id": case_id, "run_id": run_id, "approved": approved, "reason": reason})
-            return AgentTurnResponse(
-                case_id=case_id,
-                reply="resumed",
-                case_state=CaseState(case_id=case_id),
-                trace={"run_id": run_id, "status": "completed"},
-            )
-
-    monkeypatch.setattr(workbench, "AgentRuntime", FakeRuntime)
     client = TestClient(app)
 
     response = client.post(
@@ -103,9 +110,7 @@ def test_workbench_approval_resume_endpoint_delegates_to_agent_runtime(tmp_path,
         json={"approved": True, "reason": "ok"},
     )
 
-    assert response.status_code == 200
-    assert response.json()["reply"] == "resumed"
-    assert calls == [{"case_id": "case_cockpit", "run_id": "run_cockpit", "approved": True, "reason": "ok"}]
+    assert response.status_code == 404
 
 
 def test_generated_case_files_are_listed_and_served_safely(tmp_path, monkeypatch) -> None:
@@ -173,7 +178,7 @@ def test_generated_case_files_are_listed_and_served_safely(tmp_path, monkeypatch
     assert client.get("/api/cases/case_cockpit/files/metadata", params={"path": "reports/nested"}).status_code == 404
 
 
-def test_workbench_collapses_streaming_thinking_for_trace_display(tmp_path, monkeypatch) -> None:
+def test_workbench_preserves_each_public_work_event(tmp_path, monkeypatch) -> None:
     _configure_tmp_settings(tmp_path, monkeypatch)
     from app.main import app
 
@@ -186,13 +191,17 @@ def test_workbench_collapses_streaming_thinking_for_trace_display(tmp_path, monk
     events = client.get("/api/cases/case_cockpit/runs/run_stream/events").json()
     thinking = [event for event in events if event["kind"] == "thinking"]
 
-    assert runs[0]["event_count"] == 4
-    assert [event["kind"] for event in events] == ["thinking", "model", "planner", "thinking"]
-    assert len(thinking) == 2
-    assert thinking[0]["event_id"] == "run_stream:thinking:planner:root_step_0"
-    assert thinking[0]["summary"] == "Planner thinking completed; 120 chars"
-    assert thinking[0]["payload"]["reasoning_excerpt"] == "final planner thought"
-    assert thinking[1]["event_id"] == "run_stream:thinking:planner:evt_action_001"
+    assert runs[0]["event_count"] == 5
+    assert [event["kind"] for event in events] == ["thinking", "thinking", "model", "planner", "thinking"]
+    assert len(thinking) == 3
+    assert [event["event_id"] for event in thinking] == [
+        "evt_thinking_001",
+        "evt_thinking_002",
+        "evt_thinking_003",
+    ]
+    assert thinking[1]["summary"] == "Plan structure validated"
+    assert all("reasoning_excerpt" not in event["payload"] for event in thinking)
+    assert "SECRET_HIDDEN_COT" not in json.dumps(events, ensure_ascii=False)
 
 
 def test_workbench_rejects_unsafe_case_paths(tmp_path, monkeypatch) -> None:
@@ -205,7 +214,7 @@ def test_workbench_rejects_unsafe_case_paths(tmp_path, monkeypatch) -> None:
     assert client.get("/api/cases/case_x/runs/%2E%2E/events").status_code == 400
 
 
-def test_live_status_reports_real_thinking_excerpt(tmp_path, monkeypatch) -> None:
+def test_live_status_reports_public_work_log_without_hidden_reasoning(tmp_path, monkeypatch) -> None:
     _configure_tmp_settings(tmp_path, monkeypatch)
     from app.api.live_status import build_live_status
     from app.api.workbench import sse_payload
@@ -219,11 +228,11 @@ def test_live_status_reports_real_thinking_excerpt(tmp_path, monkeypatch) -> Non
     status = client.get("/api/cases/case_cockpit/live-status").json()
     assert status["runId"] == "run_live"
     assert status["isRunning"] is True
-    assert status["thinkingSource"] == "reasoning_content"
+    assert status["thinkingSource"] == "public_work_log"
     assert status["latestThinking"]
     assert status["latestThoughtSummary"]
-    assert status["latestThoughtSummary"] != status["latestThinking"]
-    assert "Supervisor" in status["latestThoughtSummary"]
+    assert status["latestThinking"] == "正在核对来源覆盖和字段一致性。"
+    assert status["latestThoughtSummary"] == status["latestThinking"]
     assert status["elapsedMs"] >= 0
     assert "secret invoice payload" not in status["latestThinking"]
     assert "event: live_status" in sse_payload("live_status", build_live_status("case_cockpit").model_dump(), event_id=status["latestEventId"])
@@ -428,13 +437,14 @@ def _seed_running_thinking_trace(store: CaseStore, case_id: str, run_id: str) ->
             "step_count": 1,
             "kind": "model_thinking",
             "name": "evidence_reviewer",
-            "summary": "evidence_reviewer reasoning_content streaming; chars=120",
+            "summary": "正在核对证据",
             "payload": {
                 "role": "evidence_reviewer",
                 "model": "kimi-k2.5",
-                "reasoning_excerpt": "我正在检查发票金额、税率和供应商字段是否互相一致。",
-                "reasoning_chars": 120,
-                "reasoning_chunks": 9,
+                "stage": "evidence_reviewer",
+                "action": "正在核对证据",
+                "public_reason": "正在核对来源覆盖和字段一致性。",
+                "status": "running",
                 "raw_payload_should_not_leak": "secret invoice payload",
             },
         }
@@ -503,8 +513,15 @@ def _seed_streaming_thinking_trace(store: CaseStore, case_id: str, run_id: str) 
             "step_count": 0,
             "kind": "model_thinking",
             "name": "planner",
-            "summary": "planner reasoning_content streaming; chars=20",
-            "payload": {"role": "planner", "reasoning_excerpt": "first planner thought", "reasoning_chars": 20, "status": "streaming"},
+            "summary": "Compiling review plan",
+            "payload": {
+                "role": "task_compiler",
+                "stage": "task_compiler",
+                "action": "Compiling review plan",
+                "public_reason": "Turning requirements into atomic checks.",
+                "reasoning_content": "SECRET_HIDDEN_COT",
+                "status": "started",
+            },
         },
         {
             "seq": 2,
@@ -516,8 +533,14 @@ def _seed_streaming_thinking_trace(store: CaseStore, case_id: str, run_id: str) 
             "step_count": 0,
             "kind": "model_thinking",
             "name": "planner",
-            "summary": "planner reasoning_content completed; chars=120",
-            "payload": {"role": "planner", "reasoning_excerpt": "final planner thought", "reasoning_chars": 120, "status": "completed"},
+            "summary": "Plan structure validated",
+            "payload": {
+                "role": "task_compiler",
+                "stage": "task_compiler",
+                "action": "Plan structure validated",
+                "public_reason": "Requirement roots and policy references are complete.",
+                "status": "completed",
+            },
         },
         {
             "seq": 3,
@@ -554,8 +577,14 @@ def _seed_streaming_thinking_trace(store: CaseStore, case_id: str, run_id: str) 
             "step_count": 1,
             "kind": "model_thinking",
             "name": "planner",
-            "summary": "planner reasoning_content streaming; chars=30",
-            "payload": {"role": "planner", "reasoning_excerpt": "retry thought", "reasoning_chars": 30, "status": "streaming"},
+            "summary": "Checking unresolved evidence",
+            "payload": {
+                "role": "executor",
+                "stage": "executor",
+                "action": "Checking unresolved evidence",
+                "public_reason": "Reviewing only the checks that remain NOT_FOUND.",
+                "status": "running",
+            },
         },
     ]
     text = "\n".join(json.dumps(item, ensure_ascii=False) for item in events) + "\n"

@@ -1,0 +1,97 @@
+{
+  "invoice_id": "INV-2026-0113",
+  "vendor": "Weyland-Yutani Europe S.A.",
+  "vendor_country": "FR",
+  "vendor_address": {
+    "street": "8 place Thomery-Dupré",
+    "postal_code": "69001",
+    "city": "Lyon"
+  },
+  "recipient": "Benelux Windmill Automation B.V.",
+  "recipient_country": "NL",
+  "recipient_address": {
+    "street": "Pelikaanhofkade 88",
+    "postal_code": "1015 DV",
+    "city": "Amsterdam"
+  },
+  "date": "2026-02-10",
+  "due_date": "2026-02-24",
+  "line_items": [
+    {
+      "description": "SEO audit (Q1 2026)",
+      "quantity": 1,
+      "unit_price": "45657.20",
+      "vat_rate": "0.20",
+      "amount": "45657.20"
+    },
+    {
+      "description": "Quarterly newsletter design",
+      "quantity": 1,
+      "unit_price": "42746.00",
+      "vat_rate": "0.20",
+      "amount": "42746.00"
+    },
+    {
+      "description": "Due-diligence memorandum — Project Thornbury",
+      "quantity": 3,
+      "unit_price": "45301.80",
+      "vat_rate": "0.10",
+      "amount": "135905.40"
+    },
+    {
+      "description": "Travel expenses (Frankfurt–Zürich)",
+      "quantity": 3,
+      "unit_price": "41360.70",
+      "vat_rate": "0.10",
+      "amount": "124082.10"
+    },
+    {
+      "description": "Board meeting facilitation",
+      "quantity": 1,
+      "unit_price": "13838.40",
+      "vat_rate": "0.10",
+      "amount": "13838.40"
+    },
+    {
+      "description": "Database optimisation retainer — March",
+      "quantity": 1,
+      "unit_price": "41736.80",
+      "vat_rate": "0.20",
+      "amount": "41736.80"
+    },
+    {
+      "description": "Incident response (post-mortem deliverable pending)",
+      "quantity": 2,
+      "unit_price": "37427.40",
+      "vat_rate": "0.20",
+      "amount": "74854.80"
+    }
+  ],
+  "subtotal": "478820.70",
+  "vat_rate": null,
+  "vat_amount": "68381.55",
+  "discount": {
+    "type": "percentage",
+    "value": "0.075",
+    "applied_to": "subtotal",
+    "description": "adjustment per framework agreement ref. FA-2020-938",
+    "conditional": false
+  },
+  "discount_amount": "35911.55",
+  "total": "511290.70",
+  "currency": "EUR",
+  "payment_terms": "Payable within 14 days",
+  "bank_details": "Société Générale | IBAN: FR21 1043 1078 8497 3050 7656 822 | BIC: SOGEFRPPXXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "obfuscated",
+    "number_format": "english",
+    "layout": "mixed",
+    "consistency": "correct",
+    "edge_case": "mixed_vat"
+  },
+  "rendered_subtotal": "478820.70",
+  "rendered_total": "511290.70",
+  "error_note": null,
+  "is_credit_note": false
+}

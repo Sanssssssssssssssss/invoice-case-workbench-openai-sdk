@@ -1,0 +1,97 @@
+{
+  "invoice_id": "INV-2026-0160",
+  "vendor": "Pierce & Pierce Holdings Ltd",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "14 Pembroke-Brook Passage",
+    "postal_code": "EC1R 0AA",
+    "city": "London"
+  },
+  "recipient": "Benelux Windmill Automation B.V.",
+  "recipient_country": "NL",
+  "recipient_address": {
+    "street": "Pelikaanhofkade 88",
+    "postal_code": "1015 DV",
+    "city": "Amsterdam"
+  },
+  "date": "2026-03-26",
+  "due_date": "2026-04-09",
+  "line_items": [
+    {
+      "description": "Strategic advisory — Q1 2026 (PowerPoints not included)",
+      "quantity": 1,
+      "unit_price": "36194.40",
+      "vat_rate": "0.20",
+      "amount": "36194.40"
+    },
+    {
+      "description": "Emergency weekend support call (45 minutes, felt longer)",
+      "quantity": 1,
+      "unit_price": "5666.60",
+      "vat_rate": "0.20",
+      "amount": "5666.60"
+    },
+    {
+      "description": "Marketing collateral refresh",
+      "quantity": 2,
+      "unit_price": "22008.00",
+      "vat_rate": "0.20",
+      "amount": "44016.00"
+    },
+    {
+      "description": "Due-diligence memorandum — Project Thornbury",
+      "quantity": 2,
+      "unit_price": "40509.90",
+      "vat_rate": "0.20",
+      "amount": "81019.80"
+    },
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 20,
+      "unit_price": "177.70",
+      "vat_rate": "0.20",
+      "amount": "3554.00"
+    },
+    {
+      "description": "Quarterly newsletter design",
+      "quantity": 2,
+      "unit_price": "33400.00",
+      "vat_rate": "0.20",
+      "amount": "66800.00"
+    },
+    {
+      "description": "Consulting hours — Senior Partner",
+      "quantity": 2,
+      "unit_price": "16409.50",
+      "vat_rate": "0.20",
+      "amount": "32819.00"
+    }
+  ],
+  "subtotal": "270069.80",
+  "vat_rate": "0.20",
+  "vat_amount": "54013.96",
+  "discount": {
+    "type": "percentage",
+    "value": "0.05",
+    "applied_to": "subtotal",
+    "description": "adjustment per framework agreement ref. FA-2020-624",
+    "conditional": false
+  },
+  "discount_amount": "13503.49",
+  "total": "310580.27",
+  "currency": "EUR",
+  "payment_terms": "Payable within 14 days",
+  "bank_details": "Lloyds Bank | IBAN: GB92 2508 9460 8824 5121 81 | BIC: LOYDGB21XXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "obfuscated",
+    "number_format": "german",
+    "layout": "table",
+    "consistency": "total_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "270069.80",
+  "rendered_total": "319897.68",
+  "error_note": "Displayed total 319897.68 differs from true total 310580.27 by +9317.41 (+3.00%).",
+  "is_credit_note": false
+}

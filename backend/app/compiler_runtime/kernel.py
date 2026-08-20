@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from graphlib import TopologicalSorter
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from app.compiler_runtime.models import (
     AssessmentStatus,
@@ -14,10 +14,15 @@ from app.compiler_runtime.models import (
     ProofNode,
     ProofObligation,
     ReviewArtifact,
+    explicit_final_statuses,
 )
 
 
-def compile_review_artifact(artifact: ReviewArtifact) -> CompiledProof:
+def compile_review_artifact(
+    artifact: ReviewArtifact,
+    *,
+    requirement_requiredness: Mapping[str, bool] | None = None,
+) -> CompiledProof:
     """Compile model work into proofs using only graph and reference invariants."""
     plan = artifact.plan
     nodes = {node.id: node for node in plan.nodes}
@@ -106,6 +111,11 @@ def compile_review_artifact(artifact: ReviewArtifact) -> CompiledProof:
     obligations: list[ProofObligation] = []
     decisions: list[DecisionProof] = []
     for requirement_id in plan.active_requirement_ids:
+        required = (
+            True
+            if requirement_requiredness is None
+            else bool(requirement_requiredness.get(requirement_id, True))
+        )
         root_id = plan.roots[requirement_id]
         root_status = results[root_id].status
         reachable_checks = sorted(
@@ -127,6 +137,7 @@ def compile_review_artifact(artifact: ReviewArtifact) -> CompiledProof:
                         requirement_id=requirement_id,
                         check_id=check_id,
                         missing_fact=missing_facts.get(check_id, nodes[check_id].statement),
+                        blocking=required,
                     )
                 )
         decisions.append(
@@ -141,11 +152,11 @@ def compile_review_artifact(artifact: ReviewArtifact) -> CompiledProof:
                 plan_hash=artifact.plan_hash,
                 evidence_snapshot_hash=artifact.evidence_snapshot_hash,
                 policy_hash=artifact.policy_hash,
-                stop_reason=_stop_reason(root_status, obligation_ids),
+                stop_reason=_stop_reason(root_status, obligation_ids, blocking=required),
             )
         )
 
-    blocking_nodes = {item.check_id for item in obligations}
+    blocking_nodes = {item.check_id for item in obligations if item.blocking}
     diagnostics = [
         item.model_copy(update={"blocking": item.blocking and (not item.node_id or item.node_id in blocking_nodes)})
         for item in diagnostics
@@ -182,11 +193,14 @@ def _compile_check(
         )
     blocked_policy_refs = sorted(set(node.policy_refs) & unconfigured_policy_refs)
     if blocked_policy_refs:
+        partial_claim_ids = [claim_id for claim_id in claims if claim_id in submitted_claim_ids]
         return _rejected_check(
             node,
             code="POLICY_NOT_CONFIGURED",
             message=f"Required policy values are not configured: {blocked_policy_refs}",
             missing_fact=f"configure policy values: {', '.join(blocked_policy_refs)}",
+            claim_ids=partial_claim_ids,
+            source_ids=_unique(claims[claim_id].source_id for claim_id in partial_claim_ids),
         )
     if not check_submitted:
         return _rejected_check(
@@ -247,6 +261,19 @@ def _compile_check(
             message=f"Assessment cites Claims not submitted for this CHECK: {unsubmitted_claims}",
             missing_fact="submit the candidate Claims for this CHECK before verification",
         )
+    explicit_statuses = explicit_final_statuses(assessment.reason)
+    if explicit_statuses and explicit_statuses != {assessment.status}:
+        return _rejected_check(
+            node,
+            code="ASSESSMENT_STATUS_REASON_CONFLICT",
+            message=(
+                "Verifier structured status conflicts with its explicit final classification: "
+                f"status={assessment.status}, reason_statuses={sorted(explicit_statuses)}"
+            ),
+            missing_fact="return one internally consistent final classification for this CHECK",
+            claim_ids=assessment.claim_ids,
+            source_ids=assessment.source_ids,
+        )
     if assessment.status == "NOT_FOUND":
         diagnostic = None
         if not assessment.missing_fact:
@@ -266,6 +293,16 @@ def _compile_check(
             ),
             diagnostic,
             assessment.missing_fact or node.statement,
+        )
+
+    claim_source_ids = {claims[claim_id].source_id for claim_id in assessment.claim_ids}
+    extra_sources = sorted(set(assessment.source_ids) - claim_source_ids)
+    if extra_sources:
+        return _rejected_check(
+            node,
+            code="UNSUPPORTED_SOURCE_REFERENCE",
+            message=f"Strong assessment cites sources not used by its Claims: {extra_sources}",
+            missing_fact="cite only the concrete sources used by the strong assessment Claims",
         )
 
     examined_source_ids = set(assessment.examined_source_ids)
@@ -329,6 +366,8 @@ def _rejected_check(
     code: str,
     message: str,
     missing_fact: str,
+    claim_ids: Iterable[str] = (),
+    source_ids: Iterable[str] = (),
 ) -> tuple[NodeResult, CompilationDiagnostic, str]:
     return (
         NodeResult(
@@ -336,6 +375,8 @@ def _rejected_check(
             kind=node.kind,
             status="NOT_FOUND",
             reason=message,
+            claim_ids=_unique(claim_ids),
+            source_ids=_unique(source_ids),
         ),
         CompilationDiagnostic(code=code, node_id=node.id, message=message),
         missing_fact,
@@ -354,13 +395,6 @@ def _aggregate(kind: str, statuses: list[AssessmentStatus]) -> AssessmentStatus:
             return "SUPPORTED"
         if all(item == "CONTRADICTED" for item in statuses):
             return "CONTRADICTED"
-        return "NOT_FOUND"
-    if kind == "NOT":
-        status = statuses[0]
-        if status == "SUPPORTED":
-            return "CONTRADICTED"
-        if status == "CONTRADICTED":
-            return "SUPPORTED"
         return "NOT_FOUND"
     raise ValueError(f"Unsupported aggregate kind: {kind}")
 
@@ -392,11 +426,20 @@ def _unique(items: Iterable[str]) -> list[str]:
     return result
 
 
-def _stop_reason(status: AssessmentStatus, obligation_ids: list[str]) -> str:
+def _stop_reason(
+    status: AssessmentStatus,
+    obligation_ids: list[str],
+    *,
+    blocking: bool = True,
+) -> str:
     if status == "SUPPORTED":
         return "the requirement proof is supported"
     if status == "CONTRADICTED":
         return "the requirement proof is contradicted"
     if obligation_ids:
-        return "blocking proof obligations remain unresolved"
+        return (
+            "blocking proof obligations remain unresolved"
+            if blocking
+            else "optional evidence remains unresolved"
+        )
     return "the requirement could not be established"

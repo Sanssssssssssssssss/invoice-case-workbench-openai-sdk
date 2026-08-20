@@ -1,7 +1,7 @@
 import type { LiveStatus } from '@/types'
 
 export function shouldShowThinking(status: LiveStatus | null | undefined, agentRunning: boolean) {
-  return Boolean(agentRunning && status?.thinkingSource === 'reasoning_content' && status.latestThinking?.trim())
+  return Boolean(agentRunning && status?.thinkingSource === 'public_work_log' && status.latestThinking?.trim())
 }
 
 export function thinkingLineClass(expanded: boolean) {
@@ -11,7 +11,7 @@ export function thinkingLineClass(expanded: boolean) {
 export function thinkingTitle(status: LiveStatus | null | undefined, elapsedMs?: number) {
   const label = roleLabel(status?.activeRole || '') || status?.activeAgent || '模型'
   const elapsed = formatThinkingElapsed(elapsedMs ?? status?.elapsedMs)
-  return `${label} · 思考中${elapsed ? ` ${elapsed}` : ''}`
+  return `${label} · 工作中${elapsed ? ` ${elapsed}` : ''}`
 }
 
 export function thinkingText(status: LiveStatus | null | undefined) {
@@ -19,14 +19,14 @@ export function thinkingText(status: LiveStatus | null | undefined) {
 }
 
 export function thinkingSummary(status: LiveStatus | null | undefined) {
-  if (status?.thinkingSource === 'reasoning_content' && status.latestThinking?.trim()) {
+  if (status?.thinkingSource === 'public_work_log' && status.latestThinking?.trim()) {
     return status.latestThinking.trim()
   }
   return ''
 }
 
 export function thinkingRaw(status: LiveStatus | null | undefined) {
-  return status?.thinkingSource === 'reasoning_content' ? status.latestThinking?.trim() || '' : ''
+  return status?.thinkingSource === 'public_work_log' ? status.latestThinking?.trim() || '' : ''
 }
 
 export function formatThinkingElapsed(ms: number | null | undefined) {

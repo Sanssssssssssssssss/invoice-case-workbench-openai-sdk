@@ -1,10 +1,10 @@
 {
   "planner": {
-    "stable_prefix_hash": "1a250c54b1175bef2f9c741b9e9fe4c6d209c122d5272b344c20bd64acfb7902",
-    "tool_catalog_hash": "eb17f73d496fb573a0e9d969e02808a539923f14e7af6e9416f2cdd3a61576bc",
+    "stable_prefix_hash": "0b5fb333593451c27cdbfc9faf89e8a3f2b3edc1da6a562eb6e04ef4f21b3595",
+    "tool_catalog_hash": "4e1f3f4abf2989c54467aee372669c563113fcdf3d2661bcc338b8a819e9f3d9",
     "skill_hash": "06d9641dfe6d3bea443467c2a31cd715e97220fe2ce33427bf08301099b3a089",
     "tenant_policy_hash": "d5088b28b9a9137bd980db97dc3efdbdb5e5c631cbbf3b75a037badcf198f06d",
-    "prompt_cache_key": "invoice_workbench:d5088b28b9a9137b:planner:case_manager_agents_sdk_v1:1a250c54b1175bef2f9c741b"
+    "prompt_cache_key": "invoice_workbench:d5088b28b9a9137b:planner:supervisor_planner_v2.4_native_tools:0b5fb333593451c27cdbfc9f"
   },
   "materials_advisor": {
     "stable_prefix_hash": "c92bddb796c6e06fac970b183f008abddf3d255d9ff4528accfccc4d49359568",
@@ -21,10 +21,10 @@
     "prompt_cache_key": "invoice_workbench:d5088b28b9a9137b:case_patch_writer:case_patch_writer_v4.8+global_policy_v1.2:62ed81dac811ab2f23433b3a"
   },
   "report_writer": {
-    "stable_prefix_hash": "9ae6192d7bcb8050b8c0b02a30610622ad072468db4c7cd7e349a98078095abd",
+    "stable_prefix_hash": "04cdcd55345d4d98341f80562323122ca963c6f88a7aba5bb85a736b8b9bdc38",
     "tool_catalog_hash": "282fe52c728d6d59ea379ae6089ea976c0cf8e63590d7f445c65d01842405623",
     "skill_hash": "06d9641dfe6d3bea443467c2a31cd715e97220fe2ce33427bf08301099b3a089",
     "tenant_policy_hash": "d5088b28b9a9137bd980db97dc3efdbdb5e5c631cbbf3b75a037badcf198f06d",
-    "prompt_cache_key": "invoice_workbench:d5088b28b9a9137b:report_writer:report_writer_v5.2+global_policy_v1.2+pdf_skill_v2.1:9ae6192d7bcb8050b8c0b02a"
+    "prompt_cache_key": "invoice_workbench:d5088b28b9a9137b:report_writer:report_writer_v5.2+global_policy_v1.2+pdf_skill_v2.1:04cdcd55345d4d98341f8056"
   }
 }

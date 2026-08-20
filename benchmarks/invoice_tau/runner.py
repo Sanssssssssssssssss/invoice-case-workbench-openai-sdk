@@ -301,14 +301,14 @@ def _metrics(
     case_dir: Path,
 ) -> dict[str, Any]:
     model_calls = trace.get("model_calls") or []
+    provider_calls = [event for event in events if event.get("kind") == "provider_call"]
     tool_calls = trace.get("tool_calls") or []
     role_calls = trace.get("role_calls") or []
     total_tokens = 0
     input_tokens = 0
     output_tokens = 0
-    for event in events:
-        if event.get("kind") != "model_call":
-            continue
+    usage_events = provider_calls or [event for event in events if event.get("kind") == "model_call"]
+    for event in usage_events:
         usage = ((event.get("payload") or {}).get("usage") or {}) if isinstance(event.get("payload"), dict) else {}
         input_tokens += int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
         output_tokens += int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
@@ -326,7 +326,7 @@ def _metrics(
         "missing_requirements": sorted(key for key, status in requirement_status.items() if status == "missing"),
         "conflict_requirements": sorted(key for key, status in requirement_status.items() if status == "conflict"),
         "evidence_count": len(case_state.get("evidence_items") or []),
-        "model_calls": len(model_calls),
+        "model_calls": len(provider_calls) if provider_calls else len(model_calls),
         "tool_calls": len(tool_calls),
         "role_calls": len(role_calls),
         "input_tokens": input_tokens,

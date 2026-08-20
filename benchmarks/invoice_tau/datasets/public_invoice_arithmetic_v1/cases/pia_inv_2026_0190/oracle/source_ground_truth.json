@@ -1,0 +1,69 @@
+{
+  "invoice_id": "INV-2026-0190",
+  "vendor": "ACME Laboratories International S.A.",
+  "vendor_country": "FR",
+  "vendor_address": {
+    "street": "8 place Thomery-Dupré",
+    "postal_code": "69001",
+    "city": "Lyon"
+  },
+  "recipient": "Mittelstand Digital Solutions GmbH",
+  "recipient_country": "DE",
+  "recipient_address": {
+    "street": "Eichkätzchenweg 12",
+    "postal_code": "40990",
+    "city": "Düsseldorf"
+  },
+  "date": "2026-03-29",
+  "due_date": "2026-04-12",
+  "line_items": [
+    {
+      "description": "SEO audit (Q1 2026)",
+      "quantity": 4,
+      "unit_price": "26315.30",
+      "vat_rate": "0.20",
+      "amount": "105261.20"
+    },
+    {
+      "description": "Incident response (post-mortem deliverable pending)",
+      "quantity": 4,
+      "unit_price": "27895.80",
+      "vat_rate": "0.20",
+      "amount": "111583.20"
+    },
+    {
+      "description": "Travel expenses (Frankfurt–Zürich)",
+      "quantity": 4,
+      "unit_price": "12883.80",
+      "vat_rate": "0.20",
+      "amount": "51535.20"
+    }
+  ],
+  "subtotal": "268379.60",
+  "vat_rate": "0.20",
+  "vat_amount": "53675.92",
+  "discount": {
+    "type": "percentage",
+    "value": "0.05",
+    "applied_to": "subtotal",
+    "description": "adjustment per framework agreement ref. FA-2023-628",
+    "conditional": false
+  },
+  "discount_amount": "13418.98",
+  "total": "308636.54",
+  "currency": "EUR",
+  "payment_terms": "Payable within 14 days",
+  "bank_details": "BNP Paribas | IBAN: FR28 1729 7344 9300 9531 9971 782 | BIC: BNPAFRPPXXX",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "obfuscated",
+    "number_format": "swiss",
+    "layout": "table",
+    "consistency": "total_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "268379.60",
+  "rendered_total": "302463.81",
+  "error_note": "Displayed total 302463.81 differs from true total 308636.54 by -6172.73 (-2.00%).",
+  "is_credit_note": false
+}

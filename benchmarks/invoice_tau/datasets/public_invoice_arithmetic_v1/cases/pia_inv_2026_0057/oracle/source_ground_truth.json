@@ -1,0 +1,76 @@
+{
+  "invoice_id": "INV-2026-0057",
+  "vendor": "Nakatomi Trading Corporation",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "91 Gussetry Chambers",
+    "postal_code": "WC2B 6AA",
+    "city": "London"
+  },
+  "recipient": "Caledonian Moor Pension Management Ltd",
+  "recipient_country": "GB",
+  "recipient_address": {
+    "street": "25 Greywell Close",
+    "postal_code": "EC2R 6AA",
+    "city": "London"
+  },
+  "date": "2026-03-23",
+  "due_date": "2026-05-22",
+  "line_items": [
+    {
+      "description": "Cloud infrastructure migration — Phase 2 of 7 (estimated)",
+      "quantity": 10,
+      "unit_price": "1962.50",
+      "vat_rate": "0.20",
+      "amount": "19625.00"
+    },
+    {
+      "description": "Consulting hours — Associate",
+      "quantity": 1,
+      "unit_price": "3944.40",
+      "vat_rate": "0.20",
+      "amount": "3944.40"
+    },
+    {
+      "description": "Compliance audit preparation (regulations may have changed since)",
+      "quantity": 1,
+      "unit_price": "44732.60",
+      "vat_rate": "0.20",
+      "amount": "44732.60"
+    },
+    {
+      "description": "Architecture review (whiteboarding session)",
+      "quantity": 3,
+      "unit_price": "23952.70",
+      "vat_rate": "0.20",
+      "amount": "71858.10"
+    }
+  ],
+  "subtotal": "140160.10",
+  "vat_rate": "0.20",
+  "vat_amount": "28032.02",
+  "discount": {
+    "type": "percentage",
+    "value": "0.075",
+    "applied_to": "subtotal",
+    "description": "adjustment per framework agreement ref. FA-2024-854",
+    "conditional": false
+  },
+  "discount_amount": "10512.01",
+  "total": "157680.11",
+  "currency": "EUR",
+  "payment_terms": "Net 60 days",
+  "bank_details": "Lloyds Bank | IBAN: GB52 7271 5927 4828 4619 55 | BIC: LOYDGB21XXX",
+  "variants": {
+    "vat_variant": "implicit_no_rate",
+    "discount_variant": "obfuscated",
+    "number_format": "english",
+    "layout": "mixed",
+    "consistency": "total_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "140160.10",
+  "rendered_total": "156103.31",
+  "error_note": "Displayed total 156103.31 differs from true total 157680.11 by -1576.80 (-1.00%).",
+  "is_credit_note": false
+}

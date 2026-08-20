@@ -1,0 +1,63 @@
+{
+  "invoice_id": "INV-2026-0014",
+  "vendor": "InGen BioSciences S.A.",
+  "vendor_country": "FR",
+  "vendor_address": {
+    "street": "47 rue des Lilas Perdus",
+    "postal_code": "75008",
+    "city": "Paris"
+  },
+  "recipient": "Société Continentale de Logistique S.A.",
+  "recipient_country": "FR",
+  "recipient_address": {
+    "street": "8 place Thomery-Dupré",
+    "postal_code": "69001",
+    "city": "Lyon"
+  },
+  "date": "2026-01-20",
+  "due_date": "2026-01-20",
+  "line_items": [
+    {
+      "description": "SEO audit (Q1 2026)",
+      "quantity": 10,
+      "unit_price": "-1506.80",
+      "vat_rate": "0.20",
+      "amount": "-15068.00"
+    },
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 4,
+      "unit_price": "-736.90",
+      "vat_rate": "0.20",
+      "amount": "-2947.60"
+    },
+    {
+      "description": "Professional indemnity insurance — pro rata",
+      "quantity": 1,
+      "unit_price": "-48335.50",
+      "vat_rate": "0.20",
+      "amount": "-48335.50"
+    }
+  ],
+  "subtotal": "-66351.10",
+  "vat_rate": "0.20",
+  "vat_amount": "-13270.22",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "-79621.32",
+  "currency": "EUR",
+  "payment_terms": "Due upon receipt",
+  "bank_details": "Crédit Agricole | IBAN: FR75 1791 1227 6454 0627 9995 590 | BIC: AGRIFRPPXXX",
+  "variants": {
+    "vat_variant": "explicit_excluded",
+    "discount_variant": "none",
+    "number_format": "english",
+    "layout": "paragraph",
+    "consistency": "correct",
+    "edge_case": "credit_note"
+  },
+  "rendered_subtotal": "-66351.10",
+  "rendered_total": "-79621.32",
+  "error_note": null,
+  "is_credit_note": true
+}

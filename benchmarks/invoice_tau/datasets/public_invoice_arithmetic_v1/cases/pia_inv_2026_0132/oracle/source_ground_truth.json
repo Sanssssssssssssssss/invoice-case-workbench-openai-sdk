@@ -1,0 +1,56 @@
+{
+  "invoice_id": "INV-2026-0132",
+  "vendor": "Massive Dynamic Europe Ltd",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "14 Pembroke-Brook Passage",
+    "postal_code": "EC1R 0AA",
+    "city": "London"
+  },
+  "recipient": "Donaustadt Digitalisierung GmbH",
+  "recipient_country": "AT",
+  "recipient_address": {
+    "street": "Silberknopfstraße 14",
+    "postal_code": "8010",
+    "city": "Graz"
+  },
+  "date": "2026-03-03",
+  "due_date": "2026-04-02",
+  "line_items": [
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 3,
+      "unit_price": "7212.00",
+      "vat_rate": "0.20",
+      "amount": "21636.00"
+    },
+    {
+      "description": "Due-diligence memorandum — Project Thornbury",
+      "quantity": 1,
+      "unit_price": "16935.20",
+      "vat_rate": "0.20",
+      "amount": "16935.20"
+    }
+  ],
+  "subtotal": "38571.20",
+  "vat_rate": "0.20",
+  "vat_amount": "7714.24",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "46285.44",
+  "currency": "EUR",
+  "payment_terms": "Net 30 days",
+  "bank_details": "HSBC UK | IBAN: GB94 7570 5417 4875 8309 46 | BIC: HBUKGB4BXXX",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "none",
+    "number_format": "english",
+    "layout": "mixed",
+    "consistency": "correct",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "38571.20",
+  "rendered_total": "46285.44",
+  "error_note": null,
+  "is_credit_note": false
+}

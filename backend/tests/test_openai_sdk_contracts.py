@@ -74,7 +74,9 @@ def test_frontend_exposes_approval_resume_client() -> None:
     api_text = _read(REPO_ROOT / "renderer" / "src" / "lib" / "api.ts")
     app_text = _read(REPO_ROOT / "renderer" / "src" / "App.tsx")
     chat_text = _read(REPO_ROOT / "renderer" / "src" / "components" / "CaseChat.tsx")
-    assert "resumeApproval" in api_text
+    assert "resumeRunApproval" in api_text
+    assert "sendTurn" not in api_text
+    assert "resumeApproval:" not in api_text
     assert "/approval" in api_text
     assert "pendingApprovals" in app_text
     assert "ApprovalPanel" in chat_text
@@ -88,3 +90,9 @@ def test_streaming_runtime_uses_push_sse_and_threaded_tools() -> None:
     assert "await asyncio.sleep(0.1)" not in api_text
     assert "asyncio.to_thread(call_tool)" in runner_text
     assert "threading.RLock" in runner_text
+
+
+def test_fastapi_does_not_share_async_model_clients_across_run_event_loops() -> None:
+    main_text = _read(BACKEND_APP / "main.py")
+    assert "enable_shared_openai_clients" not in main_text
+    assert "close_shared_openai_clients" not in main_text

@@ -76,7 +76,7 @@ class ContextAssembler:
         )
         packet = build_context_packet(
             role="planner",
-            prompt_version="case_manager_agents_sdk_v1",
+            prompt_version="supervisor_planner_v2.4_native_tools",
             prompt_file=self.planner_prompt_file,
             system_prompt=self.planner_prompt,
             context_payload={"user_message": state.user_message_for_planner, "context_pack": planner_context},

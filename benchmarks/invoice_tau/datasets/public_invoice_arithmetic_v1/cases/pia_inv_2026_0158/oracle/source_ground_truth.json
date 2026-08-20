@@ -1,0 +1,76 @@
+{
+  "invoice_id": "INV-2026-0158",
+  "vendor": "Wayne Enterprises",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "91 Gussetry Chambers",
+    "postal_code": "WC2B 6AA",
+    "city": "London"
+  },
+  "recipient": "Thames Gate Capital Partners LLP",
+  "recipient_country": "GB",
+  "recipient_address": {
+    "street": "25 Greywell Close",
+    "postal_code": "EC2R 6AA",
+    "city": "London"
+  },
+  "date": "2026-02-08",
+  "due_date": "2026-03-10",
+  "line_items": [
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 10,
+      "unit_price": "250.60",
+      "vat_rate": "0.00",
+      "amount": "2506.00"
+    },
+    {
+      "description": "Cloud infrastructure migration — Phase 2 of 7 (estimated)",
+      "quantity": 1,
+      "unit_price": "28882.30",
+      "vat_rate": "0.00",
+      "amount": "28882.30"
+    },
+    {
+      "description": "Software licence renewal — 50 seats",
+      "quantity": 50,
+      "unit_price": "361.20",
+      "vat_rate": "0.00",
+      "amount": "18060.00"
+    },
+    {
+      "description": "Professional indemnity insurance — pro rata",
+      "quantity": 20,
+      "unit_price": "162.20",
+      "vat_rate": "0.00",
+      "amount": "3244.00"
+    }
+  ],
+  "subtotal": "52692.30",
+  "vat_rate": "0.00",
+  "vat_amount": "0.00",
+  "discount": {
+    "type": "trade_terms",
+    "value": "0.02",
+    "applied_to": "subtotal",
+    "description": "2/10 net 30 — conditional early-payment discount",
+    "conditional": true
+  },
+  "discount_amount": "0.00",
+  "total": "52692.30",
+  "currency": "EUR",
+  "payment_terms": "2/10 net 30",
+  "bank_details": "Barclays | IBAN: GB07 2834 7625 4819 3007 77 | BIC: BARCGB22XXX",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "trade_terms",
+    "number_format": "german",
+    "layout": "paragraph",
+    "consistency": "correct",
+    "edge_case": "reverse_charge"
+  },
+  "rendered_subtotal": "52692.30",
+  "rendered_total": "52692.30",
+  "error_note": null,
+  "is_credit_note": false
+}

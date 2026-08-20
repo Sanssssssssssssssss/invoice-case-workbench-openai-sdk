@@ -1,0 +1,102 @@
+{
+  "count": 200,
+  "seed": 42,
+  "distribution": {
+    "vat_variant": {
+      "implicit_rate_stated": 50,
+      "implicit_no_rate": 50,
+      "explicit_excluded": 52,
+      "explicit_included": 48
+    },
+    "discount_variant": {
+      "explicit_percentage": 34,
+      "trade_terms": 33,
+      "explicit_amount": 35,
+      "obfuscated": 34,
+      "none": 64
+    },
+    "number_format": {
+      "english": 67,
+      "swiss": 66,
+      "german": 67
+    },
+    "layout": {
+      "mixed": 66,
+      "table": 67,
+      "paragraph": 67
+    },
+    "consistency": {
+      "correct": 120,
+      "total_error": 40,
+      "subtotal_error": 40
+    },
+    "edge_case": {
+      "none": 180,
+      "single_item": 5,
+      "credit_note": 5,
+      "reverse_charge": 5,
+      "mixed_vat": 5
+    }
+  },
+  "coverage_check": {
+    "vat_variant": {
+      "counts": {
+        "implicit_rate_stated": 50,
+        "implicit_no_rate": 50,
+        "explicit_excluded": 52,
+        "explicit_included": 48
+      },
+      "min": 48,
+      "meets_min_10": true
+    },
+    "discount_variant": {
+      "counts": {
+        "explicit_percentage": 34,
+        "trade_terms": 33,
+        "explicit_amount": 35,
+        "obfuscated": 34,
+        "none": 64
+      },
+      "min": 33,
+      "meets_min_10": true
+    },
+    "number_format": {
+      "counts": {
+        "english": 67,
+        "swiss": 66,
+        "german": 67
+      },
+      "min": 66,
+      "meets_min_10": true
+    },
+    "layout": {
+      "counts": {
+        "mixed": 66,
+        "table": 67,
+        "paragraph": 67
+      },
+      "min": 66,
+      "meets_min_10": true
+    },
+    "consistency": {
+      "counts": {
+        "correct": 120,
+        "total_error": 40,
+        "subtotal_error": 40
+      },
+      "min": 40,
+      "meets_min_10": true
+    },
+    "edge_case": {
+      "counts": {
+        "none": 180,
+        "single_item": 5,
+        "credit_note": 5,
+        "reverse_charge": 5,
+        "mixed_vat": 5
+      },
+      "min": 5,
+      "meets_min_10": false
+    }
+  }
+}

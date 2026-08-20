@@ -1,0 +1,69 @@
+{
+  "invoice_id": "INV-2026-0051",
+  "vendor": "Initech Solutions GmbH",
+  "vendor_country": "DE",
+  "vendor_address": {
+    "street": "Eichkätzchenweg 12",
+    "postal_code": "40990",
+    "city": "Düsseldorf"
+  },
+  "recipient": "Baltic Amber Services OÜ",
+  "recipient_country": "EE",
+  "recipient_address": {
+    "street": "Pajumarja tänav 23",
+    "postal_code": "10141",
+    "city": "Tallinn"
+  },
+  "date": "2026-02-21",
+  "due_date": "2026-04-22",
+  "line_items": [
+    {
+      "description": "Executive workshop (2 days)",
+      "quantity": 1,
+      "unit_price": "40122.50",
+      "vat_rate": "0.20",
+      "amount": "40122.50"
+    },
+    {
+      "description": "External reviewer honorarium",
+      "quantity": 2,
+      "unit_price": "28108.50",
+      "vat_rate": "0.20",
+      "amount": "56217.00"
+    },
+    {
+      "description": "Annual subscription — enterprise tier (unused features included)",
+      "quantity": 2,
+      "unit_price": "33562.20",
+      "vat_rate": "0.20",
+      "amount": "67124.40"
+    }
+  ],
+  "subtotal": "163463.90",
+  "vat_rate": "0.20",
+  "vat_amount": "32692.78",
+  "discount": {
+    "type": "amount",
+    "value": "8173.20",
+    "applied_to": "subtotal",
+    "description": "rebate per agreement",
+    "conditional": false
+  },
+  "discount_amount": "8173.20",
+  "total": "187983.48",
+  "currency": "EUR",
+  "payment_terms": "Net 60 days",
+  "bank_details": "Commerzbank | IBAN: DE83 9736 1066 4658 7945 69 | BIC: COBADEFFXXX",
+  "variants": {
+    "vat_variant": "implicit_no_rate",
+    "discount_variant": "explicit_amount",
+    "number_format": "swiss",
+    "layout": "table",
+    "consistency": "correct",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "163463.90",
+  "rendered_total": "187983.48",
+  "error_note": null,
+  "is_credit_note": false
+}

@@ -24,7 +24,8 @@ def test_evidence_reviewer_keeps_external_tool_name_and_atomically_writes_artifa
         {
             "case_updates": {
                 "requirements": [
-                    {"id": "invoice", "label": "Invoice", "kind": "document", "required": True}
+                    {"id": "invoice", "label": "Invoice", "kind": "document", "required": True},
+                    {"id": "purchase_order", "label": "Purchase order", "kind": "document", "required": True},
                 ]
             }
         },
@@ -176,6 +177,7 @@ def test_evidence_reviewer_keeps_external_tool_name_and_atomically_writes_artifa
     assert stored.review_artifact is not None
     assert stored.compiled_proof is not None
     assert stored.compiled_proof.decision_for("invoice").status == "SUPPORTED"
+    assert [item.id for item in stored.requirements] == ["invoice"]
     assert stored.requirements[0].status == "accepted"
     reviewer_call = next(item for item in state.role_calls if item.get("role") == "evidence_reviewer")
     assert reviewer_call["capability"] == compiler_trace_metadata()
@@ -257,7 +259,7 @@ def test_compiler_rejects_failed_quarantined_and_unreadable_new_attachments(
     assert trace["payload"]["rejected"] == admission["rejected"]
 
 
-def test_compiler_plan_scope_includes_every_existing_case_requirement(
+def test_explicit_compiler_scope_replaces_existing_case_requirement_scope(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -299,5 +301,5 @@ def test_compiler_plan_scope_includes_every_existing_case_requirement(
     )
 
     assert result["status"] == "error"
-    assert captured["active_requirement_ids"] == ["invoice", "purchase_order"]
-    assert state.observability["active_requirement_ids"] == ["invoice", "purchase_order"]
+    assert captured["active_requirement_ids"] == ["invoice"]
+    assert state.observability["active_requirement_ids"] == ["invoice"]

@@ -1,0 +1,77 @@
+{
+  "invoice_id": "INV-2026-0033",
+  "vendor": "InGen BioSciences S.A.",
+  "vendor_country": "FR",
+  "vendor_address": {
+    "street": "12 avenue Verrebrille",
+    "postal_code": "75008",
+    "city": "Paris"
+  },
+  "recipient": "Europäische Verwaltungskontor AG",
+  "recipient_country": "AT",
+  "recipient_address": {
+    "street": "Silberknopfstraße 14",
+    "postal_code": "8010",
+    "city": "Graz"
+  },
+  "date": "2026-03-21",
+  "due_date": "2026-04-04",
+  "line_items": [
+    {
+      "description": "Cloud infrastructure migration — Phase 2 of 7 (estimated)",
+      "quantity": 1,
+      "unit_price": "33622.10",
+      "vat_rate": "0.20",
+      "amount": "33622.10"
+    },
+    {
+      "description": "Consulting hours — Associate",
+      "quantity": 1,
+      "unit_price": "30636.40",
+      "vat_rate": "0.20",
+      "amount": "30636.40"
+    },
+    {
+      "description": "Legal opinion — cross-border financing",
+      "quantity": 1,
+      "unit_price": "39017.30",
+      "vat_rate": "0.20",
+      "amount": "39017.30"
+    },
+    {
+      "description": "Marketing collateral refresh",
+      "quantity": 5,
+      "unit_price": "1886.30",
+      "vat_rate": "0.20",
+      "amount": "9431.50"
+    },
+    {
+      "description": "Due-diligence memorandum — Project Thornbury",
+      "quantity": 1,
+      "unit_price": "38419.40",
+      "vat_rate": "0.20",
+      "amount": "38419.40"
+    }
+  ],
+  "subtotal": "151126.70",
+  "vat_rate": "0.20",
+  "vat_amount": "30225.34",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "181352.04",
+  "currency": "EUR",
+  "payment_terms": "Payable within 14 days",
+  "bank_details": "BNP Paribas | IBAN: FR19 4385 8416 9593 6035 5981 524 | BIC: BNPAFRPPXXX",
+  "variants": {
+    "vat_variant": "explicit_included",
+    "discount_variant": "none",
+    "number_format": "german",
+    "layout": "table",
+    "consistency": "correct",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "151126.70",
+  "rendered_total": "181352.04",
+  "error_note": null,
+  "is_credit_note": false
+}

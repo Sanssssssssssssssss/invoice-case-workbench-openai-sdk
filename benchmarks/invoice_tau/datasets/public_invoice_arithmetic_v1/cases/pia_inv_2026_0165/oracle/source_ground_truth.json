@@ -1,0 +1,69 @@
+{
+  "invoice_id": "INV-2026-0165",
+  "vendor": "Sterling Cooper Draper Pryce",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "42 Fenfell Rise",
+    "postal_code": "EC1M 3JB",
+    "city": "London"
+  },
+  "recipient": "Caledonian Moor Pension Management Ltd",
+  "recipient_country": "GB",
+  "recipient_address": {
+    "street": "91 Gussetry Chambers",
+    "postal_code": "WC2B 6AA",
+    "city": "London"
+  },
+  "date": "2026-02-03",
+  "due_date": "2026-03-05",
+  "line_items": [
+    {
+      "description": "Travel expenses (London–Vienna)",
+      "quantity": 1,
+      "unit_price": "33406.20",
+      "vat_rate": "0.20",
+      "amount": "33406.20"
+    },
+    {
+      "description": "External reviewer honorarium",
+      "quantity": 1,
+      "unit_price": "22681.60",
+      "vat_rate": "0.20",
+      "amount": "22681.60"
+    },
+    {
+      "description": "Compliance audit preparation (regulations may have changed since)",
+      "quantity": 1,
+      "unit_price": "42703.20",
+      "vat_rate": "0.20",
+      "amount": "42703.20"
+    }
+  ],
+  "subtotal": "98791.00",
+  "vat_rate": "0.20",
+  "vat_amount": "19758.20",
+  "discount": {
+    "type": "trade_terms",
+    "value": "0.02",
+    "applied_to": "subtotal",
+    "description": "2/10 net 30 — conditional early-payment discount",
+    "conditional": true
+  },
+  "discount_amount": "0.00",
+  "total": "118549.20",
+  "currency": "EUR",
+  "payment_terms": "2/10 net 30",
+  "bank_details": "HSBC UK | IBAN: GB81 2513 4632 7525 7392 62 | BIC: HBUKGB4BXXX",
+  "variants": {
+    "vat_variant": "explicit_included",
+    "discount_variant": "trade_terms",
+    "number_format": "german",
+    "layout": "table",
+    "consistency": "correct",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "98791.00",
+  "rendered_total": "118549.20",
+  "error_note": null,
+  "is_credit_note": false
+}

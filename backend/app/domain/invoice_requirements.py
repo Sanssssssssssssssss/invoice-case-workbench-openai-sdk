@@ -53,6 +53,9 @@ def load_requirement_pack(path: Path = POLICY_PATH) -> dict[str, Any]:
     for profile_id, rows in profiles.items():
         if not isinstance(rows, list) or any(not isinstance(row, dict) or row.get("id") not in requirements for row in rows):
             raise ValueError(f"Invalid requirement profile: {profile_id}")
+        profile_ids = {str(row["id"]) for row in rows}
+        if "invoice" in profile_ids and "invoice_calculation_valid" not in profile_ids:
+            raise ValueError(f"Invoice review profile must include invoice_calculation_valid: {profile_id}")
     for requirement_id, hint in planning_hints.items():
         if requirement_id not in requirements or not isinstance(hint, dict) or set(hint) - _HINT_FIELDS:
             raise ValueError(f"Invalid planning hint: {requirement_id}")
@@ -113,14 +116,31 @@ def profile_requirements(profile_id: str, *, required: bool | None = None) -> tu
     )
 
 
-AP_THREE_WAY_REQUIREMENTS = profile_requirements("legacy_three_way")
-AP_LITE_REQUIREMENTS = profile_requirements("ap_lite_po")
+def _evidence_profile_requirements(profile_id: str) -> tuple[str, ...]:
+    return tuple(
+        requirement_id
+        for requirement_id in profile_requirements(profile_id)
+        if REQUIREMENT_DEFINITIONS[requirement_id].get("owner") == "evidence"
+    )
+
+
+AP_THREE_WAY_REQUIREMENTS = _evidence_profile_requirements("legacy_three_way")
+AP_LITE_REQUIREMENTS = _evidence_profile_requirements("ap_lite_po")
 
 # Backward-compatible alias for existing AP review tests and stored cases.
 CORE_REQUIREMENTS = AP_THREE_WAY_REQUIREMENTS
 
-INVOICE_REQUIRED_FIELD_REQUIREMENTS = profile_requirements("invoice_only", required=True)
-INVOICE_OPTIONAL_FIELD_REQUIREMENTS = profile_requirements("invoice_only", required=False)
+def _invoice_material_requirements(*, required: bool) -> tuple[str, ...]:
+    return tuple(
+        requirement_id
+        for requirement_id in profile_requirements("invoice_only", required=required)
+        if REQUIREMENT_DEFINITIONS[requirement_id].get("owner") == "evidence"
+        and REQUIREMENT_DEFINITIONS[requirement_id].get("kind") in {"field", "visual", "risk_check"}
+    )
+
+
+INVOICE_REQUIRED_FIELD_REQUIREMENTS = _invoice_material_requirements(required=True)
+INVOICE_OPTIONAL_FIELD_REQUIREMENTS = _invoice_material_requirements(required=False)
 INVOICE_FIELD_REQUIREMENTS = INVOICE_REQUIRED_FIELD_REQUIREMENTS + INVOICE_OPTIONAL_FIELD_REQUIREMENTS
 
 DEFAULT_REQUIREMENT_LABELS = {
@@ -172,6 +192,13 @@ def requirement_kind(requirement_id: str) -> str:
 def requirement_owner(requirement_id: str) -> str:
     definition = requirement_definition(requirement_id) or {}
     return str(definition.get("owner") or "evidence")
+
+
+def requirement_evidence_type(requirement_id: str) -> str:
+    """Return the policy-declared stored evidence type for a source requirement."""
+
+    definition = requirement_definition(requirement_id) or {}
+    return str(definition.get("evidence_type") or "").strip()
 
 
 def requirement_premises(requirement_id: str) -> tuple[str, ...]:

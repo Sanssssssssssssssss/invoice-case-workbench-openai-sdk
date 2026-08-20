@@ -81,6 +81,43 @@ def test_claim_requires_a_prior_read_and_exact_source_quote() -> None:
     assert sandbox.evidence_ir.claims == []
 
 
+def test_system_provenance_is_read_gated_and_quoteable_without_claiming_authenticity() -> None:
+    sandbox = EvidenceSandbox(
+        sources=[
+            SourceRecord(
+                source_id="invoice-upload",
+                content="Invoice INV-42",
+                provenance={
+                    "runtime_admission": "admitted",
+                    "attachment_id": "att-42",
+                    "original_ref": "attachments/originals/invoice.pdf",
+                    "content_sha256": "abc123",
+                    "scope": "system_chain_of_custody_only_not_real_world_authenticity",
+                },
+            )
+        ],
+        allowed_check_ids=["check-traceability"],
+    )
+
+    assert "system_provenance" not in sandbox.list_sources()["sources"][0]
+    read = sandbox.read_source("invoice-upload")
+    assert read["source"]["system_provenance"]["attachment_id"] == "att-42"
+
+    bound = sandbox.bind_claim(
+        subject="invoice-upload",
+        predicate="system_provenance_traceable",
+        value=True,
+        source_id="invoice-upload",
+        quote='"original_ref": "attachments/originals/invoice.pdf"',
+        locator="system_provenance.original_ref",
+        confidence="high",
+    )
+
+    assert bound["ok"] is True
+    assert bound["claim"]["quote"] == '"original_ref": "attachments/originals/invoice.pdf"'
+    assert "authentic" not in bound["claim"]["predicate"]
+
+
 @pytest.mark.parametrize(
     ("locator", "error_code"),
     [

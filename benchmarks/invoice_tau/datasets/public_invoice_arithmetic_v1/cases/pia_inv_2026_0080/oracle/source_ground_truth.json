@@ -1,0 +1,69 @@
+{
+  "invoice_id": "INV-2026-0080",
+  "vendor": "Rekall Incorporated",
+  "vendor_country": "GB",
+  "vendor_address": {
+    "street": "19 Whitcomb-Stead Mews",
+    "postal_code": "E1 6BG",
+    "city": "London"
+  },
+  "recipient": "Groupe Industriel Dufresne S.A.",
+  "recipient_country": "FR",
+  "recipient_address": {
+    "street": "47 rue des Lilas Perdus",
+    "postal_code": "75008",
+    "city": "Paris"
+  },
+  "date": "2026-03-10",
+  "due_date": "2026-05-09",
+  "line_items": [
+    {
+      "description": "Emergency weekend support call (45 minutes, felt longer)",
+      "quantity": 1,
+      "unit_price": "39365.10",
+      "vat_rate": "0.20",
+      "amount": "39365.10"
+    },
+    {
+      "description": "Annual subscription — enterprise tier (unused features included)",
+      "quantity": 5,
+      "unit_price": "1398.80",
+      "vat_rate": "0.20",
+      "amount": "6994.00"
+    },
+    {
+      "description": "Retainer fee — ongoing counsel",
+      "quantity": 20,
+      "unit_price": "169.50",
+      "vat_rate": "0.20",
+      "amount": "3390.00"
+    }
+  ],
+  "subtotal": "49749.10",
+  "vat_rate": "0.20",
+  "vat_amount": "9949.82",
+  "discount": {
+    "type": "percentage",
+    "value": "0.03",
+    "applied_to": "subtotal",
+    "description": "early payment discount",
+    "conditional": false
+  },
+  "discount_amount": "1492.47",
+  "total": "58206.45",
+  "currency": "EUR",
+  "payment_terms": "Net 60 days",
+  "bank_details": "Lloyds Bank | IBAN: GB31 3103 3698 6066 7991 84 | BIC: LOYDGB21XXX",
+  "variants": {
+    "vat_variant": "implicit_no_rate",
+    "discount_variant": "explicit_percentage",
+    "number_format": "german",
+    "layout": "mixed",
+    "consistency": "total_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "49749.10",
+  "rendered_total": "57042.32",
+  "error_note": "Displayed total 57042.32 differs from true total 58206.45 by -1164.13 (-2.00%).",
+  "is_credit_note": false
+}

@@ -1,0 +1,5 @@
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+benchmarks/invoice_tau/datasets/public_invoice_arithmetic_v1/cases/**/oracle/source_text.md whitespace=-blank-at-eol

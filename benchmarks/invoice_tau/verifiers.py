@@ -45,6 +45,13 @@ DEFAULT_BAD_OUTPUT_TERMS = (
     "Streaming connection failed",
     "case manager 调用失败",
 )
+INTERNAL_REPLY_TERMS = (
+    "PolicyGate",
+    "Let me reconsider",
+    "The user wants me to",
+    "The user asked me to",
+    "I'll provide a final answer",
+)
 
 
 def verify_run(result: ScenarioRunResult, expected: ExpectedSpec, case_dir: Path) -> list[CheckResult]:
@@ -70,6 +77,15 @@ def score_checks(checks: list[CheckResult]) -> tuple[bool, float]:
 def _reply_checks(result: ScenarioRunResult, expected: ExpectedSpec) -> list[CheckResult]:
     text = result.final_reply or ""
     checks: list[CheckResult] = []
+    internal_matches = [term for term in INTERNAL_REPLY_TERMS if term.lower() in text.lower()]
+    checks.append(
+        CheckResult(
+            name="reply_internal_working_absent",
+            passed=not internal_matches,
+            score=1.0 if not internal_matches else 0.0,
+            details={"matched": internal_matches},
+        )
+    )
     if expected.reply_any_of:
         matched = [needle for needle in expected.reply_any_of if needle in text]
         checks.append(

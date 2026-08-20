@@ -1,0 +1,63 @@
+{
+  "invoice_id": "INV-2026-0090",
+  "vendor": "Umbrella Corporation Europe AG",
+  "vendor_country": "CH",
+  "vendor_address": {
+    "street": "rue du Lac-Caché 42",
+    "postal_code": "1204",
+    "city": "Genève"
+  },
+  "recipient": "Mittelstand Digital Solutions GmbH",
+  "recipient_country": "DE",
+  "recipient_address": {
+    "street": "Roggenfeldallee 42",
+    "postal_code": "60311",
+    "city": "Frankfurt am Main"
+  },
+  "date": "2026-02-25",
+  "due_date": "2026-03-27",
+  "line_items": [
+    {
+      "description": "Data room hosting — February 2026",
+      "quantity": 4,
+      "unit_price": "-28419.80",
+      "vat_rate": "0.20",
+      "amount": "-113679.20"
+    },
+    {
+      "description": "Executive workshop: 'AI Strategy'",
+      "quantity": 4,
+      "unit_price": "-25438.50",
+      "vat_rate": "0.20",
+      "amount": "-101754.00"
+    },
+    {
+      "description": "External reviewer honorarium",
+      "quantity": 50,
+      "unit_price": "-316.50",
+      "vat_rate": "0.20",
+      "amount": "-15825.00"
+    }
+  ],
+  "subtotal": "-231258.20",
+  "vat_rate": "0.20",
+  "vat_amount": "-46251.64",
+  "discount": null,
+  "discount_amount": "0.00",
+  "total": "-277509.84",
+  "currency": "EUR",
+  "payment_terms": "Net 30 days",
+  "bank_details": "Zürcher Kantonalbank | IBAN: CH89 5055 4024 8438 6423 7 | BIC: ZKBKCHZZ80A",
+  "variants": {
+    "vat_variant": "explicit_included",
+    "discount_variant": "none",
+    "number_format": "english",
+    "layout": "paragraph",
+    "consistency": "total_error",
+    "edge_case": "credit_note"
+  },
+  "rendered_subtotal": "-231258.20",
+  "rendered_total": "-283060.04",
+  "error_note": "Displayed total -283060.04 differs from true total -277509.84 by -5550.20 (+2.00%).",
+  "is_credit_note": true
+}

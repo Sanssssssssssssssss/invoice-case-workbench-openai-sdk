@@ -1,0 +1,90 @@
+{
+  "invoice_id": "INV-2026-0085",
+  "vendor": "Wonka Industries AG",
+  "vendor_country": "CH",
+  "vendor_address": {
+    "street": "Kirschfeldvorstadt 17",
+    "postal_code": "4052",
+    "city": "Basel"
+  },
+  "recipient": "Europäische Verwaltungskontor AG",
+  "recipient_country": "AT",
+  "recipient_address": {
+    "street": "Holunderried 4",
+    "postal_code": "1020",
+    "city": "Wien"
+  },
+  "date": "2026-03-26",
+  "due_date": "2026-05-25",
+  "line_items": [
+    {
+      "description": "Travel expenses (London–Vienna)",
+      "quantity": 1,
+      "unit_price": "48928.40",
+      "vat_rate": "0.20",
+      "amount": "48928.40"
+    },
+    {
+      "description": "Incident response (post-mortem deliverable pending)",
+      "quantity": 100,
+      "unit_price": "265.10",
+      "vat_rate": "0.20",
+      "amount": "26510.00"
+    },
+    {
+      "description": "Hardware procurement — 4 workstations",
+      "quantity": 50,
+      "unit_price": "480.20",
+      "vat_rate": "0.20",
+      "amount": "24010.00"
+    },
+    {
+      "description": "Strategic advisory — Q1 2026 (PowerPoints not included)",
+      "quantity": 5,
+      "unit_price": "558.30",
+      "vat_rate": "0.20",
+      "amount": "2791.50"
+    },
+    {
+      "description": "Emergency weekend support call (45 minutes, felt longer)",
+      "quantity": 1,
+      "unit_price": "14606.70",
+      "vat_rate": "0.20",
+      "amount": "14606.70"
+    },
+    {
+      "description": "Board meeting facilitation",
+      "quantity": 1,
+      "unit_price": "29147.50",
+      "vat_rate": "0.20",
+      "amount": "29147.50"
+    }
+  ],
+  "subtotal": "145994.10",
+  "vat_rate": "0.20",
+  "vat_amount": "29198.82",
+  "discount": {
+    "type": "amount",
+    "value": "4379.82",
+    "applied_to": "subtotal",
+    "description": "rebate per agreement",
+    "conditional": false
+  },
+  "discount_amount": "4379.82",
+  "total": "170813.10",
+  "currency": "EUR",
+  "payment_terms": "Net 60 days",
+  "bank_details": "Zürcher Kantonalbank | IBAN: CH22 7613 8771 7512 3489 1 | BIC: ZKBKCHZZ80A",
+  "variants": {
+    "vat_variant": "implicit_rate_stated",
+    "discount_variant": "explicit_amount",
+    "number_format": "german",
+    "layout": "mixed",
+    "consistency": "subtotal_error",
+    "edge_case": "none"
+  },
+  "rendered_subtotal": "146004.10",
+  "rendered_total": "170813.10",
+  "error_note": "Displayed subtotal 146004.10 differs from true subtotal 145994.10 by +10.00.",
+  "is_credit_note": false
+}

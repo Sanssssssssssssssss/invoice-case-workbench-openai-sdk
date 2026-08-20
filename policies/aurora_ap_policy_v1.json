@@ -7,6 +7,12 @@
     "note": "The local session database contains user interactions, not an authoritative enterprise policy table. Replace tenant values from an approved policy source before production use."
   },
   "amount_tolerance_percent": "2",
+  "invoice_calculation_rounding_tolerance": {
+    "amount": "0.01",
+    "unit": "document_currency",
+    "scope": "invoice_internal_arithmetic_rounding",
+    "note": "Absolute rounding allowance for one invoice's internal arithmetic; this is not the three-way matching percentage tolerance."
+  },
   "allowed_amount_basis_by_subject": {
     "invoice": ["invoice_total"],
     "purchase_order": ["order_total"],
@@ -15,7 +21,6 @@
   "comparable_tax_bases": ["gross", "net"],
   "comparable_coverages": ["full"],
   "unconfigured_policy_values": [
-    "invoice_calculation_rounding_tolerance",
     "quantity_matching_tolerance",
     "contract_matching_tolerance",
     "duplicate_search_window",
@@ -35,6 +40,11 @@
     "tax_and_account_coding_record", "exception_hold_record", "audit_trail_record"
   ],
   "planning_hints": {
+    "source_traceability": {
+      "target_predicate": "source.upload_provenance_traceable",
+      "capability": "system_provenance",
+      "activation": "explicit"
+    },
     "three_way_amount_match": {
       "target_predicate": "payable.three_way_amount_match",
       "capability": "amount_reconciliation",
@@ -54,7 +64,7 @@
     },
     "invoice_calculation_valid": {
       "target_predicate": "invoice.calculation_valid",
-      "capability": "document_semantics",
+      "capability": "invoice_arithmetic",
       "activation": "explicit"
     },
     "three_way_quantity_match": {
@@ -109,14 +119,14 @@
     }
   },
   "requirements": {
-    "invoice": {"label": "发票文档", "kind": "document", "owner": "evidence", "default_required": true},
-    "purchase_order": {"label": "采购订单", "kind": "document", "owner": "evidence", "default_required": true},
-    "goods_receipt": {"label": "收货/验收记录", "kind": "document", "owner": "evidence", "default_required": true},
-    "vendor_record": {"label": "供应商主数据", "kind": "document", "owner": "evidence", "default_required": true},
-    "duplicate_payment_check": {"label": "重复付款检查", "kind": "risk_check", "owner": "evidence", "default_required": true},
-    "goods_receipt_or_service_acceptance": {"label": "收货/服务验收记录", "kind": "document", "owner": "evidence", "default_required": true},
-    "vendor_identity": {"label": "供应商身份/主数据", "kind": "document", "owner": "evidence", "default_required": true},
-    "duplicate_payment_screen": {"label": "重复付款筛查来源", "kind": "risk_check", "owner": "evidence", "default_required": true},
+    "invoice": {"label": "发票文档", "kind": "document", "owner": "evidence", "evidence_type": "invoice", "default_required": true},
+    "purchase_order": {"label": "采购订单", "kind": "document", "owner": "evidence", "evidence_type": "purchase_order", "default_required": true},
+    "goods_receipt": {"label": "收货/验收记录", "kind": "document", "owner": "evidence", "evidence_type": "goods_receipt", "default_required": true},
+    "vendor_record": {"label": "供应商主数据", "kind": "document", "owner": "evidence", "evidence_type": "vendor_record", "default_required": true},
+    "duplicate_payment_check": {"label": "重复付款检查", "kind": "risk_check", "owner": "evidence", "evidence_type": "duplicate_payment_check", "default_required": true},
+    "goods_receipt_or_service_acceptance": {"label": "收货/服务验收记录", "kind": "document", "owner": "evidence", "evidence_type": "goods_receipt", "default_required": true},
+    "vendor_identity": {"label": "供应商身份/主数据", "kind": "document", "owner": "evidence", "evidence_type": "vendor_record", "default_required": true},
+    "duplicate_payment_screen": {"label": "重复付款筛查来源", "kind": "risk_check", "owner": "evidence", "evidence_type": "duplicate_payment_check", "default_required": true},
     "three_way_amount_match": {"label": "三单金额匹配", "kind": "cross_check", "owner": "compiler", "default_required": true, "required_policy_values": ["amount_tolerance_percent", "allowed_amount_basis_by_subject", "comparable_tax_bases", "comparable_coverages"]},
     "no_active_duplicate": {"label": "无仍具经济效力的重复付款", "kind": "cross_check", "owner": "compiler", "default_required": true, "required_policy_values": ["duplicate_search_window"]},
 
@@ -128,7 +138,7 @@
     "currency_tax": {"label": "币种/税务信息（兼容字段）", "kind": "field", "owner": "evidence", "default_required": true},
     "currency": {"label": "币种", "kind": "field", "owner": "evidence", "default_required": true},
     "tax_treatment": {"label": "税务处理", "kind": "field", "owner": "evidence", "default_required": true},
-    "source_traceability": {"label": "原件可追溯性", "kind": "visual", "owner": "evidence", "default_required": true},
+    "source_traceability": {"label": "上传附件来源链可追溯", "kind": "visual", "owner": "evidence", "default_required": true},
     "line_items_product_title": {"label": "商品行/服务标题", "kind": "field", "owner": "evidence", "default_required": false},
     "signature_or_authorized_signatory": {"label": "签名/授权签署", "kind": "visual", "owner": "evidence", "default_required": false},
     "template_match": {"label": "模板/版式匹配", "kind": "risk_check", "owner": "evidence", "default_required": false},
@@ -174,12 +184,14 @@
   "profiles": {
     "legacy_three_way": [
       {"id": "invoice", "required": true},
+      {"id": "invoice_calculation_valid", "required": true},
       {"id": "purchase_order", "required": true},
       {"id": "goods_receipt", "required": true},
       {"id": "vendor_record", "required": true},
       {"id": "duplicate_payment_check", "required": true}
     ],
     "invoice_only": [
+      {"id": "invoice", "required": true},
       {"id": "invoice_number", "required": true},
       {"id": "supplier", "required": true},
       {"id": "buyer", "required": true},
@@ -187,12 +199,14 @@
       {"id": "amount_total", "required": true},
       {"id": "currency_tax", "required": true},
       {"id": "source_traceability", "required": true},
+      {"id": "invoice_calculation_valid", "required": true},
       {"id": "line_items_product_title", "required": false},
       {"id": "signature_or_authorized_signatory", "required": false},
       {"id": "template_match", "required": false}
     ],
     "ap_lite_po": [
       {"id": "invoice", "required": true},
+      {"id": "invoice_calculation_valid", "required": true},
       {"id": "purchase_order", "required": true},
       {"id": "goods_receipt_or_service_acceptance", "required": true},
       {"id": "vendor_identity", "required": true},
@@ -207,12 +221,14 @@
     ],
     "three_way_control": [
       {"id": "invoice", "required": true},
+      {"id": "invoice_calculation_valid", "required": true},
       {"id": "purchase_order", "required": true},
       {"id": "goods_receipt_or_service_acceptance", "required": true},
       {"id": "three_way_quantity_match", "required": true}
     ],
     "duplicate_control": [
       {"id": "invoice", "required": true},
+      {"id": "invoice_calculation_valid", "required": true},
       {"id": "duplicate_payment_screen", "required": true}
     ],
     "vendor_control": [
@@ -239,6 +255,7 @@
     ],
     "non_po_contract_control": [
       {"id": "invoice", "required": true},
+      {"id": "invoice_calculation_valid", "required": true},
       {"id": "contract_or_sow", "required": true},
       {"id": "service_acceptance", "required": true},
       {"id": "non_po_contract_match", "required": true}
