@@ -1,0 +1,686 @@
+{
+  "schema_version": "2",
+  "case_id": "credit_note_arithmetic_supported_0014",
+  "oracle_version": "3",
+  "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::credit_note_arithmetic_supported_0014",
+  "facts": [
+    {
+      "id": "line_1_quantity",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "10",
+      "required_in": [
+        "evidence"
+      ],
+      "source_role": "invoice",
+      "source_quote": "SEO audit (Q1 2026): 10 × EUR -1,506.80 = EUR -15,068.00.",
+      "predicate_options": [
+        "quantity",
+        "qty",
+        "line quantity",
+        "数量"
+      ]
+    },
+    {
+      "id": "line_1_unit_price",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "-1506.80",
+      "required_in": [
+        "evidence"
+      ],
+      "currency": "EUR",
+      "source_role": "invoice",
+      "source_quote": "SEO audit (Q1 2026): 10 × EUR -1,506.80 = EUR -15,068.00.",
+      "predicate_options": [
+        "unit price",
+        "price per unit",
+        "单价"
+      ]
+    },
+    {
+      "id": "line_1_extension",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "-15068.00",
+      "required_in": [
+        "evidence"
+      ],
+      "currency": "EUR",
+      "source_role": "invoice",
+      "source_quote": "SEO audit (Q1 2026): 10 × EUR -1,506.80 = EUR -15,068.00.",
+      "predicate_options": [
+        "line extension",
+        "line item extension",
+        "extended amount",
+        "line amount",
+        "line total",
+        "行金额"
+      ]
+    },
+    {
+      "id": "line_2_quantity",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "4",
+      "required_in": [
+        "evidence"
+      ],
+      "source_role": "invoice",
+      "source_quote": "Executive workshop: 'AI Strategy': 4 × EUR -736.90 = EUR -2,947.60.",
+      "predicate_options": [
+        "quantity",
+        "qty",
+        "line quantity",
+        "数量"
+      ]
+    },
+    {
+      "id": "line_2_unit_price",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "-736.90",
+      "required_in": [
+        "evidence"
+      ],
+      "currency": "EUR",
+      "source_role": "invoice",
+      "source_quote": "Executive workshop: 'AI Strategy': 4 × EUR -736.90 = EUR -2,947.60.",
+      "predicate_options": [
+        "unit price",
+        "price per unit",
+        "单价"
+      ]
+    },
+    {
+      "id": "line_2_extension",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "-2947.60",
+      "required_in": [
+        "evidence"
+      ],
+      "currency": "EUR",
+      "source_role": "invoice",
+      "source_quote": "Executive workshop: 'AI Strategy': 4 × EUR -736.90 = EUR -2,947.60.",
+      "predicate_options": [
+        "line extension",
+        "line item extension",
+        "extended amount",
+        "line amount",
+        "line total",
+        "行金额"
+      ]
+    },
+    {
+      "id": "line_3_extension",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "-48335.50",
+      "required_in": [
+        "evidence"
+      ],
+      "currency": "EUR",
+      "source_role": "invoice",
+      "source_quote": "For Professional indemnity insurance — pro rata, we invoice EUR -48,335.50.",
+      "predicate_options": [
+        "line extension",
+        "line item extension",
+        "extended amount",
+        "line amount",
+        "line total",
+        "行金额"
+      ]
+    },
+    {
+      "id": "printed_subtotal",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "-66351.10",
+      "required_in": [
+        "evidence",
+        "reasoning",
+        "report"
+      ],
+      "currency": "EUR",
+      "source_role": "invoice",
+      "source_quote": "Subtotal: EUR -66,351.10",
+      "predicate_options": [
+        "printed subtotal",
+        "stated subtotal",
+        "subtotal",
+        "票面小计",
+        "小计"
+      ]
+    },
+    {
+      "id": "vat_1",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "-13270.22",
+      "required_in": [
+        "evidence",
+        "reasoning",
+        "report"
+      ],
+      "currency": "EUR",
+      "source_role": "invoice",
+      "source_quote": "VAT (20%): EUR -13,270.22",
+      "predicate_options": [
+        "VAT amount",
+        "tax amount",
+        "VAT",
+        "增值税额",
+        "税额"
+      ]
+    },
+    {
+      "id": "vat_1_rate_factor",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "0.20",
+      "required_in": [
+        "evidence",
+        "reasoning"
+      ],
+      "source_role": "invoice",
+      "source_quote": "VAT (20%): EUR -13,270.22",
+      "predicate_options": [
+        "VAT rate",
+        "tax rate",
+        "增值税率",
+        "税率"
+      ]
+    },
+    {
+      "id": "printed_total",
+      "origin": "source",
+      "kind": "decimal",
+      "value": "-79621.32",
+      "required_in": [
+        "evidence",
+        "reasoning",
+        "reply",
+        "report"
+      ],
+      "currency": "EUR",
+      "source_role": "invoice",
+      "source_quote": "TOTAL: EUR -79,621.32",
+      "predicate_options": [
+        "printed total",
+        "final total",
+        "total amount",
+        "amount due",
+        "票面总额",
+        "最终金额",
+        "应付金额"
+      ]
+    },
+    {
+      "id": "document_type",
+      "origin": "source",
+      "kind": "text",
+      "value": "credit",
+      "required_in": [
+        "evidence"
+      ],
+      "source_role": "invoice",
+      "source_quote": "This document is issued as a credit note.",
+      "predicate_options": [
+        "document type",
+        "credit note type",
+        "单据类型",
+        "贷项类型"
+      ]
+    }
+  ],
+  "intent": {
+    "objective": {
+      "all_of": [
+        [
+          "invoice",
+          "credit note",
+          "付款材料",
+          "发票",
+          "贷项"
+        ],
+        [
+          "verify",
+          "validate",
+          "review",
+          "核验",
+          "审核"
+        ],
+        [
+          "internal arithmetic",
+          "calculation",
+          "calculated",
+          "recompute",
+          "内部计算",
+          "算术",
+          "重算"
+        ]
+      ]
+    },
+    "required_milestone_ids": [
+      "line_extensions",
+      "subtotal_aggregation",
+      "stated_component_rate_base_validation",
+      "final_total_reconciliation",
+      "credit_note_sign_semantics"
+    ]
+  },
+  "milestones": [
+    {
+      "id": "line_extensions",
+      "statement_meaning": {
+        "all_of": [
+          [
+            "line item",
+            "line items",
+            "行项目"
+          ],
+          [
+            "quantity",
+            "qty",
+            "数量"
+          ],
+          [
+            "unit price",
+            "单价"
+          ],
+          [
+            "line extension",
+            "line extensions",
+            "line item extension",
+            "line item extensions",
+            "extended amount",
+            "extended amounts",
+            "extension amount",
+            "extension amounts",
+            "line amount",
+            "line amounts",
+            "line total",
+            "line totals",
+            "stated line",
+            "行金额"
+          ],
+          [
+            "multiply",
+            "multiplied",
+            "product",
+            "times",
+            "×",
+            "乘",
+            "复算"
+          ]
+        ]
+      },
+      "expected_status": "SUPPORTED",
+      "fact_ids": [
+        "line_1_quantity",
+        "line_1_unit_price",
+        "line_1_extension",
+        "line_2_quantity",
+        "line_2_unit_price",
+        "line_2_extension",
+        "line_3_extension"
+      ],
+      "relation_ids": [
+        "line_1_extension_math",
+        "line_2_extension_math"
+      ]
+    },
+    {
+      "id": "subtotal_aggregation",
+      "statement_meaning": {
+        "all_of": [
+          [
+            "line extension",
+            "line extensions",
+            "line item extension",
+            "line item extensions",
+            "extended amount",
+            "extended amounts",
+            "extension amount",
+            "extension amounts",
+            "line amount",
+            "line amounts",
+            "line total",
+            "line totals",
+            "行金额"
+          ],
+          [
+            "sum",
+            "total",
+            "add",
+            "added",
+            "plus",
+            "aggregate",
+            "合计",
+            "求和",
+            "加总"
+          ],
+          [
+            "subtotal",
+            "小计"
+          ],
+          [
+            "equal",
+            "equals",
+            "match",
+            "一致",
+            "核对"
+          ]
+        ]
+      },
+      "expected_status": "SUPPORTED",
+      "fact_ids": [
+        "line_1_extension",
+        "line_2_extension",
+        "line_3_extension",
+        "printed_subtotal"
+      ],
+      "relation_ids": [
+        "subtotal_math"
+      ]
+    },
+    {
+      "id": "stated_component_rate_base_validation",
+      "statement_meaning": {
+        "all_of": [
+          [
+            "tax",
+            "VAT",
+            "discount",
+            "adjustment",
+            "component",
+            "税费",
+            "增值税",
+            "折扣",
+            "调整"
+          ],
+          [
+            "calculated",
+            "calculation",
+            "correctly",
+            "multiply",
+            "times",
+            "×",
+            "apply",
+            "recompute",
+            "计算",
+            "乘",
+            "适用",
+            "复算"
+          ]
+        ]
+      },
+      "expected_status": "SUPPORTED",
+      "fact_ids": [
+        "vat_1",
+        "vat_1_rate_factor",
+        "printed_subtotal"
+      ],
+      "relation_ids": [
+        "vat_rate_base_math"
+      ]
+    },
+    {
+      "id": "final_total_reconciliation",
+      "statement_meaning": {
+        "all_of": [
+          [
+            "printed final total",
+            "printed total",
+            "final total",
+            "amount due",
+            "票面总额",
+            "最终金额",
+            "应付金额"
+          ],
+          [
+            "subtotal",
+            "line-derived",
+            "line item",
+            "小计",
+            "行项目汇总"
+          ],
+          [
+            "tax",
+            "VAT",
+            "discount",
+            "adjustment",
+            "reverse charge",
+            "component",
+            "税",
+            "折扣",
+            "调整",
+            "反向征税"
+          ],
+          [
+            "equal",
+            "equals",
+            "reconcile",
+            "match",
+            "plus",
+            "add",
+            "一致",
+            "吻合",
+            "核对",
+            "重算",
+            "加总"
+          ]
+        ]
+      },
+      "expected_status": "SUPPORTED",
+      "fact_ids": [
+        "printed_subtotal",
+        "vat_1",
+        "printed_total",
+        "document_type"
+      ],
+      "relation_ids": [
+        "final_total_math"
+      ]
+    },
+    {
+      "id": "credit_note_sign_semantics",
+      "statement_meaning": {
+        "all_of": [
+          [
+            "credit note",
+            "贷项",
+            "贷记"
+          ],
+          [
+            "negative",
+            "sign",
+            "reversal",
+            "负数",
+            "符号",
+            "冲销"
+          ],
+          [
+            "calculation",
+            "treatment",
+            "interpret",
+            "计算",
+            "处理",
+            "理解"
+          ]
+        ]
+      },
+      "expected_status": "SUPPORTED",
+      "fact_ids": [
+        "document_type",
+        "printed_subtotal",
+        "printed_total"
+      ],
+      "relation_ids": []
+    }
+  ],
+  "relations": [
+    {
+      "id": "line_1_extension_math",
+      "operation": "multiply",
+      "input_fact_ids": [
+        "line_1_quantity",
+        "line_1_unit_price"
+      ],
+      "output_fact_id": "line_1_extension"
+    },
+    {
+      "id": "line_2_extension_math",
+      "operation": "multiply",
+      "input_fact_ids": [
+        "line_2_quantity",
+        "line_2_unit_price"
+      ],
+      "output_fact_id": "line_2_extension"
+    },
+    {
+      "id": "subtotal_math",
+      "operation": "sum",
+      "input_fact_ids": [
+        "line_1_extension",
+        "line_2_extension",
+        "line_3_extension"
+      ],
+      "output_fact_id": "printed_subtotal"
+    },
+    {
+      "id": "vat_rate_base_math",
+      "operation": "multiply",
+      "input_fact_ids": [
+        "printed_subtotal",
+        "vat_1_rate_factor"
+      ],
+      "output_fact_id": "vat_1"
+    },
+    {
+      "id": "final_total_math",
+      "operation": "sum",
+      "input_fact_ids": [
+        "printed_subtotal",
+        "vat_1"
+      ],
+      "output_fact_id": "printed_total"
+    }
+  ],
+  "epistemic_boundaries": [
+    {
+      "id": "tax_or_discount_policy_applicability_not_proven",
+      "statement_meaning": {
+        "all_of": [
+          [
+            "tax",
+            "VAT",
+            "discount",
+            "reverse charge",
+            "税",
+            "折扣",
+            "反向征税"
+          ],
+          [
+            "legally applicable",
+            "policy basis",
+            "jurisdiction",
+            "法定适用",
+            "政策依据",
+            "适用辖区"
+          ],
+          [
+            "correct",
+            "approved",
+            "valid",
+            "正确",
+            "批准",
+            "有效"
+          ]
+        ]
+      },
+      "allowed_statuses": [
+        "NOT_FOUND"
+      ]
+    },
+    {
+      "id": "expected_invoice_template_not_provided",
+      "statement_meaning": {
+        "all_of": [
+          [
+            "template",
+            "layout",
+            "format",
+            "模板",
+            "版式",
+            "格式"
+          ],
+          [
+            "expected",
+            "required",
+            "baseline",
+            "标准",
+            "预期",
+            "基准"
+          ],
+          [
+            "match",
+            "comply",
+            "correct",
+            "匹配",
+            "符合",
+            "正确"
+          ]
+        ]
+      },
+      "allowed_statuses": [
+        "NOT_FOUND"
+      ]
+    }
+  ],
+  "requirement": {
+    "requirement_id": "invoice_calculation_valid",
+    "decision_status": "SUPPORTED",
+    "projected_status": "satisfied",
+    "blocking_obligations": false
+  },
+  "communication": {
+    "required_meanings": [
+      [
+        "内部计算一致",
+        "内部计算验证通过",
+        "金额核对通过",
+        "算术一致",
+        "未发现计算不一致",
+        "内部金额可勾稽",
+        "各层金额能够勾稽",
+        "票面金额与重算结果吻合"
+      ],
+      [
+        "报告",
+        "PDF"
+      ]
+    ],
+    "opposite_conclusions": [
+      {
+        "all_of": [
+          [
+            "invoice calculation is incorrect",
+            "internal calculation is contradicted",
+            "发票内部计算错误",
+            "发票计算有效性冲突",
+            "整体计算错误",
+            "整体金额核对失败"
+          ]
+        ]
+      }
+    ],
+    "forbidden_phrases": [
+      "结论：金额核对未通过",
+      "结论：发票计算错误"
+    ],
+    "require_chinese": true,
+    "require_report_links": true
+  }
+}

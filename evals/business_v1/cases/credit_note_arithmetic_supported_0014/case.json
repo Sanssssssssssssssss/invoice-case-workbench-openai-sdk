@@ -1,0 +1,29 @@
+{
+  "schema_version": "1",
+  "case_id": "credit_note_arithmetic_supported_0014",
+  "case_version": "1",
+  "title": "贷项通知单负数计算一致",
+  "suite": "atomic_dev",
+  "business_holes": [
+    "invoice_arithmetic",
+    "credit_note_sign"
+  ],
+  "user_message": "请审核附件中的付款材料，逐项核对行项目、小计、税费或折扣以及最终金额，并生成一份中文审核报告。",
+  "policy_version": "aurora_ap_lite_v1",
+  "report_required": true,
+  "auto_approve_tools": [
+    "write_case_file",
+    "render_pdf"
+  ],
+  "attachments": [
+    {
+      "id": "invoice",
+      "path": "attachments/invoice.pdf",
+      "sha256": "75761c5ad6ddf1f2cd0f37d0d4cc5ca6a2c17a26bc1080c470d0bbc38e79692c",
+      "content_type": "application/pdf",
+      "source_url": "https://huggingface.co/datasets/jngb-labs/InvoiceBenchmark/blob/f0699d8c94468fb2fefaa22f669684b22e68c3d3/output/pdf/INV-2026-0014.pdf",
+      "source_revision": "f0699d8c94468fb2fefaa22f669684b22e68c3d3",
+      "license": "MIT"
+    }
+  ]
+}

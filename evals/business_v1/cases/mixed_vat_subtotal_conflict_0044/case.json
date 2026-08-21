@@ -1,0 +1,30 @@
+{
+  "schema_version": "1",
+  "case_id": "mixed_vat_subtotal_conflict_0044",
+  "case_version": "1",
+  "title": "混合税率发票票面小计错误",
+  "suite": "atomic_dev",
+  "business_holes": [
+    "invoice_arithmetic",
+    "mixed_vat",
+    "subtotal_integrity"
+  ],
+  "user_message": "请审核附件中的付款材料，逐项核对行项目、小计、税费或折扣以及最终金额，并生成一份中文审核报告。",
+  "policy_version": "aurora_ap_lite_v1",
+  "report_required": true,
+  "auto_approve_tools": [
+    "write_case_file",
+    "render_pdf"
+  ],
+  "attachments": [
+    {
+      "id": "invoice",
+      "path": "attachments/invoice.pdf",
+      "sha256": "b20e2e643dd835ab9f43b732f80a567ede2e4e7a12a3063d8acc24e69ded1d49",
+      "content_type": "application/pdf",
+      "source_url": "https://huggingface.co/datasets/jngb-labs/InvoiceBenchmark/blob/f0699d8c94468fb2fefaa22f669684b22e68c3d3/output/pdf/INV-2026-0044.pdf",
+      "source_revision": "f0699d8c94468fb2fefaa22f669684b22e68c3d3",
+      "license": "MIT"
+    }
+  ]
+}

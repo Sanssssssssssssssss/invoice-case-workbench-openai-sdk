@@ -1,0 +1,28 @@
+{
+  "schema_version": "1",
+  "case_id": "invoice_arithmetic_conflict_001",
+  "case_version": "1",
+  "title": "发票内部总额存在明确错误",
+  "suite": "atomic_dev",
+  "business_holes": [
+    "invoice_arithmetic"
+  ],
+  "user_message": "请帮我审核这张发票，完成申报前检查，并生成一份中文审核报告。",
+  "policy_version": "aurora_ap_lite_v1",
+  "report_required": true,
+  "auto_approve_tools": [
+    "write_case_file",
+    "render_pdf"
+  ],
+  "attachments": [
+    {
+      "id": "invoice",
+      "path": "attachments/invoice.pdf",
+      "sha256": "087454d2e93fb69680d2d45e0560e9ef181435bf8ef518616eef44da8c4b16ef",
+      "content_type": "application/pdf",
+      "source_url": "https://huggingface.co/datasets/jngb-labs/InvoiceBenchmark/blob/f0699d8c94468fb2fefaa22f669684b22e68c3d3/output/pdf/INV-2026-0002.pdf",
+      "source_revision": "f0699d8c94468fb2fefaa22f669684b22e68c3d3",
+      "license": "MIT"
+    }
+  ]
+}
