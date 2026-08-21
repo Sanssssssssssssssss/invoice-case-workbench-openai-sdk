@@ -5,6 +5,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+from math import ceil
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -223,6 +224,7 @@ def summarize_business_results(
         runtime_completed = not snapshot.runtime_error and not any(
             item.code == "RUN_FAILED" for item in result.vetoes
         )
+        efficiency = _run_efficiency(snapshot, result)
         outcome_counts["target_truth"] += int(target_truth)
         outcome_counts["report"] += int(report_ok)
         outcome_counts["communication"] += int(communication_ok)
@@ -294,6 +296,7 @@ def summarize_business_results(
                 "veto_codes": [item.code for item in result.vetoes],
                 "stages": per_stage,
                 "engineering": result.engineering,
+                "efficiency": efficiency,
                 "snapshot_path": _display_path(run_dir, paths.snapshot),
                 "score_path": _display_path(run_dir, paths.score),
                 "eval_report_path": _display_path(run_dir, paths.report),
@@ -311,6 +314,13 @@ def summarize_business_results(
     ]
     suites = _suite_breakdown(rows)
     scores = [Decimal(str(item["score"])) for item in rows]
+    efficiency_summary = _summarize_efficiency(rows)
+    for row in rows:
+        row["efficiency"].pop("_model_latency_samples_ms", None)
+        row["efficiency"].pop("_ttft_samples_ms", None)
+        for values in row["efficiency"]["by_role"].values():
+            values.pop("_latency_samples_ms", None)
+            values.pop("_ttft_samples_ms", None)
     return {
         "schema_version": "1",
         "benchmark": "BusinessEval",
@@ -348,6 +358,7 @@ def summarize_business_results(
         "veto_counts": dict(sorted(veto_counts.items())),
         "first_failed_stage_counts": dict(sorted(first_failure_counts.items())),
         "engineering_totals": engineering,
+        **efficiency_summary,
         "scorer_versions": sorted(scorer_versions),
         "repair_queue_source_suites": sorted(DEV_SUITES),
         "repair_queue": _sorted_repair_queue(repair_groups),
@@ -404,16 +415,16 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             "",
             "## 案例结果",
             "",
-            "| 案例 | 套件 | 结果 | 业务分 | 框架 | 首个失败阶段 | Veto | Calls | Tokens | 耗时 ms |",
-            "|---|---|---|---:|---|---|---|---:|---:|---:|",
+            "| 案例 | 套件 | 结果 | 业务分 | 框架 | 首个失败阶段 | Veto | Provider Calls | Tokens | 模型 TTFT p50 ms | 耗时 ms |",
+            "|---|---|---|---:|---|---|---|---:|---:|---:|---:|",
         ]
     )
     for row in summary["case_runs"]:
-        metrics = row["engineering"]
+        metrics = row["efficiency"]
         lines.append(
             (
                 "| {case} | {suite} | {status} | {score:.2f} | {framework} | {stage} | {veto} | "
-                "{calls} | {tokens} | {duration} |"
+                "{calls} | {tokens} | {ttft} | {duration} |"
             ).format(
                 case=_escape(row["case_id"]),
                 suite=_escape(row["suite"]),
@@ -427,9 +438,10 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
                 ),
                 stage=STAGE_LABELS.get(row["first_failed_stage"], row["first_failed_stage"]) or "-",
                 veto=_escape(", ".join(row["veto_codes"]) or "-"),
-                calls=metrics.get("provider_calls", 0),
-                tokens=metrics.get("api_total_tokens", 0),
-                duration=metrics.get("duration_ms", 0),
+                calls=metrics["execution"]["provider_calls"],
+                tokens=metrics["tokens"]["total_tokens"],
+                ttft=_metric_text(metrics["latency"]["ttft_ms"]),
+                duration=_metric_text(metrics["latency"]["e2e_duration_ms"]),
             )
         )
     lines.extend(["", "## Veto 汇总", ""])
@@ -456,6 +468,39 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
     lines.extend(["", "## 工程指标合计", ""])
     for key, value in summary["engineering_totals"].items():
         lines.append(f"- `{key}`：{value}")
+    efficiency = summary["engineering_efficiency"]
+    lines.extend(
+        [
+            "",
+            "## 效率基线",
+            "",
+            "效率指标不与业务分合成总分；不可观测字段保持 `null`，并在 `benchmark.json` 中记录 coverage。",
+            "角色 latency 可能包含下游工具或子角色等待时间，只用于同层比较，不能跨层相加。",
+            f"- 业务通过次数：`{efficiency['business_pass_count']}`",
+            f"- Tokens / business pass：`{_metric_text(efficiency['tokens_per_business_pass'])}`",
+            f"- Latency ms / business pass：`{_metric_text(efficiency['latency_ms_per_business_pass'])}`",
+            (
+                "- E2E latency p50/p95 ms："
+                f"`{_metric_text(summary['engineering_distribution']['e2e_duration_ms']['p50'])}` / "
+                f"`{_metric_text(summary['engineering_distribution']['e2e_duration_ms']['p95'])}`"
+            ),
+            "",
+            "### 分层模型指标",
+            "",
+            "| 层/角色 | Provider Calls | Logical Calls | Input | Output | Reasoning | Cached | "
+            "Total | Latency p50/p95 ms | TTFT p50/p95 ms |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for role, values in summary["engineering_by_role"].items():
+        lines.append(
+            f"| {_escape(role)} | {values['provider_calls']} | {values['model_role_calls']} | "
+            f"{_metric_text(values['input_tokens'])} | {_metric_text(values['output_tokens'])} | "
+            f"{_metric_text(values['reasoning_tokens'])} | {_metric_text(values['cached_tokens'])} | "
+            f"{_metric_text(values['total_tokens'])} | "
+            f"{_metric_text(values['latency_p50_ms'])}/{_metric_text(values['latency_p95_ms'])} | "
+            f"{_metric_text(values['ttft_p50_ms'])}/{_metric_text(values['ttft_p95_ms'])} |"
+        )
     lines.extend(["", "## 单案例记录", ""])
     for row in summary["case_runs"]:
         lines.append(
@@ -463,6 +508,327 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             f"snapshot=`{row['snapshot_path']}`"
         )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _run_efficiency(snapshot: EvalSnapshot, result: EvalResult) -> dict[str, Any]:
+    engineering = result.engineering
+    provider_rows = [
+        _map(item.get("payload"))
+        for item in snapshot.events
+        if isinstance(item, dict) and item.get("kind") == "provider_call"
+    ]
+    observability = _map(snapshot.trace.get("observability"))
+    model_metrics = _map(observability.get("model_metrics"))
+    raw_model_rows = model_metrics.get("calls")
+    model_rows = (
+        [item for item in raw_model_rows if isinstance(item, Mapping)]
+        if isinstance(raw_model_rows, list)
+        else []
+    )
+
+    def token(usage_key: str) -> int | None:
+        if not provider_rows:
+            return None
+        values = [_num(_map(item.get("usage")).get(usage_key)) for item in provider_rows]
+        return int(sum(values)) if all(item is not None for item in values) else None
+
+    tokens = {
+        "input_tokens": token("prompt_tokens"),
+        "output_tokens": token("completion_tokens"),
+        "reasoning_tokens": token("reasoning_tokens"),
+        "cached_tokens": token("cached_tokens"),
+        "total_tokens": token("total_tokens"),
+    }
+    if tokens["total_tokens"] is None and None not in (tokens["input_tokens"], tokens["output_tokens"]):
+        tokens["total_tokens"] = tokens["input_tokens"] + tokens["output_tokens"]
+    role_metrics = _role_metrics(provider_rows, model_rows)
+    latencies = [_num(item.get("latency_ms")) for item in model_rows]
+    latencies = [item for item in latencies if item is not None]
+    ttfts = [_num(item.get("ttft_ms")) for item in model_rows]
+    ttfts = [item for item in ttfts if item is not None]
+    prompts = [_num(_map(item.get("usage")).get("prompt_tokens")) for item in provider_rows]
+    prompts = [item for item in prompts if item is not None]
+    compiler_run = _map(observability.get("compiler_run"))
+    tool_calls = _int_or_none(engineering.get("tool_calls"))
+    tool_errors = _int_or_none(engineering.get("tool_error_calls"))
+    max_turn_source = list(snapshot.events)
+    max_turns_observed = bool(max_turn_source)
+    if not any("maxturnsexceeded" in str(item.get("summary") or "").casefold() for item in max_turn_source):
+        max_turn_source = [
+            item
+            for item in (snapshot.trace.get("observations") or [])
+            if isinstance(item, dict)
+        ]
+        max_turns_observed = max_turns_observed or bool(max_turn_source)
+    max_turn_keys = {
+        (item.get("kind"), item.get("name"), item.get("step_count"), item.get("summary"))
+        for item in max_turn_source
+        if isinstance(item, dict) and "maxturnsexceeded" in str(item.get("summary") or "").casefold()
+    }
+    input_tokens = tokens["input_tokens"]
+    cached_tokens = tokens["cached_tokens"]
+    trace_duration = _num(snapshot.trace.get("duration_ms"))
+    return {
+        "provider": snapshot.provider or None,
+        "model": snapshot.model or None,
+        "tokens": tokens,
+        "execution": {
+            "provider_calls": len(provider_rows) if provider_rows else None,
+            "model_role_calls": (
+                len(model_rows)
+                if isinstance(model_metrics.get("calls"), list)
+                else None
+            ),
+            "agent_turns": (
+                int(snapshot.trace["step_count"])
+                if snapshot.trace.get("step_count") is not None
+                else None
+            ),
+            "tool_calls": tool_calls,
+            "successful_tool_calls": (
+                tool_calls - tool_errors
+                if tool_calls is not None and tool_errors is not None
+                else None
+            ),
+            "tool_error_count": tool_errors,
+            "compiler_retry_count": _int_or_none(compiler_run.get("retry_count")),
+            "max_turns_hits": len(max_turn_keys) if max_turns_observed else None,
+        },
+        "latency": {
+            "e2e_duration_ms": (
+                trace_duration
+                if trace_duration is not None
+                else _num(engineering.get("duration_ms"))
+            ),
+            "model_call_p50_ms": _pctl(latencies, 0.50),
+            "model_call_p95_ms": _pctl(latencies, 0.95),
+            "ttft_ms": _pctl(ttfts, 0.50),
+            "ttft_p95_ms": _pctl(ttfts, 0.95),
+            "coverage": {
+                "model_latency": _coverage(len(latencies), len(model_rows)),
+                "ttft": _coverage(len(ttfts), len(model_rows)),
+            },
+        },
+        "context": {
+            "peak_context_tokens": (
+                max(prompts)
+                if provider_rows and len(prompts) == len(provider_rows)
+                else None
+            ),
+            "cache_hit_ratio": (
+                round(cached_tokens / input_tokens, 4)
+                if input_tokens and cached_tokens is not None
+                else None
+            ),
+        },
+        "by_role": role_metrics,
+        "_model_latency_samples_ms": latencies,
+        "_ttft_samples_ms": ttfts,
+    }
+
+
+def _role_metrics(provider_rows: list[Mapping[str, Any]], model_rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, dict[str, Any]] = {}
+    token_pairs = (
+        ("prompt_tokens", "input_tokens"),
+        ("completion_tokens", "output_tokens"),
+        ("reasoning_tokens", "reasoning_tokens"),
+        ("cached_tokens", "cached_tokens"),
+        ("total_tokens", "total_tokens"),
+    )
+
+    def new_item() -> dict[str, Any]:
+        return {
+            "provider_calls": 0,
+            "model_role_calls": 0,
+            **{target: 0 for _, target in token_pairs},
+            "_latency": [],
+            "_ttft": [],
+            "_coverage": Counter(),
+        }
+
+    for row in provider_rows:
+        role = (
+            "case_manager"
+            if row.get("role") in {"planner", "supervisor"}
+            else str(row.get("role") or "unknown")
+        )
+        item = grouped.setdefault(role, new_item())
+        item["provider_calls"] += 1
+        usage = _map(row.get("usage"))
+        for source, target in token_pairs:
+            value = _num(usage.get(source))
+            if value is not None:
+                item[target] += value
+                item["_coverage"][target] += 1
+    for row in model_rows:
+        role = (
+            "case_manager"
+            if row.get("role") in {"planner", "supervisor"}
+            else str(row.get("role") or "unknown")
+        )
+        item = grouped.setdefault(role, new_item())
+        item["model_role_calls"] += 1
+        for source, target in (("latency_ms", "_latency"), ("ttft_ms", "_ttft")):
+            value = _num(row.get(source))
+            if value is not None:
+                item[target].append(value)
+    result = {}
+    for role, item in sorted(grouped.items()):
+        tokens = {
+            key: (
+                item[key]
+                if item["provider_calls"] > 0
+                and item["_coverage"][key] == item["provider_calls"]
+                else None
+            )
+            for _, key in token_pairs
+        }
+        result[role] = {
+            "provider_calls": item["provider_calls"],
+            "model_role_calls": item["model_role_calls"],
+            **tokens,
+            "latency_p50_ms": _pctl(item["_latency"], 0.50),
+            "latency_p95_ms": _pctl(item["_latency"], 0.95),
+            "ttft_p50_ms": _pctl(item["_ttft"], 0.50),
+            "ttft_p95_ms": _pctl(item["_ttft"], 0.95),
+            "coverage": {
+                key: _coverage(item["_coverage"][key], item["provider_calls"])
+                for _, key in token_pairs
+            }
+            | {
+                "latency": _coverage(len(item["_latency"]), item["model_role_calls"]),
+                "ttft": _coverage(len(item["_ttft"]), item["model_role_calls"]),
+            },
+            "_latency_samples_ms": item["_latency"],
+            "_ttft_samples_ms": item["_ttft"],
+        }
+    return result
+
+
+def _summarize_efficiency(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    totals = [row["efficiency"]["tokens"]["total_tokens"] for row in rows]
+    durations = [row["efficiency"]["latency"]["e2e_duration_ms"] for row in rows]
+    call_latencies = [value for row in rows for value in row["efficiency"]["_model_latency_samples_ms"]]
+    ttfts = [value for row in rows for value in row["efficiency"]["_ttft_samples_ms"]]
+    pass_count = sum(row["business_passed"] is True for row in rows)
+    observed_tokens = [item for item in totals if item is not None]
+    observed_durations = [item for item in durations if item is not None]
+    return {
+        "engineering_distribution": {
+            "total_tokens": _dist(observed_tokens, len(rows), "runs"),
+            "e2e_duration_ms": _dist(observed_durations, len(rows), "runs"),
+            "model_call_latency_ms": _dist(
+                call_latencies,
+                sum(row["efficiency"]["execution"]["model_role_calls"] or 0 for row in rows),
+                "calls",
+            ),
+            "ttft_ms": _dist(
+                ttfts,
+                sum(row["efficiency"]["execution"]["model_role_calls"] or 0 for row in rows),
+                "calls",
+            ),
+        },
+        "engineering_by_role": _aggregate_roles(rows),
+        "engineering_efficiency": {
+            "business_pass_count": pass_count,
+            "tokens_per_business_pass": (
+                round(sum(observed_tokens) / pass_count, 4)
+                if pass_count and len(observed_tokens) == len(rows)
+                else None
+            ),
+            "latency_ms_per_business_pass": (
+                round(sum(observed_durations) / pass_count, 4)
+                if pass_count and len(observed_durations) == len(rows)
+                else None
+            ),
+        },
+    }
+
+
+def _aggregate_roles(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, dict[str, Any]] = {}
+    token_keys = (
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "cached_tokens",
+        "total_tokens",
+    )
+    for row in rows:
+        for role, values in row["efficiency"]["by_role"].items():
+            item = grouped.setdefault(
+                role,
+                {
+                    "provider_calls": 0,
+                    "model_role_calls": 0,
+                    **{key: [] for key in token_keys},
+                },
+            )
+            item.setdefault("_latency", []).extend(values["_latency_samples_ms"])
+            item.setdefault("_ttft", []).extend(values["_ttft_samples_ms"])
+            for key in ("provider_calls", "model_role_calls"):
+                item[key] += values[key]
+            for key in token_keys:
+                item[key].append(values[key])
+    return {
+        role: {
+            "provider_calls": values["provider_calls"],
+            "model_role_calls": values["model_role_calls"],
+            **{
+                key: sum(values[key]) if all(item is not None for item in values[key]) else None
+                for key in token_keys
+            },
+            "latency_p50_ms": _pctl(values["_latency"], 0.50),
+            "latency_p95_ms": _pctl(values["_latency"], 0.95),
+            "ttft_p50_ms": _pctl(values["_ttft"], 0.50),
+            "ttft_p95_ms": _pctl(values["_ttft"], 0.95),
+            "coverage": {
+                "latency": _coverage(len(values["_latency"]), values["model_role_calls"]),
+                "ttft": _coverage(len(values["_ttft"]), values["model_role_calls"]),
+            },
+        }
+        for role, values in sorted(grouped.items())
+    }
+
+
+def _dist(values: list[float | int], total: int, unit: str) -> dict[str, Any]:
+    return {
+        "p50": _pctl(values, 0.50),
+        "p95": _pctl(values, 0.95),
+        f"observed_{unit}": len(values),
+        f"total_{unit}": total,
+    }
+
+
+def _coverage(observed: int, total: int) -> dict[str, int]:
+    return {"observed": observed, "total": total}
+
+
+def _pctl(values: list[float | int], quantile: float) -> float | int | None:
+    ordered = sorted(values)
+    return ordered[max(0, ceil(quantile * len(ordered)) - 1)] if ordered else None
+
+
+def _num(value: Any) -> float | int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, Decimal):
+        return float(value)
+    return value if isinstance(value, (int, float)) else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    value = _num(value)
+    return int(value) if value is not None else None
+
+
+def _map(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _metric_text(value: Any) -> str:
+    return "-" if value is None else str(value)
 
 
 def _suite_breakdown(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
