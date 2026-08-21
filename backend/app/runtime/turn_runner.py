@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from agents import FunctionTool, RunConfig, Runner
+from agents.exceptions import MaxTurnsExceeded
 from agents.run_state import RunState
 from pydantic import BaseModel
 
@@ -66,6 +67,9 @@ from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
 ROLE_TARGETS = {"materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"}
 MANAGER_PROMPT_VERSION = "supervisor_planner_v2.4_native_tools"
+_SAFE_FINAL_ANSWER_STOP = (
+    "本轮最终回复未通过安全校验，因此未提供业务结论。请查看当前案件状态和运行记录。"
+)
 
 
 @dataclass
@@ -464,8 +468,13 @@ class TurnRunner:
                 workspace_root_hash=_workspace_root_hash(self.store),
             ) as turn:
                 state.observability.update(turn.to_dict())
+                deterministic_report_approval = self._should_resume_report_approval_deterministically(
+                    request,
+                    state,
+                    interruptions,
+                )
                 self._record_approval_decision(state, interruptions, approved=approved, reason=reason)
-                if not sdk_state:
+                if deterministic_report_approval or not sdk_state:
                     return self._resume_runtime_policy_approval(request, state, approved=approved, reason=reason)
                 if hasattr(self.manager_runner, "resume"):
                     outcome = self.manager_runner.resume(  # type: ignore[attr-defined]
@@ -524,8 +533,13 @@ class TurnRunner:
                     {"case_id": state.case_id, "run_id": state.run_id, "approved": approved},
                     summary="Approval decision received.",
                 )
+                deterministic_report_approval = self._should_resume_report_approval_deterministically(
+                    request,
+                    state,
+                    interruptions,
+                )
                 self._record_approval_decision(state, interruptions, approved=approved, reason=reason)
-                if not sdk_state:
+                if deterministic_report_approval or not sdk_state:
                     return await self._resume_runtime_policy_approval_streamed(request, state, approved=approved, reason=reason)
                 if hasattr(self.manager_runner, "resume_streamed"):
                     outcome = await self.manager_runner.resume_streamed(  # type: ignore[attr-defined]
@@ -550,6 +564,20 @@ class TurnRunner:
                 finally:
                     self.llm.reset_runtime_hooks(hooks_token)
                     self._stream_emit = prior_emit
+
+    def _should_resume_report_approval_deterministically(
+        self,
+        request: AgentTurnRequest,
+        state: HarnessRunState,
+        interruptions: list[dict[str, Any]],
+    ) -> bool:
+        if len(interruptions) != 1:
+            return False
+        tool = str(interruptions[0].get("tool") or "")
+        if tool not in {"write_case_file", "render_pdf"}:
+            return False
+        continuation = self._deterministic_policy_continuation(request, state)
+        return continuation is not None and continuation[0] == tool
 
     def _resume_runtime_policy_approval(
         self,
@@ -640,6 +668,14 @@ class TurnRunner:
                 )
             except Exception as exc:
                 self._record_manager_failure(state, manager_input, exc)
+                report_write_waiting = self._recover_report_write_after_manager_max_turns(
+                    request,
+                    state,
+                    planner_context,
+                    exc,
+                )
+                if report_write_waiting is not None:
+                    return report_write_waiting
                 if self._continue_after_manager_failure(request, state, exc):
                     continue
                 self.harness.finalize_run(state, _manager_failure_answer(exc))
@@ -716,6 +752,14 @@ class TurnRunner:
                     )
             except Exception as exc:
                 self._record_manager_failure(state, manager_input, exc)
+                report_write_waiting = self._recover_report_write_after_manager_max_turns(
+                    request,
+                    state,
+                    planner_context,
+                    exc,
+                )
+                if report_write_waiting is not None:
+                    return report_write_waiting
                 if self._continue_after_manager_failure(request, state, exc):
                     continue
                 self.harness.finalize_run(state, _manager_failure_answer(exc))
@@ -758,7 +802,7 @@ class TurnRunner:
             return "write_case_patch", {}
         if _report_requested_message(request.message) and self.store.load(state.case_id).status == "ready_for_report":
             if not self.context.last_role_result(state, name="report_writer"):
-                return "report_writer", {"report_instructions": request.message}
+                return "report_writer", {}
             if not _latest_observation(state, kind="tool", name="write_case_file"):
                 return "write_case_file", {}
             if not _markdown_only_report_message(request.message) and not _latest_observation(state, kind="tool", name="render_pdf"):
@@ -803,6 +847,10 @@ class TurnRunner:
             f"CONTRADICTED {counts['CONTRADICTED']}；"
             f"NOT_FOUND {counts['NOT_FOUND']}。"
         )
+        persisted_markdown = self._persisted_report_markdown(state, markdown_path)
+        summary = _canonical_report_summary(persisted_markdown)
+        if summary:
+            delivery.append(f"- 报告摘要：{summary}")
         conflict = next((item for item in decisions if item.status == "CONTRADICTED"), None)
         unresolved = next((item for item in decisions if item.status == "NOT_FOUND"), None)
         if conflict is not None:
@@ -816,6 +864,27 @@ class TurnRunner:
             delivery.append(f"- 首个未决项：{unresolved.requirement_id}{detail}。")
         delivery.append("以上是证据状态，不等于业务批准或拒绝。")
         return "\n".join(delivery)
+
+    def _persisted_report_markdown(
+        self,
+        state: HarnessRunState,
+        relative_path: str,
+    ) -> str:
+        successful_write = any(
+            isinstance(call, dict)
+            and call.get("tool") == "write_case_file"
+            and not str(call.get("error") or "").strip()
+            for call in list(getattr(state, "tool_calls", []) or [])
+        )
+        if not successful_write:
+            return ""
+        try:
+            path = self.store.resolve_case_path(state.case_id, relative_path)
+            if not path.is_file():
+                return ""
+            return path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return ""
 
     def _deterministic_final_after_materials_advice(self, request: AgentTurnRequest, state: HarnessRunState) -> str:
         if not requires_materials_advice(request.message):
@@ -869,6 +938,42 @@ class TurnRunner:
         )
         return True
 
+    def _recover_report_write_after_manager_max_turns(
+        self,
+        request: AgentTurnRequest,
+        state: HarnessRunState,
+        planner_context: dict[str, Any],
+        exc: Exception,
+    ) -> AgentTurnResponse | None:
+        if not isinstance(exc, MaxTurnsExceeded):
+            return None
+        report = self.context.last_role_result(state, name="report_writer")
+        if not str(report.get("markdown") or "").strip():
+            return None
+        continuation = self._deterministic_policy_continuation(request, state)
+        if continuation is None or continuation[0] != "write_case_file":
+            return None
+        name, payload = continuation
+        self.harness.append_debug_event(
+            state,
+            kind="runtime_recovery",
+            name="report_write_after_manager_max_turns",
+            payload={"error": {"type": type(exc).__name__, "message": str(exc)}, "tool": name},
+            summary="Starting deterministic report write approval after case manager max turns.",
+            parent_event_id=state.last_model_event_id,
+            caused_by_event_id=state.last_model_event_id,
+        )
+        result = self.invoke_manager_tool(
+            state=state,
+            request=request,
+            planner_context=planner_context,
+            name=name,
+            payload=payload,
+        )
+        if result.get("status") != "approval_required":
+            return None
+        return self._waiting_approval_response(request, state, "", [result])
+
     def _finalize_manager_answer(
         self,
         request: AgentTurnRequest,
@@ -897,9 +1002,11 @@ class TurnRunner:
             self.trace_recorder.persist_trace_checkpoint(state, decision)
             return self.trace_recorder.finalize_turn(state)
         self.trace_recorder.persist_trace_checkpoint(state, decision)
+        report_delivery = self._deterministic_final_after_report(request, state)
         if (
             _latest_observation(state, kind="guard", name="final_answer_internal_retry_instruction")
             and not state.observability.get("manager_final_rewrite_attempted")
+            and not report_delivery
         ):
             state.observability["manager_final_rewrite_attempted"] = True
             state.observability["_manager_final_rewrite_pending"] = True
@@ -913,7 +1020,10 @@ class TurnRunner:
                 caused_by_event_id=state.last_action_event_id,
             )
             return None
-        recovered_text, recovered_source = self._guard_recovery_final_answer(request, state)
+        if report_delivery:
+            recovered_text, recovered_source = report_delivery, "canonical_report_delivery"
+        else:
+            recovered_text, recovered_source = self._guard_recovery_final_answer(request, state)
         recovered = SupervisorDecision(
             action="final_answer",
             final_answer=recovered_text,
@@ -930,15 +1040,38 @@ class TurnRunner:
                 "guard_feedback": self.context.last_runtime_feedback(state),
                 "final_answer_chars": len(recovered_text),
             },
-            summary="Recovered final answer from case_state after guard feedback.",
+            summary="Recovered a safe final answer after guard feedback.",
             parent_event_id=state.last_action_event_id,
             caused_by_event_id=state.last_action_event_id,
         )
         self.recovery.handle_final_answer(state, recovered)
+        checkpoint_decision = recovered
         if not state.final_answer:
-            state.final_answer = recovered_text
-        self.trace_recorder.persist_trace_checkpoint(state, recovered)
+            checkpoint_decision = self._validate_safe_stop_after_guard(state)
+        self.trace_recorder.persist_trace_checkpoint(state, checkpoint_decision)
         return self.trace_recorder.finalize_turn(state)
+
+    def _validate_safe_stop_after_guard(
+        self,
+        state: HarnessRunState,
+    ) -> SupervisorDecision:
+        decision = SupervisorDecision(
+            action="final_answer",
+            final_answer=_SAFE_FINAL_ANSWER_STOP,
+            reason="fixed safe stop after final-answer guard rejection",
+            confidence=1.0,
+        )
+        self.harness.append_debug_event(
+            state,
+            kind="runtime_recovery",
+            name="final_answer_guard_safe_stop",
+            payload={"final_answer_chars": len(_SAFE_FINAL_ANSWER_STOP)},
+            summary="Validating a fixed safe stop after final-answer guard rejection.",
+            parent_event_id=state.last_action_event_id,
+            caused_by_event_id=state.last_action_event_id,
+        )
+        self.recovery.handle_final_answer(state, decision)
+        return decision
 
     def _guard_recovery_final_answer(self, request: AgentTurnRequest, state: HarnessRunState) -> tuple[str, str]:
         if requires_materials_advice(request.message):
@@ -972,9 +1105,10 @@ class TurnRunner:
             caused_by_event_id=state.last_action_event_id,
         )
         self.recovery.handle_final_answer(state, decision)
+        checkpoint_decision = decision
         if not state.final_answer:
-            state.final_answer = final_text
-        self.trace_recorder.persist_trace_checkpoint(state, decision)
+            checkpoint_decision = self._validate_safe_stop_after_guard(state)
+        self.trace_recorder.persist_trace_checkpoint(state, checkpoint_decision)
         return self.trace_recorder.finalize_turn(state)
 
     def sdk_tools(
@@ -1424,7 +1558,8 @@ class TurnRunner:
             return self._call_evidence_compiler(state, request, payload, decision)
         role_capability = self.roles.trace_metadata(role)
         role_input = self.context_assembler.hydrate_role_input(state, role, payload, request.message)
-        role_input["supervisor_task"] = supervisor_task(decision, state)
+        if role != "report_writer":
+            role_input["supervisor_task"] = supervisor_task(decision, state)
         role_prompt_version = self.roles.prompt_version(role)
         role_packet = build_context_packet(
             role=role,
@@ -1977,8 +2112,8 @@ class TurnRunner:
         if tool == "write_case_file":
             markdown_path, _ = report_paths_for_run(state.started_at)
             payload.setdefault("relative_path", markdown_path)
-            if not payload.get("content") and not payload.get("content_ref"):
-                payload["content_ref"] = "last_role:report_writer.markdown"
+            payload.pop("content", None)
+            payload["content_ref"] = "last_role:report_writer.markdown"
         elif tool == "render_pdf":
             markdown_path, pdf_path = report_paths_for_run(state.started_at)
             payload.setdefault("markdown_path", markdown_path)
@@ -2063,14 +2198,16 @@ def _manager_success(
     payload: dict[str, Any] = {"status": "success", kind: name}
     if observation:
         payload["observation"] = _manager_observation(observation)
-        if observation.get("artifact_ref"):
+        if kind == "role" and name == "report_writer":
+            payload["content_ref"] = "last_role:report_writer.markdown"
+        elif observation.get("artifact_ref"):
             payload["artifact_ref"] = observation.get("artifact_ref")
         if observation.get("next_action_hint"):
             payload["next_action_hint"] = observation.get("next_action_hint")
     preview = _manager_result_preview(name, result)
     if preview is not None:
         payload["result_preview"] = preview
-    elif observation and observation.get("artifact_ref"):
+    elif observation and observation.get("artifact_ref") and not (kind == "role" and name == "report_writer"):
         payload["result_storage"] = "full_result_stored_in_artifact_ref"
     return payload
 
@@ -2087,6 +2224,9 @@ def _manager_observation(observation: dict[str, Any]) -> dict[str, Any]:
         "must_preserve_refs": _bounded_list(observation.get("must_preserve_refs"), limit=12, item_chars=220),
         "artifact_ref": observation.get("artifact_ref", ""),
     }
+    if observation.get("kind") == "role" and observation.get("name") == "report_writer":
+        safe.pop("artifact_ref", None)
+        safe["content_ref"] = "last_role:report_writer.markdown"
     if observation.get("reviewer_mode"):
         safe["reviewer_mode"] = observation.get("reviewer_mode")
     return {key: value for key, value in safe.items() if value not in ("", [], {}, None)}
@@ -2606,6 +2746,29 @@ def _report_requested_message(message: str) -> bool:
 def _markdown_only_report_message(message: str) -> bool:
     text = str(message or "").lower()
     return any(term in text for term in ("只要 markdown", "只要md", "不要 pdf", "不用 pdf", "markdown only", "md only"))
+
+
+def _canonical_report_summary(markdown: str) -> str:
+    """Extract one user-visible paragraph from the already guarded report.
+
+    Its caller supplies the canonical Markdown persisted after the approved
+    report write. Returning an empty string preserves deterministic delivery
+    when that file is unavailable or lacks the standard heading.
+    """
+
+    text = str(markdown or "").replace("\r\n", "\n")
+    match = re.search(r"(?im)^#{2,4}\s*(?:摘要结论|结论摘要|摘要)\s*$", text)
+    if match is None:
+        return ""
+    paragraphs = text[match.end() :].strip().split("\n\n")
+    for paragraph in paragraphs:
+        candidate = " ".join(line.strip() for line in paragraph.splitlines() if line.strip())
+        if not candidate or candidate.startswith("#") or candidate.startswith("|"):
+            continue
+        candidate = re.sub(r"[*_`]", "", candidate)
+        candidate = re.sub(r"\s+", " ", candidate).strip()
+        return candidate[:600].rstrip()
+    return ""
 
 
 def _latest_approval_tool(state: HarnessRunState) -> str:

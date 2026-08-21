@@ -12,6 +12,8 @@ from app.state.case_store import CaseStore
 
 TEXT_SNAPSHOT_SUFFIXES = {".csv", ".json", ".log", ".md", ".txt", ".xml", ".yaml", ".yml"}
 IMAGE_SNAPSHOT_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+RAW_MATERIAL_APPENDIX_HEADING = "原始材料附录"
+RAW_MATERIAL_APPENDIX_DISCLAIMER = "仅供人工核对，不构成系统结论；以正文 canonical Proof 为准。"
 
 
 def render_pdf(case_id: str, markdown_path: str, pdf_path: str | None = None) -> dict[str, Any]:
@@ -401,8 +403,16 @@ def _is_toc_heading(stripped: str) -> bool:
 
 
 def _is_renderer_owned_snapshot_heading(stripped: str) -> bool:
-    match = re.fullmatch(r"#{2,6}\s*(字段截图与证明点|原始附件截图|证据截图索引)\s*", stripped)
-    return bool(match)
+    headings = (
+        "字段截图",
+        "字段截图与证明点",
+        "原始附件截图",
+        "原始附件预览",
+        "证据截图索引",
+        RAW_MATERIAL_APPENDIX_HEADING,
+    )
+    match = re.fullmatch(r"#{2,6}\s*(.*?)\s*", stripped)
+    return bool(match and match.group(1) in headings)
 
 
 def _is_chapter_heading(text: str) -> bool:
@@ -950,9 +960,6 @@ def _field_crop_record(
     if not crop_abs.exists():
         return None
     field = str(row.get("field") or row.get("requirement") or row.get("claim") or row.get("crop_id") or "field")
-    value = str(row.get("value") or row.get("source_quote") or row.get("quote") or row.get("text") or "")
-    raw_proof = str(row.get("proof_label") or row.get("proves") or row.get("proof") or row.get("claim") or "")
-    proof = _proof_from_field(field) if not raw_proof or "source crop" in raw_proof.lower() else raw_proof
     locator = str(
         row.get("locator")
         or row.get("source_locator")
@@ -961,7 +968,7 @@ def _field_crop_record(
     )
     return {
         "evidence_id": evidence_id,
-        "name": _field_snapshot_name(field, value),
+        "name": _field_label(field),
         "source_path": original_ref or str(row.get("preview_path") or row.get("preview_ref") or ""),
         "original_ref": original_ref,
         "snapshot_path": crop_rel,
@@ -969,7 +976,6 @@ def _field_crop_record(
         "status": "rendered",
         "snapshot_kind": "field_crop",
         "field": field,
-        "proof": proof,
         "locator": locator,
         "limitation": str(row.get("limitation") or row.get("crop_status") or ""),
     }
@@ -1210,20 +1216,19 @@ def _append_snapshot_section(
         return
     field_crops = [item for item in snapshots if item.get("snapshot_kind") == "field_crop"]
     originals = [item for item in snapshots if item.get("snapshot_kind") != "field_crop"]
-    snapshot_heading_level = 1 if _story_has_toc_level(story, 0) else 0
+    if _needs_page_break(story):
+        story.append(page_break())
+    story.append(paragraph(_inline_text(RAW_MATERIAL_APPENDIX_HEADING), styles["h2"]))
+    story.append(paragraph(_inline_text(RAW_MATERIAL_APPENDIX_DISCLAIMER), styles["body"]))
     if field_crops:
-        story.append(
-            _heading_paragraph("字段截图与证明点", styles["h3"], paragraph, level=snapshot_heading_level, index=9001)
-        )
+        story.append(paragraph(_inline_text("字段截图"), styles["h3"]))
         for index, item in enumerate(field_crops, start=1):
             item["_display_index"] = index
             _append_snapshot_item(story, item, styles, width, flowable_image, paragraph, spacer)
     if originals:
         if field_crops and _needs_page_break(story):
             story.append(page_break())
-        story.append(
-            _heading_paragraph("原始附件截图", styles["h3"], paragraph, level=snapshot_heading_level, index=9002)
-        )
+        story.append(paragraph(_inline_text("原始附件预览"), styles["h3"]))
         for index, item in enumerate(originals, start=1):
             item["_display_index"] = index
             _append_snapshot_item(story, item, styles, width, flowable_image, paragraph, spacer)
@@ -1242,9 +1247,7 @@ def _append_snapshot_item(
     label = f"{prefix} {item.get('_display_index')}. {item.get('name')}（{item.get('evidence_id')}）"
     story.append(paragraph(_inline_text(label), styles["h4"]))
     if item.get("evidence_id"):
-        story.append(paragraph(_inline_text(f"证据编号：{item.get('evidence_id')}"), styles["small"]))
-    if item.get("proof"):
-        story.append(paragraph(_inline_text(f"证明点：{item.get('proof')}"), styles["body"]))
+        story.append(paragraph(_inline_text(f"来源证据编号：{item.get('evidence_id')}"), styles["small"]))
     if item.get("locator"):
         story.append(paragraph(_inline_text(f"定位：{item.get('locator')}"), styles["small"]))
     if item.get("limitation") and item.get("limitation") != "cropped":
@@ -1297,31 +1300,3 @@ def _field_label(field: str) -> str:
         "template_match": "模板匹配",
     }
     return labels.get(field, field)
-
-
-def _field_snapshot_name(field: str, value: str) -> str:
-    label = _field_label(field)
-    clean_value = _short_cell(value, 80)
-    if clean_value:
-        return f"{label}：{clean_value}"
-    return label
-
-
-def _proof_from_field(field: str) -> str:
-    if field == "bank_details":
-        return "证明银行账户/付款信息字段可见"
-    labels = {
-        "invoice_number": "证明发票编号字段可见",
-        "supplier": "证明供应商字段可见",
-        "buyer": "证明购买方字段可见",
-        "invoice_date": "证明发票日期字段可见",
-        "amount_total": "证明总金额字段可见",
-        "currency_tax": "证明币种/税额字段可见",
-        "line_items_product_title": "证明商品/服务行项目字段可见",
-        "signature_or_authorized_signatory": "证明签名/授权签署区域可见",
-    }
-    return labels.get(field, "证明字段原文可追溯")
-
-
-def _story_has_toc_level(story: list[Any], level: int) -> bool:
-    return any(getattr(item, "_tocLevel", None) == level for item in story)

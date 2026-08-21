@@ -1,4 +1,15 @@
 from app.compiler_runtime.kernel import compile_review_artifact
+from app.compiler_runtime.consumer import (
+    CanonicalConsumerPacket,
+    ConsumerClaim,
+    ConsumerLeafFinding,
+    ConsumerLineage,
+    ConsumerObligation,
+    ConsumerRootDecision,
+    derive_consumer_packet,
+    finalize_consumer_report,
+    partial_report_appendix,
+)
 from app.compiler_runtime.models import (
     AssessmentStatus,
     CheckAssessment,
@@ -13,14 +24,21 @@ from app.compiler_runtime.models import (
     ProofObligation,
     ProofPlan,
     ReviewArtifact,
+    StrongStatusLink,
 )
 
 __all__ = [
     "AssessmentStatus",
+    "CanonicalConsumerPacket",
     "CheckAssessment",
     "Claim",
     "CompilationDiagnostic",
     "CompiledProof",
+    "ConsumerClaim",
+    "ConsumerLeafFinding",
+    "ConsumerLineage",
+    "ConsumerObligation",
+    "ConsumerRootDecision",
     "DecisionProof",
     "EvidenceIR",
     "NodeKind",
@@ -29,5 +47,9 @@ __all__ = [
     "ProofObligation",
     "ProofPlan",
     "ReviewArtifact",
+    "StrongStatusLink",
     "compile_review_artifact",
+    "derive_consumer_packet",
+    "finalize_consumer_report",
+    "partial_report_appendix",
 ]

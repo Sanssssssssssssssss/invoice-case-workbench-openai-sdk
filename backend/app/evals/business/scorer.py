@@ -17,11 +17,13 @@ from .models import (
     EvalSnapshot,
     EvalVeto,
     ExpectedFact,
+    FrameworkCheck,
+    FrameworkOracle,
     ScoreCheck,
 )
 
 
-SCORER_VERSION = "business_eval_scorer_v2.3"
+SCORER_VERSION = "business_eval_scorer_v2.6"
 
 STAGE_WEIGHTS: dict[str, Decimal] = {
     "understanding": Decimal("10"),
@@ -123,6 +125,36 @@ def score_business_eval(
         if item.get("check_id")
     }
     canonical_proof, stored_proof, kernel_error = _recompile_proof(state, artifact, proof)
+    canonical_node_results = {
+        str(item.get("node_id") or ""): item
+        for item in _dict_items(canonical_proof.get("node_results"))
+        if item.get("node_id")
+    }
+    stored_node_results = {
+        str(item.get("node_id") or ""): item
+        for item in _dict_items(stored_proof.get("node_results"))
+        if item.get("node_id")
+    }
+    # Business credit is granted only to the intersection of the NodeResult
+    # persisted by the run and the current Kernel replay.  A stale/forged
+    # stored result cannot earn points, and a later Kernel implementation
+    # cannot retroactively upgrade what the evaluated run actually admitted.
+    admitted_node_results = {
+        node_id: (
+            canonical_result
+            if _mapping(stored_node_results.get(node_id)) == canonical_result
+            else {
+                "node_id": node_id,
+                "kind": canonical_result.get("kind", "CHECK"),
+                "status": "NOT_FOUND",
+                "claim_ids": [],
+                "binding_ids": [],
+                "witness_ids": [],
+                "source_ids": [],
+            }
+        )
+        for node_id, canonical_result in canonical_node_results.items()
+    }
     canonical_decision = next(
         (
             item
@@ -190,38 +222,60 @@ def score_business_eval(
         for node_id in reachable_ids
         if node_id in nodes and str(nodes[node_id].get("kind") or "") == "CHECK"
     }
-    milestone_matches = _match_milestones(required_milestones, target_checks)
-    verification_checks = {
-        check_id: {
-            **node,
-            "statement": "\n".join(
-                (
-                    str(node.get("statement") or ""),
-                    str(_mapping(assessments.get(check_id)).get("reason") or ""),
-                )
-            ),
-        }
-        for check_id, node in target_checks.items()
-    }
-    verification_milestone_matches = _match_milestones(
-        required_milestones,
-        verification_checks,
-    )
+    # Facets route a freely-shaped ProofPlan into Oracle milestones.  They are
+    # structural types, not semantic truth: statement meaning is scored below
+    # as an independent compiler-understanding diagnostic.  Evidence and
+    # arithmetic scoring deliberately continue from the facet route even when
+    # that diagnostic fails, so wording cannot zero an otherwise grounded
+    # typed proof graph.
+    milestone_matches = _match_milestone_facets(required_milestones, target_checks)
     for milestone, points in zip(
         required_milestones,
         _split_points(Decimal("5"), len(required_milestones)),
     ):
-        matched_ids = sorted(milestone_matches.get(milestone.id, set()))
+        facet_ids = sorted(milestone_matches.get(milestone.id, set()))
+        statement_hits = {
+            check_id: _meaning_group_indexes(
+                str(target_checks[check_id].get("statement") or ""),
+                milestone.statement_meaning,
+            )
+            for check_id in facet_ids
+        }
+        matched_ids = [check_id for check_id in facet_ids if statement_hits[check_id]]
+        covered_groups = set().union(*statement_hits.values()) if statement_hits else set()
+        group_count = len(milestone.statement_meaning.all_of)
+        required_group_count = max(1, (group_count * 3 + 4) // 5)
+        # One typed facet may legitimately be implemented by several CHECKs,
+        # including distinct business paths under the same facet.  Extra
+        # CHECKs do not have to repeat every milestone phrase; collectively
+        # they must still express the milestone's business meaning.
+        semantic_ok = bool(facet_ids) and len(covered_groups) >= required_group_count
+        facet_points = (points * Decimal("0.60")).quantize(Decimal("0.01"))
+        semantic_points = points - facet_points
         add(
             f"understanding.milestone.{milestone.id}",
             "understanding",
-            points,
-            bool(matched_ids),
+            facet_points,
+            bool(facet_ids),
             core=True,
-            expected=milestone.statement_meaning.all_of,
-            observed=[target_checks[item].get("statement", "") for item in matched_ids]
-            or ["未匹配"],
-            detail="每个必要业务里程碑可由一个或多个可达 CHECK 表达；ID、顺序和拆分方式不限。",
+            expected="target-root facet route",
+            observed={"facet_check_ids": facet_ids},
+            detail="目标 root 下必须有 facet_refs 对应该里程碑的 CHECK。",
+        )
+        add(
+            f"understanding.milestone_semantics.{milestone.id}",
+            "understanding",
+            semantic_points,
+            semantic_ok,
+            core=True,
+            expected="CHECK statement matches milestone.statement_meaning",
+            observed={
+                "facet_check_ids": facet_ids,
+                "relevant_check_ids": matched_ids,
+                "covered_groups": len(covered_groups),
+                "required_groups": required_group_count,
+            },
+            detail="facet 不是语义真值；CHECK 文案独立诊断且不级联清零 typed proof。",
         )
 
     claims = _dict_items(_mapping(artifact.get("evidence_ir")).get("claims"))
@@ -244,13 +298,16 @@ def score_business_eval(
         for claim in claims
         if _claim_is_grounded(claim, source_ids=source_ids, source_content=source_content)
     }
-    relevant_assessments = [
-        assessments[node_id] for node_id in reachable_ids if node_id in assessments
+    relevant_node_results = [
+        admitted_node_results[node_id]
+        for node_id in reachable_ids
+        if node_id in admitted_node_results
+        and str(_mapping(nodes.get(node_id)).get("kind") or "") == "CHECK"
     ]
     relevant_claim_ids = {
         str(claim_id)
-        for assessment in relevant_assessments
-        for claim_id in _list(assessment.get("claim_ids"))
+        for result in relevant_node_results
+        for claim_id in _list(result.get("claim_ids"))
         if str(claim_id)
     }
     evidence_facts = [
@@ -265,9 +322,27 @@ def score_business_eval(
         source_roles=source_roles,
         source_content=source_content,
     )
+    fact_owner_claim_ids = {
+        fact.id: {
+            str(claim_id)
+            for milestone in required_milestones
+            if fact.id in milestone.fact_ids
+            for check_id in milestone_matches.get(milestone.id, set())
+            for claim_id in _list(
+                _mapping(admitted_node_results.get(check_id)).get("claim_ids")
+            )
+            if str(claim_id)
+        }
+        for fact in evidence_facts
+    }
+    evidence_fact_claim_ids = {
+        fact.id: fact_claim_ids.get(fact.id, set())
+        & fact_owner_claim_ids.get(fact.id, set())
+        for fact in evidence_facts
+    }
     evidence_assignments = _unique_fact_assignments(
         [fact.id for fact in evidence_facts],
-        fact_claim_ids=fact_claim_ids,
+        fact_claim_ids=evidence_fact_claim_ids,
         allowed_claim_ids=relevant_claim_ids,
     )
     evidence_fact_results: list[bool] = []
@@ -283,24 +358,35 @@ def score_business_eval(
             core=True,
             expected=_fact_expected(fact),
             observed=[linked_id] if linked_id else "目标 Proof 未引用匹配的落源 Claim",
-            detail="只读取 Claim.value，并核对 quote、locator、来源角色及目标 Assessment 引用。",
+            detail=(
+                "只计目标 facet 的 Kernel Claim；核对值、币种、来源定位与业务语义。"
+            ),
         )
     if not evidence_facts:
         add("evidence.no_required_facts", "evidence", 12, True)
 
-    scoring_milestone_matches = {
-        milestone.id: (
-            set(verification_milestone_matches.get(milestone.id, set()))
-            or _fallback_milestone_checks(
-                milestone,
-                target_checks=target_checks,
-                assessments=assessments,
-                fact_claim_ids=fact_claim_ids,
-                facts=oracle.facts,
-            )
-        )
-        for milestone in required_milestones
+    facts_by_id = {item.id: item for item in oracle.facts}
+    relations_by_id = {item.id: item for item in oracle.relations}
+    relation_owner = {
+        relation_id: milestone
+        for milestone in oracle.milestones
+        for relation_id in milestone.relation_ids
     }
+    relation_matches = _match_typed_relation_witnesses(
+        oracle.relations,
+        relation_owner=relation_owner,
+        milestone_check_ids=milestone_matches,
+        canonical_node_results=admitted_node_results,
+        calculation_witnesses=_dict_items(artifact.get("calculation_witnesses")),
+        facts_by_id=facts_by_id,
+        fact_claim_ids=fact_claim_ids,
+    )
+    scoring_milestone_matches = _refine_shared_facet_matches(
+        required_milestones,
+        milestone_matches,
+        relation_matches=relation_matches,
+        checks=target_checks,
+    )
 
     milestone_link_results: list[bool] = []
     for milestone, points in zip(
@@ -308,6 +394,14 @@ def score_business_eval(
         _split_points(Decimal("8"), len(required_milestones)),
     ):
         check_ids = sorted(scoring_milestone_matches.get(milestone.id, set()))
+        accepted_claim_ids = {
+            str(claim_id)
+            for check_id in check_ids
+            for claim_id in _list(
+                _mapping(admitted_node_results.get(check_id)).get("claim_ids")
+            )
+            if str(claim_id)
+        }
         required_source_facts = [
             fact_id
             for fact_id in milestone.fact_ids
@@ -316,9 +410,23 @@ def score_business_eval(
         assignments = _unique_fact_assignments(
             required_source_facts,
             fact_claim_ids=fact_claim_ids,
-            allowed_claim_ids=relevant_claim_ids,
+            allowed_claim_ids=accepted_claim_ids,
         )
-        missing = [fact_id for fact_id in required_source_facts if fact_id not in assignments]
+        relation_covered_facts = {
+            fact_id
+            for relation_id in milestone.relation_ids
+            if relation_id in relation_matches
+            for fact_id in (
+                *relations_by_id[relation_id].input_fact_ids,
+                relations_by_id[relation_id].output_fact_id,
+            )
+            if fact_id
+        }
+        missing = [
+            fact_id
+            for fact_id in required_source_facts
+            if fact_id not in assignments and fact_id not in relation_covered_facts
+        ]
         linked = not missing
         milestone_link_results.append(linked)
         add(
@@ -329,7 +437,7 @@ def score_business_eval(
             core=True,
             expected=required_source_facts,
             observed={"check_ids": check_ids, "missing_fact_ids": missing},
-            detail="里程碑的 Assessment 必须实际引用完成该核查所需的来源事实。",
+            detail="里程碑 facet 的 Kernel NodeResult 必须接纳所需来源事实。",
         )
     if not required_milestones:
         add("evidence.no_required_milestones", "evidence", 8, True)
@@ -338,7 +446,7 @@ def score_business_eval(
         relevant_claim_ids,
         grounded_claim_ids=grounded_claim_ids,
         claims=claims,
-        assessments=relevant_assessments,
+        assessments=relevant_node_results,
     )
     # A grounding veto is reserved for invalid canonical Claim/source links.
     # Missing business facts are already strict core failures (and therefore
@@ -351,7 +459,12 @@ def score_business_eval(
         _split_points(Decimal("8"), len(required_milestones)),
     ):
         check_ids = sorted(scoring_milestone_matches.get(milestone.id, set()))
-        observed_status = _aggregate_milestone_status(check_ids, assessments)
+        observed_status = _aggregate_milestone_status(
+            check_ids,
+            admitted_node_results,
+            root_id=root_id,
+            nodes=nodes,
+        )
         passed = bool(check_ids) and observed_status == milestone.expected_status
         milestone_status_results.append(passed)
         add(
@@ -364,28 +477,21 @@ def score_business_eval(
             observed={"check_ids": check_ids, "status": observed_status or "缺失"},
         )
 
-    facts_by_id = {item.id: item for item in oracle.facts}
-    relations_by_id = {item.id: item for item in oracle.relations}
-    relation_owner = {
-        relation_id: milestone
-        for milestone in oracle.milestones
-        for relation_id in milestone.relation_ids
-    }
     relation_results: list[bool] = []
-    relation_matches = _match_relation_witnesses(
-        oracle.relations,
-        candidate_check_ids=sorted(target_checks),
-        assessments=assessments,
-        facts_by_id=facts_by_id,
-        fact_claim_ids=fact_claim_ids,
-        relevant_claim_ids=relevant_claim_ids,
-    )
     relation_points = _relation_points(oracle.milestones, oracle.relations, Decimal("14"))
     for relation in oracle.relations:
         milestone = relation_owner.get(relation.id)
         match = relation_matches.get(relation.id)
         check_id = match[0] if match else ""
-        assessment = assessments.get(check_id, {})
+        witness_id = match[1] if match else ""
+        witness = next(
+            (
+                item
+                for item in _dict_items(artifact.get("calculation_witnesses"))
+                if str(item.get("id") or "") == witness_id
+            ),
+            {},
+        )
         passed = match is not None
         relation_results.append(passed)
         add(
@@ -395,8 +501,14 @@ def score_business_eval(
             passed,
             core=True,
             expected=_relation_expected(relation, facts_by_id),
-            observed={"check_id": check_id, "reason": str(assessment.get("reason") or "")},
-            detail="Oracle 独立复算；理由必须表达运算，而不能只堆出几个正确数字。",
+            observed={
+                "check_id": check_id,
+                "witness_id": witness_id,
+                "operation": str(witness.get("operation") or ""),
+            },
+            detail=(
+                "只认 Kernel 接纳 Witness 的 operation、递归 operands 与 result；不读 reason。"
+            ),
         )
     if not oracle.relations:
         add("reasoning.no_required_relations", "reasoning", 14, True)
@@ -422,7 +534,18 @@ def score_business_eval(
             detail="只检查模型明确写出的等式；缺少等式由 relation 检查扣分，不在此处猜测。",
         )
 
-    report_text = "\n".join(item.text for item in snapshot.reports if item.text)
+    canonical_markdown_text = "\n".join(
+        item.text for item in snapshot.reports if item.kind == "markdown" and item.text
+    )
+    canonical_pdf_text = _canonical_pdf_body(
+        "\n".join(
+            item.text for item in snapshot.reports if item.kind == "pdf" and item.text
+        )
+    )
+    # Business assertions come from the canonical Markdown.  The PDF may carry
+    # a clearly labelled raw-material appendix for human inspection; OCR labels
+    # in that appendix are evidence previews, not system conclusions.
+    report_text = canonical_markdown_text
     reply_text = _conversation_text(snapshot.conversation, role="assistant", final_only=True)
     all_checks = {
         node_id: node
@@ -524,11 +647,6 @@ def score_business_eval(
     node_results = {
         str(item.get("node_id") or ""): item
         for item in _dict_items(proof.get("node_results"))
-        if item.get("node_id")
-    }
-    canonical_node_results = {
-        str(item.get("node_id") or ""): item
-        for item in _dict_items(canonical_proof.get("node_results"))
         if item.get("node_id")
     }
     replayed_by_node = {
@@ -637,10 +755,8 @@ def score_business_eval(
     )
 
     report_text_by_kind = {
-        kind: "\n".join(
-            item.text for item in snapshot.reports if item.kind == kind and item.text
-        )
-        for kind in ("markdown", "pdf")
+        "markdown": canonical_markdown_text,
+        "pdf": canonical_pdf_text,
     }
     if case.report_required:
         kinds = {
@@ -677,23 +793,46 @@ def score_business_eval(
             )
         if not report_facts:
             add("report.no_required_facts", "report", 6, True)
-        meaning_matches = {
-            kind: _affirmative_document_groups_match(
-                report_text_by_kind[kind], oracle.communication.required_meanings
-            )
-            for kind in ("markdown", "pdf")
-        }
-        report_meaning_ok = all(meaning_matches.values())
+        missing_milestones = [
+            milestone
+            for milestone in required_milestones
+            if milestone.expected_status == "NOT_FOUND"
+            and milestone.missing_meaning is not None
+        ]
+        meaning_points = _split_points(
+            Decimal("4"),
+            1 + len(missing_milestones),
+        )
+        report_meaning_ok = _required_business_meanings_match(
+            canonical_markdown_text,
+            oracle=oracle,
+            facts_by_id=facts_by_id,
+        )
         add(
             "report.business_meaning",
             "report",
-            4,
+            meaning_points[0],
             report_meaning_ok,
             core=True,
             expected=oracle.communication.required_meanings,
-            observed=meaning_matches,
-            detail="Markdown 与 PDF 必须分别表达全部必要业务含义。",
+            observed={"canonical_markdown": report_meaning_ok},
+            detail="业务结论只认 canonical Markdown；PDF 原始材料附录不参与结论评分。",
         )
+        for milestone, points in zip(missing_milestones, meaning_points[1:]):
+            missing_match = _scoped_missing_meaning_matches(
+                canonical_markdown_text,
+                milestone.missing_meaning,
+            )
+            add(
+                f"report.missing_meaning.{milestone.id}",
+                "report",
+                points,
+                missing_match,
+                core=True,
+                expected=milestone.missing_meaning.all_of,
+                observed={"canonical_markdown": missing_match},
+                detail="NOT_FOUND 报告必须说明阻断该里程碑的具体证据缺口。",
+            )
     else:
         add("report.not_required", "report", 15, True)
 
@@ -711,8 +850,10 @@ def score_business_eval(
         )
     if not reply_facts:
         add("communication.no_required_facts", "communication", 4, True)
-    meanings_ok = _affirmative_document_groups_match(
-        reply_text, oracle.communication.required_meanings
+    meanings_ok = _required_business_meanings_match(
+        reply_text,
+        oracle=oracle,
+        facts_by_id=facts_by_id,
     )
     add(
         "communication.required_meanings",
@@ -885,19 +1026,29 @@ def score_business_eval(
         ),
         "",
     )
-    passed = not vetoes and not failed_core and score >= Decimal("90")
+    business_passed = not vetoes and not failed_core and score >= Decimal("90")
+    framework_score, framework_passed, framework_checks = _score_framework_protocol(
+        oracle.framework,
+        snapshot,
+    )
+    passed = business_passed and (framework_passed if oracle.framework is not None else True)
     return EvalResult(
         case_id=case.case_id,
         case_version=case.case_version,
         run_id=snapshot.run_id,
         scorer_version=SCORER_VERSION,
         passed=passed,
+        business_passed=business_passed,
         score=score,
         raw_score=raw_score,
         score_cap=score_cap,
         score_cap_reason=score_cap_reason,
         first_failed_stage=first_failed_stage,
         checks=checks,
+        framework_enabled=oracle.framework is not None,
+        framework_score=framework_score,
+        framework_passed=framework_passed,
+        framework_checks=framework_checks,
         vetoes=vetoes,
         engineering=_engineering_metrics(snapshot),
     )
@@ -939,144 +1090,178 @@ def _meaning_oracle_matches(text: str, meaning: Any) -> bool:
     return _meaning_groups_match(text, list(getattr(meaning, "all_of", [])))
 
 
-def _match_milestones(
-    milestones: list[Any],
-    checks: dict[str, dict[str, Any]],
-) -> dict[str, set[str]]:
-    """Assign one or more CHECKs to each milestone without fixing ids or shape.
-
-    A CHECK may belong to only one milestone, so one omnibus statement cannot
-    impersonate several independent business checks.  Unambiguous sibling
-    CHECKs are then added to the same milestone, which permits FineVerify-style
-    decompositions such as one CHECK per invoice line.
-    """
-    candidates = {
-        milestone.id: [
-            check_id
-            for check_id, node in sorted(checks.items())
-            if _meaning_oracle_matches(str(node.get("statement") or ""), milestone.statement_meaning)
-        ]
-        for milestone in milestones
-    }
-    owner: dict[str, str] = {}
-    anchors: dict[str, str] = {}
-
-    def assign(milestone_id: str, seen: set[str]) -> bool:
-        for check_id in candidates.get(milestone_id, []):
-            if check_id in seen:
-                continue
-            seen.add(check_id)
-            previous = owner.get(check_id)
-            if previous is None or assign(previous, seen):
-                owner[check_id] = milestone_id
-                anchors[milestone_id] = check_id
-                return True
-        return False
-
-    for milestone in sorted(milestones, key=lambda item: (len(candidates[item.id]), item.id)):
-        assign(milestone.id, set())
-
-    matched = {
-        milestone.id: ({anchors[milestone.id]} if milestone.id in anchors else set())
-        for milestone in milestones
-    }
-    owned = set(owner)
-    for check_id in sorted(set(checks) - owned):
-        possible = [
-            milestone.id
-            for milestone in milestones
-            if check_id in candidates.get(milestone.id, [])
-        ]
-        if len(possible) == 1 and possible[0] in anchors:
-            matched[possible[0]].add(check_id)
-    return matched
-
-
-def _meaning_group_count(text: str, meaning: Any) -> int:
-    """Count semantic groups expressed by a CHECK without requiring exact prose."""
+def _meaning_group_indexes(text: str, meaning: Any) -> set[int]:
+    """Return the Oracle meaning groups touched by one atomic CHECK statement."""
     normalized = _semantic_normalized(text)
-    return sum(
-        1
-        for group in list(getattr(meaning, "all_of", []))
+    return {
+        index
+        for index, group in enumerate(list(getattr(meaning, "all_of", [])))
         if any(
             (needle := _semantic_normalized(option)) and needle in normalized
             for option in group
         )
+    }
+
+
+def _identifier_terms(value: Any) -> set[str]:
+    """Normalize structural ids without introducing a business alias table."""
+    terms: set[str] = set()
+    for raw in re.findall(r"[a-z0-9]+", str(value or "").casefold()):
+        if raw.endswith("ies") and len(raw) > 4:
+            raw = f"{raw[:-3]}y"
+        elif raw.endswith("s") and not raw.endswith("ss") and len(raw) > 3:
+            raw = raw[:-1]
+        terms.add(raw)
+    return terms
+
+
+def _facet_corresponds_to_milestone(facet_ref: str, milestone_id: str) -> bool:
+    """Match a tiny Signature facet to a possibly more descriptive Oracle id.
+
+    Exact ids are preferred.  A two-or-more-token structural id may also be a
+    subset of the other side, which covers e.g. ``final_total`` →
+    ``final_total_reconciliation`` and ``stated_components`` →
+    ``stated_component_rate_base_validation`` without a case-specific alias
+    registry.  A generic one-token overlap such as ``total`` is never enough.
+    """
+    facet = _semantic_normalized(facet_ref)
+    milestone = _semantic_normalized(milestone_id)
+    if not facet or not milestone:
+        return False
+    if facet == milestone:
+        return True
+    facet_terms = _identifier_terms(facet_ref)
+    milestone_terms = _identifier_terms(milestone_id)
+    smaller = min(len(facet_terms), len(milestone_terms))
+    return smaller >= 2 and (
+        facet_terms.issubset(milestone_terms)
+        or milestone_terms.issubset(facet_terms)
     )
 
 
-def _fallback_milestone_checks(
-    milestone: Any,
-    *,
-    target_checks: dict[str, dict[str, Any]],
-    assessments: dict[str, dict[str, Any]],
-    fact_claim_ids: dict[str, set[str]],
-    facts: list[ExpectedFact],
-) -> set[str]:
-    """Recover a semantically close CHECK when valid wording differs from the oracle.
-
-    This fallback is deliberately evidence constrained: a candidate must cite all
-    source facts required by the milestone.  Among those candidates, only the
-    strongest semantic match is retained.  It therefore accepts legitimate
-    phrasing such as ``components are calculated correctly`` without letting an
-    unrelated final-total CHECK impersonate the component check.
-    """
-    source_fact_ids = [
-        fact_id
-        for fact_id in milestone.fact_ids
-        if any(fact.id == fact_id and fact.origin == "source" for fact in facts)
-    ]
-    if not source_fact_ids:
-        return set()
-
-    candidates: list[tuple[int, str]] = []
-    for check_id, node in sorted(target_checks.items()):
-        assessment = _mapping(assessments.get(check_id))
-        cited_claim_ids = {
-            str(claim_id)
-            for claim_id in _list(assessment.get("claim_ids"))
-            if str(claim_id)
-        }
-        assignments = _unique_fact_assignments(
-            source_fact_ids,
-            fact_claim_ids=fact_claim_ids,
-            allowed_claim_ids=cited_claim_ids,
-        )
-        if len(assignments) != len(source_fact_ids):
-            continue
-        text = "\n".join(
-            (
-                str(node.get("statement") or ""),
-                str(assessment.get("reason") or ""),
+def _match_milestone_facets(
+    milestones: list[Any],
+    checks: dict[str, dict[str, Any]],
+) -> dict[str, set[str]]:
+    """Route target-root CHECKs by typed facet; never inspect prose here."""
+    return {
+        milestone.id: {
+            check_id
+            for check_id, node in checks.items()
+            if any(
+                (
+                    _semantic_normalized(facet_ref)
+                    == _semantic_normalized(milestone.facet_ref)
+                    if str(getattr(milestone, "facet_ref", ""))
+                    else _facet_corresponds_to_milestone(
+                        str(facet_ref),
+                        milestone.id,
+                    )
+                )
+                for facet_ref in _list(node.get("facet_refs"))
             )
-        )
-        candidates.append((_meaning_group_count(text, milestone.statement_meaning), check_id))
+        }
+        for milestone in milestones
+    }
 
-    if not candidates:
-        return set()
-    strongest = max(score for score, _ in candidates)
-    group_count = len(list(getattr(milestone.statement_meaning, "all_of", [])))
-    if strongest < max(1, (group_count + 1) // 2):
-        return set()
-    return {check_id for score, check_id in candidates if score == strongest}
+
+def _refine_shared_facet_matches(
+    milestones: list[Any],
+    initial: dict[str, set[str]],
+    *,
+    relation_matches: dict[str, tuple[str, str]],
+    checks: dict[str, dict[str, Any]],
+) -> dict[str, set[str]]:
+    """Separate multiple milestone paths that intentionally share one facet.
+
+    Facets remain the only routing type.  When the Oracle has two semantic
+    paths under that type, the accepted relation Witness owners identify the
+    path without comparing against the expected status.  Relation-free
+    semantic milestones may use their CHECK meaning; if neither signal exists
+    the complete facet route is retained rather than guessed.
+    """
+    result = {milestone_id: set(check_ids) for milestone_id, check_ids in initial.items()}
+    by_facet: dict[str, list[Any]] = {}
+    for milestone in milestones:
+        facet_ref = str(getattr(milestone, "facet_ref", "") or milestone.id)
+        by_facet.setdefault(_semantic_normalized(facet_ref), []).append(milestone)
+    for shared in by_facet.values():
+        if len(shared) < 2:
+            continue
+        for milestone in shared:
+            relation_check_ids = {
+                relation_matches[relation_id][0]
+                for relation_id in milestone.relation_ids
+                if relation_id in relation_matches
+            }
+            if relation_check_ids:
+                result[milestone.id] = relation_check_ids
+                continue
+            semantic_check_ids = {
+                check_id
+                for check_id in initial.get(milestone.id, set())
+                if _meaning_oracle_matches(
+                    str(_mapping(checks.get(check_id)).get("statement") or ""),
+                    milestone.statement_meaning,
+                )
+            }
+            if semantic_check_ids:
+                result[milestone.id] = semantic_check_ids
+    return result
 
 
 def _aggregate_milestone_status(
     check_ids: list[str],
     assessments: dict[str, dict[str, Any]],
+    *,
+    root_id: str,
+    nodes: dict[str, dict[str, Any]],
 ) -> str:
-    """Aggregate a decomposed milestone with the same three-valued ALL logic."""
+    """Project a milestone through the ProofPlan's actual ALL/ANY topology."""
     if not check_ids:
         return ""
-    statuses = [
-        str(_mapping(assessments.get(check_id)).get("status") or "NOT_FOUND")
-        for check_id in check_ids
-    ]
-    if "CONTRADICTED" in statuses:
-        return "CONTRADICTED"
-    if "NOT_FOUND" in statuses:
-        return "NOT_FOUND"
-    return "SUPPORTED"
+    selected = set(check_ids)
+    memo: dict[str, str | None] = {}
+
+    def project(node_id: str) -> str | None:
+        if node_id in memo:
+            return memo[node_id]
+        node = _mapping(nodes.get(node_id))
+        kind = str(node.get("kind") or "")
+        if kind == "CHECK":
+            result = (
+                str(_mapping(assessments.get(node_id)).get("status") or "NOT_FOUND")
+                if node_id in selected
+                else None
+            )
+            memo[node_id] = result
+            return result
+        child_statuses = [
+            status
+            for child_id in _list(node.get("depends_on"))
+            if (status := project(str(child_id))) is not None
+        ]
+        if not child_statuses:
+            memo[node_id] = None
+            return None
+        if kind == "ANY":
+            if "SUPPORTED" in child_statuses:
+                result = "SUPPORTED"
+            elif all(item == "CONTRADICTED" for item in child_statuses):
+                result = "CONTRADICTED"
+            else:
+                result = "NOT_FOUND"
+        else:
+            if "CONTRADICTED" in child_statuses:
+                result = "CONTRADICTED"
+            elif all(item == "SUPPORTED" for item in child_statuses):
+                result = "SUPPORTED"
+            else:
+                result = "NOT_FOUND"
+        memo[node_id] = result
+        return result
+
+    return project(root_id) or ""
 
 
 def _source_role(item: dict[str, Any]) -> str:
@@ -1150,7 +1335,49 @@ def _claim_currency_matches(
     currencies.update(
         currency for symbol, currency in _CURRENCY_SYMBOLS.items() if symbol in explicit
     )
-    return not currencies or currencies == {expected}
+    return currencies == {expected}
+
+
+def _claim_semantics_match_source_fact(
+    fact: ExpectedFact,
+    claim: dict[str, Any],
+) -> bool:
+    """Require a business role, while tolerating compact runtime predicates.
+
+    Runtime Claims commonly use compact predicates such as ``has_total`` or
+    ``has_amount``.  The latter is meaningful only together with a subject such
+    as ``line item 1``.  We therefore first require the normal predicate match,
+    then permit a narrow token-composition fallback across subject+predicate.
+    Exact Oracle quote/source/locator/value/currency checks remain mandatory in
+    the caller, so a weather predicate or a similarly-valued foreign Claim
+    cannot pass merely by sharing a number.
+    """
+    if not fact.predicate_options:
+        return True
+    if _predicate_matches_options(claim.get("predicate"), fact.predicate_options):
+        return True
+    observed = _identifier_terms(
+        f"{claim.get('subject', '')} {claim.get('predicate', '')}"
+    ) - {"has", "have", "is", "invoice", "document"}
+    if not observed:
+        return False
+    for option in fact.predicate_options:
+        expected = _identifier_terms(option)
+        if not expected:
+            continue
+        # Multi-token roles may be composed from subject + predicate
+        # (``line item`` + ``amount``).  For a one-token role, exact token
+        # identity is still required; substrings never count.
+        if expected.issubset(observed):
+            return True
+        predicate_terms = _identifier_terms(claim.get("predicate")) - {
+            "has",
+            "have",
+            "is",
+        }
+        if predicate_terms and predicate_terms.issubset(expected):
+            return True
+    return False
 
 
 def _locator_supports_quote(content: str, *, locator: str, quote: str) -> bool:
@@ -1204,9 +1431,7 @@ def _claim_matches_source_fact(
     source_id = str(claim.get("source_id") or "")
     if fact.source_role and source_roles.get(source_id, "") != _normalized(fact.source_role):
         return False
-    if fact.predicate_options and not _predicate_matches_options(
-        claim.get("predicate"), fact.predicate_options
-    ):
+    if not _claim_semantics_match_source_fact(fact, claim):
         return False
     actual_quote = _normalized(claim.get("quote"))
     expected_quote = _normalized(fact.source_quote)
@@ -1351,31 +1576,6 @@ def _relation_expected(relation: Any, facts_by_id: dict[str, ExpectedFact]) -> d
             else relation.expected_boolean
         ),
     }
-
-
-def _relation_math_is_valid(relation: Any, facts_by_id: dict[str, ExpectedFact]) -> bool:
-    values = [_decimal_value(facts_by_id[item]) for item in relation.input_fact_ids if item in facts_by_id]
-    if len(values) != len(relation.input_fact_ids) or any(item is None for item in values):
-        return False
-    numbers = [item for item in values if item is not None]
-    operation = relation.operation
-    if operation == "greater_than":
-        return len(numbers) == 2 and (numbers[0] > numbers[1]) is relation.expected_boolean
-    if not relation.output_fact_id or relation.output_fact_id not in facts_by_id:
-        return False
-    output_fact = facts_by_id[relation.output_fact_id]
-    expected_output = _decimal_value(output_fact)
-    if expected_output is None:
-        return False
-    if operation == "multiply" and len(numbers) == 2:
-        actual = numbers[0] * numbers[1]
-    elif operation == "sum" and numbers:
-        actual = sum(numbers, Decimal("0"))
-    elif operation == "absolute_difference" and len(numbers) == 2:
-        actual = abs(numbers[0] - numbers[1])
-    else:
-        return False
-    return abs(actual - expected_output) <= output_fact.tolerance
 
 
 _EQUATION_NUMBER = rf"[-+]?{_LOCALIZED_UNSIGNED_NUMBER}"
@@ -1714,118 +1914,455 @@ def _equation_is_disclaimed(reason: str, span: tuple[int, int]) -> bool:
     )
 
 
-def _decimal_multiset(values: list[Decimal] | tuple[Decimal, ...]) -> list[Decimal]:
-    return sorted(values)
+_ORACLE_TO_WITNESS_OPERATION = {
+    "multiply": "MULTIPLY",
+    "sum": "SUM",
+    "absolute_difference": "ABS_DIFF",
+    "greater_than": "GREATER_THAN",
+}
 
 
-def _witness_matches_relation(
-    witness: tuple[str, tuple[Decimal, ...], Decimal | None],
-    relation: Any,
-    facts_by_id: dict[str, ExpectedFact],
+def _typed_decimal(value: Any) -> Decimal | None:
+    if isinstance(value, bool) or value is None or isinstance(value, float):
+        return None
+    try:
+        result = value if isinstance(value, Decimal) else Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return None
+    return result if result.is_finite() else None
+
+
+def _typed_value_matches_fact(
+    fact: ExpectedFact,
+    value: Any,
+    *,
+    currency: Any,
 ) -> bool:
-    if not _relation_math_is_valid(relation, facts_by_id):
+    expected = _decimal_value(fact)
+    observed = _typed_decimal(value)
+    if expected is None or observed is None or abs(observed - expected) > fact.tolerance:
         return False
-    inputs = [_decimal_value(facts_by_id[item]) for item in relation.input_fact_ids]
-    if any(item is None for item in inputs):
-        return False
-    expected_inputs = [item for item in inputs if item is not None]
-    kind, operands, result = witness
-    if relation.operation == "greater_than":
-        return (
-            kind == "greater_than"
-            and tuple(expected_inputs) == operands
-            and bool(expected_inputs[0] > expected_inputs[1]) is relation.expected_boolean
-        )
-    if not relation.output_fact_id:
-        return False
-    output_fact = facts_by_id[relation.output_fact_id]
-    expected_output = _decimal_value(output_fact)
-    if expected_output is None or result is None or abs(result - expected_output) > output_fact.tolerance:
-        return False
-    if relation.operation == "multiply":
-        return kind == "multiply" and _decimal_multiset(operands) == _decimal_multiset(expected_inputs)
-    if relation.operation == "sum":
-        return kind == "additive" and _decimal_multiset(operands) == _decimal_multiset(expected_inputs)
-    if relation.operation == "absolute_difference":
-        if kind == "absolute_difference":
-            return _decimal_multiset(operands) == _decimal_multiset(expected_inputs)
-        return kind == "additive" and _decimal_multiset(
-            [abs(item) for item in operands]
-        ) == _decimal_multiset([abs(item) for item in expected_inputs])
-    return False
+    expected_currency = fact.currency.strip().upper()
+    observed_currency = str(currency or "").strip().upper()
+    return not expected_currency or observed_currency == expected_currency
 
 
-def _relation_has_claim_coverage(
-    relation: Any,
+def _operand_fact_candidates(
+    operand: dict[str, Any],
     *,
     facts_by_id: dict[str, ExpectedFact],
-    fact_claim_ids: dict[str, set[str]],
-    allowed_claim_ids: set[str],
-) -> bool:
-    referenced = list(relation.input_fact_ids)
-    if relation.output_fact_id:
-        referenced.append(relation.output_fact_id)
-    source_facts = [
+    source_assignments: dict[str, str],
+    witness_outputs: dict[str, set[str]],
+    accepted_witness_ids: set[str],
+    witnesses_by_id: dict[str, dict[str, Any]],
+    fact_equivalences: dict[str, set[str]],
+    visiting: frozenset[str] = frozenset(),
+) -> set[str]:
+    ref = _mapping(operand.get("ref"))
+    kind = str(ref.get("kind") or "")
+    ref_id = str(ref.get("ref_id") or "")
+    candidates: set[str] = set()
+    if kind == "CLAIM":
+        candidates = {
+            fact_id
+            for fact_id, claim_id in source_assignments.items()
+            if claim_id == ref_id
+        }
+    elif kind == "POLICY":
+        candidates = {
+            fact_id
+            for fact_id, fact in facts_by_id.items()
+            if fact.origin == "policy" and fact.policy_ref == ref_id
+        }
+    elif kind == "WITNESS" and ref_id in accepted_witness_ids:
+        candidates = set(witness_outputs.get(ref_id, set()))
+        # SUM(x) is an identity expression.  This matters for a single-line
+        # subtotal that is used as an operand of an ABS_DIFF without requiring
+        # the Oracle to prescribe that intermediate Witness.
+        witness = _mapping(witnesses_by_id.get(ref_id))
+        if ref_id not in visiting and str(witness.get("operation") or "") == "SUM":
+            leaves = _flatten_associative_operands(
+                witness,
+                operation="SUM",
+                witnesses_by_id=witnesses_by_id,
+                accepted_witness_ids=accepted_witness_ids,
+                visiting=set(visiting),
+            )
+            if len(leaves) == 1:
+                candidates.update(
+                    _operand_fact_candidates(
+                        leaves[0],
+                        facts_by_id=facts_by_id,
+                        source_assignments=source_assignments,
+                        witness_outputs=witness_outputs,
+                        accepted_witness_ids=accepted_witness_ids,
+                        witnesses_by_id=witnesses_by_id,
+                        fact_equivalences=fact_equivalences,
+                        visiting=visiting | {ref_id},
+                    )
+                )
+    candidates = {
+        equivalent
+        for fact_id in candidates
+        for equivalent in fact_equivalences.get(fact_id, {fact_id})
+    }
+    return {
         fact_id
-        for fact_id in referenced
-        if facts_by_id[fact_id].origin == "source"
-    ]
-    return len(
-        _unique_fact_assignments(
-            source_facts,
-            fact_claim_ids=fact_claim_ids,
-            allowed_claim_ids=allowed_claim_ids,
+        for fact_id in candidates
+        if fact_id in facts_by_id
+        and _typed_value_matches_fact(
+            facts_by_id[fact_id],
+            operand.get("value"),
+            currency=operand.get("currency"),
         )
-    ) == len(source_facts)
+    }
 
 
-def _match_relation_witnesses(
-    relations: list[Any],
+def _flatten_associative_operands(
+    witness: dict[str, Any],
     *,
-    candidate_check_ids: list[str],
-    assessments: dict[str, dict[str, Any]],
+    operation: str,
+    witnesses_by_id: dict[str, dict[str, Any]],
+    accepted_witness_ids: set[str],
+    visiting: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Flatten only Kernel-admitted SUM/MULTIPLY parents of the same type."""
+    seen = set(visiting or set())
+    witness_id = str(witness.get("id") or "")
+    if witness_id:
+        if witness_id in seen:
+            return []
+        seen.add(witness_id)
+    flattened: list[dict[str, Any]] = []
+    for operand in _dict_items(witness.get("operands")):
+        ref = _mapping(operand.get("ref"))
+        parent_id = str(ref.get("ref_id") or "")
+        parent = _mapping(witnesses_by_id.get(parent_id))
+        if (
+            str(ref.get("kind") or "") == "WITNESS"
+            and parent_id in accepted_witness_ids
+            and parent_id not in seen
+            and str(parent.get("operation") or "") == operation
+        ):
+            flattened.extend(
+                _flatten_associative_operands(
+                    parent,
+                    operation=operation,
+                    witnesses_by_id=witnesses_by_id,
+                    accepted_witness_ids=accepted_witness_ids,
+                    visiting=seen,
+                )
+            )
+        else:
+            flattened.append(operand)
+    return flattened
+
+
+def _operands_match_relation_inputs(
+    operands: list[dict[str, Any]],
+    input_fact_ids: list[str],
+    *,
+    ordered: bool,
     facts_by_id: dict[str, ExpectedFact],
-    fact_claim_ids: dict[str, set[str]],
-    relevant_claim_ids: set[str],
-) -> dict[str, tuple[str, int]]:
-    """Maximum one-to-one Relation→equation matching across equivalent Plan shapes."""
-    witnesses: dict[tuple[str, int], tuple[str, tuple[Decimal, ...], Decimal | None]] = {}
-    candidates: dict[str, list[tuple[str, int]]] = {}
-    for relation in relations:
-        relation_candidates: list[tuple[str, int]] = []
-        for check_id in candidate_check_ids:
-            assessment = _mapping(assessments.get(check_id))
-            if not _relation_has_claim_coverage(
-                relation,
-                facts_by_id=facts_by_id,
-                fact_claim_ids=fact_claim_ids,
-                allowed_claim_ids=relevant_claim_ids,
-            ):
-                continue
-            for index, witness in enumerate(_equation_witnesses(str(assessment.get("reason") or ""))):
-                key = (check_id, index)
-                witnesses[key] = witness
-                if _witness_matches_relation(witness, relation, facts_by_id):
-                    relation_candidates.append(key)
-        candidates[relation.id] = relation_candidates
+    source_assignments: dict[str, str],
+    witness_outputs: dict[str, set[str]],
+    accepted_witness_ids: set[str],
+    witnesses_by_id: dict[str, dict[str, Any]],
+    fact_equivalences: dict[str, set[str]],
+) -> bool:
+    if len(operands) != len(input_fact_ids):
+        return False
+    candidates = [
+        _operand_fact_candidates(
+            operand,
+            facts_by_id=facts_by_id,
+            source_assignments=source_assignments,
+            witness_outputs=witness_outputs,
+            accepted_witness_ids=accepted_witness_ids,
+            witnesses_by_id=witnesses_by_id,
+            fact_equivalences=fact_equivalences,
+        )
+        for operand in operands
+    ]
+    if ordered:
+        return all(fact_id in candidates[index] for index, fact_id in enumerate(input_fact_ids))
 
-    owner: dict[tuple[str, int], str] = {}
-    matched: dict[str, tuple[str, int]] = {}
+    owner: dict[int, str] = {}
 
-    def assign(relation_id: str, seen: set[tuple[str, int]]) -> bool:
-        for witness_id in candidates.get(relation_id, []):
-            if witness_id in seen:
+    def assign(fact_id: str, seen: set[int]) -> bool:
+        for index, options in enumerate(candidates):
+            if index in seen or fact_id not in options:
                 continue
-            seen.add(witness_id)
-            previous = owner.get(witness_id)
+            seen.add(index)
+            previous = owner.get(index)
             if previous is None or assign(previous, seen):
-                owner[witness_id] = relation_id
-                matched[relation_id] = witness_id
+                owner[index] = fact_id
                 return True
         return False
 
-    for relation in sorted(relations, key=lambda item: (len(candidates[item.id]), item.id)):
-        assign(relation.id, set())
+    return all(assign(fact_id, set()) for fact_id in input_fact_ids)
+
+
+def _typed_witness_matches_relation(
+    witness: dict[str, Any],
+    relation: Any,
+    *,
+    milestone_facet_ref: str,
+    explicit_facet: bool,
+    source_assignments: dict[str, str],
+    facts_by_id: dict[str, ExpectedFact],
+    witness_outputs: dict[str, set[str]],
+    accepted_witness_ids: set[str],
+    witnesses_by_id: dict[str, dict[str, Any]],
+    fact_equivalences: dict[str, set[str]],
+) -> bool:
+    if str(witness.get("operation") or "") != _ORACLE_TO_WITNESS_OPERATION.get(
+        relation.operation
+    ):
+        return False
+    witness_facet = str(witness.get("facet_ref") or "")
+    if (
+        _semantic_normalized(witness_facet) != _semantic_normalized(milestone_facet_ref)
+        if explicit_facet
+        else not _facet_corresponds_to_milestone(witness_facet, milestone_facet_ref)
+    ):
+        return False
+    operation = str(witness.get("operation") or "")
+    operands = (
+        _flatten_associative_operands(
+            witness,
+            operation=operation,
+            witnesses_by_id=witnesses_by_id,
+            accepted_witness_ids=accepted_witness_ids,
+        )
+        if operation in {"SUM", "MULTIPLY"}
+        else _dict_items(witness.get("operands"))
+    )
+    if not _operands_match_relation_inputs(
+        operands,
+        list(relation.input_fact_ids),
+        ordered=relation.operation == "greater_than",
+        facts_by_id=facts_by_id,
+        source_assignments=source_assignments,
+        witness_outputs=witness_outputs,
+        accepted_witness_ids=accepted_witness_ids,
+        witnesses_by_id=witnesses_by_id,
+        fact_equivalences=fact_equivalences,
+    ):
+        return False
+    if relation.operation == "greater_than":
+        return isinstance(witness.get("result"), bool) and (
+            witness.get("result") is relation.expected_boolean
+        )
+    if not relation.output_fact_id or relation.output_fact_id not in facts_by_id:
+        return False
+    output_fact = facts_by_id[relation.output_fact_id]
+    if output_fact.origin == "source" and relation.output_fact_id not in source_assignments:
+        return False
+    return _typed_value_matches_fact(
+        output_fact,
+        witness.get("result"),
+        currency=witness.get("currency"),
+    )
+
+
+def _merge_fact_equivalence(
+    fact_ids: list[str],
+    equivalences: dict[str, set[str]],
+) -> None:
+    merged = set(fact_ids)
+    for fact_id in tuple(merged):
+        merged.update(equivalences.get(fact_id, {fact_id}))
+    for fact_id in merged:
+        equivalences[fact_id] = set(merged)
+
+
+def _witness_proves_within_tolerance(
+    witness_id: str,
+    *,
+    witnesses_by_id: dict[str, dict[str, Any]],
+    accepted_witness_ids: set[str],
+    facts_by_id: dict[str, ExpectedFact],
+) -> bool:
+    witness = _mapping(witnesses_by_id.get(witness_id))
+    result = _typed_decimal(witness.get("result"))
+    if result is None:
+        return False
+    if result == 0:
+        return True
+    for candidate_id in accepted_witness_ids:
+        candidate = _mapping(witnesses_by_id.get(candidate_id))
+        operands = _dict_items(candidate.get("operands"))
+        tolerance_ref = (
+            str(_mapping(operands[1].get("ref")).get("ref_id") or "")
+            if len(operands) == 2
+            else ""
+        )
+        declared_tolerance = any(
+            fact.origin == "policy" and fact.policy_ref == tolerance_ref
+            for fact in facts_by_id.values()
+        )
+        if (
+            str(candidate.get("operation") or "") == "GREATER_THAN"
+            and candidate.get("result") is False
+            and len(operands) == 2
+            and _mapping(operands[0].get("ref")).get("kind") == "WITNESS"
+            and str(_mapping(operands[0].get("ref")).get("ref_id") or "") == witness_id
+            and _mapping(operands[1].get("ref")).get("kind") == "POLICY"
+            and declared_tolerance
+        ):
+            return True
+    return False
+
+
+def _match_typed_relation_witnesses(
+    relations: list[Any],
+    *,
+    relation_owner: dict[str, Any],
+    milestone_check_ids: dict[str, set[str]],
+    canonical_node_results: dict[str, dict[str, Any]],
+    calculation_witnesses: list[dict[str, Any]],
+    facts_by_id: dict[str, ExpectedFact],
+    fact_claim_ids: dict[str, set[str]],
+) -> dict[str, tuple[str, str]]:
+    """Match Oracle relations against the Kernel-admitted typed proof graph.
+
+    The graph starts at grounded source Claims and policy refs.  Each matched
+    CalculationWitness contributes its typed output fact, allowing later
+    Witness refs to prove dependent relations.  Free-form assessment prose is
+    intentionally absent from this function.
+    """
+    witnesses_by_id = {
+        str(item.get("id") or ""): item
+        for item in calculation_witnesses
+        if item.get("id")
+    }
+    all_target_check_ids = {
+        check_id for check_ids in milestone_check_ids.values() for check_id in check_ids
+    }
+    accepted_witness_ids = {
+        str(witness_id)
+        for check_id in all_target_check_ids
+        for witness_id in _list(
+            _mapping(canonical_node_results.get(check_id)).get("witness_ids")
+        )
+        if str(witness_id)
+    }
+
+    source_assignments_by_milestone: dict[str, dict[str, str]] = {}
+    for milestone_id, check_ids in milestone_check_ids.items():
+        accepted_claim_ids = {
+            str(claim_id)
+            for check_id in check_ids
+            for claim_id in _list(
+                _mapping(canonical_node_results.get(check_id)).get("claim_ids")
+            )
+            if str(claim_id)
+        }
+        # A valid alternative path may use a source fact not named as an input
+        # in this Oracle milestone (for example a printed subtotal substituted
+        # for an independently proven line-derived subtotal).  It still has to
+        # be an admitted Claim of a candidate CHECK and match a declared fact.
+        source_fact_ids = [
+            fact_id
+            for fact_id in facts_by_id
+            if fact_id in facts_by_id and facts_by_id[fact_id].origin == "source"
+        ]
+        source_assignments_by_milestone[milestone_id] = _unique_fact_assignments(
+            source_fact_ids,
+            fact_claim_ids=fact_claim_ids,
+            allowed_claim_ids=accepted_claim_ids,
+        )
+
+    unresolved = {relation.id: relation for relation in relations}
+    used_witness_ids: set[str] = set()
+    witness_outputs: dict[str, set[str]] = {}
+    fact_equivalences = {fact_id: {fact_id} for fact_id in facts_by_id}
+    matched: dict[str, tuple[str, str]] = {}
+
+    while unresolved:
+        candidates: dict[str, list[tuple[str, str]]] = {}
+        for relation_id, relation in unresolved.items():
+            milestone = relation_owner.get(relation_id)
+            if milestone is None:
+                continue
+            milestone_id = str(milestone.id)
+            milestone_facet_ref = str(
+                getattr(milestone, "facet_ref", "") or milestone_id
+            )
+            explicit_facet = bool(str(getattr(milestone, "facet_ref", "")))
+            source_assignments = source_assignments_by_milestone.get(milestone_id, {})
+            relation_candidates: list[tuple[str, str]] = []
+            for check_id in sorted(milestone_check_ids.get(milestone_id, set())):
+                admitted = {
+                    str(item)
+                    for item in _list(
+                        _mapping(canonical_node_results.get(check_id)).get("witness_ids")
+                    )
+                    if str(item)
+                }
+                for witness_id in sorted(admitted - used_witness_ids):
+                    witness = witnesses_by_id.get(witness_id, {})
+                    if str(witness.get("check_id") or "") != check_id:
+                        continue
+                    if _typed_witness_matches_relation(
+                        witness,
+                        relation,
+                        milestone_facet_ref=milestone_facet_ref,
+                        explicit_facet=explicit_facet,
+                        source_assignments=source_assignments,
+                        facts_by_id=facts_by_id,
+                        witness_outputs=witness_outputs,
+                        accepted_witness_ids=accepted_witness_ids,
+                        witnesses_by_id=witnesses_by_id,
+                        fact_equivalences=fact_equivalences,
+                    ):
+                        relation_candidates.append((check_id, witness_id))
+            if relation_candidates:
+                candidates[relation_id] = relation_candidates
+        if not candidates:
+            break
+
+        owner_by_witness: dict[str, str] = {}
+        layer_matches: dict[str, tuple[str, str]] = {}
+
+        def assign(relation_id: str, seen: set[str]) -> bool:
+            for check_id, witness_id in candidates.get(relation_id, []):
+                if witness_id in seen:
+                    continue
+                seen.add(witness_id)
+                previous = owner_by_witness.get(witness_id)
+                if previous is None or assign(previous, seen):
+                    owner_by_witness[witness_id] = relation_id
+                    layer_matches[relation_id] = (check_id, witness_id)
+                    return True
+            return False
+
+        for relation_id in sorted(candidates, key=lambda item: (len(candidates[item]), item)):
+            assign(relation_id, set())
+        if not layer_matches:
+            break
+        for relation_id, match in layer_matches.items():
+            relation = unresolved.pop(relation_id)
+            matched[relation_id] = match
+            witness_id = match[1]
+            used_witness_ids.add(witness_id)
+            if relation.output_fact_id:
+                witness_outputs.setdefault(witness_id, set()).add(relation.output_fact_id)
+            if (
+                relation.operation == "absolute_difference"
+                and _witness_proves_within_tolerance(
+                    witness_id,
+                    witnesses_by_id=witnesses_by_id,
+                    accepted_witness_ids=accepted_witness_ids,
+                    facts_by_id=facts_by_id,
+                )
+            ):
+                _merge_fact_equivalence(
+                    list(relation.input_fact_ids),
+                    fact_equivalences,
+                )
+
     return matched
 
 
@@ -2041,6 +2578,15 @@ def _conversation_text(
     return "\n".join(messages)
 
 
+_RAW_PDF_APPENDIX_HEADING = "原始材料附录"
+
+
+def _canonical_pdf_body(text: str) -> str:
+    """Exclude the renderer's explicit raw-material appendix boundary."""
+    index = text.find(_RAW_PDF_APPENDIX_HEADING)
+    return text[:index].rstrip() if index >= 0 else text
+
+
 def _meaning_groups_match(text: str, groups: list[list[str]]) -> bool:
     normalized = _semantic_normalized(text)
     return all(
@@ -2066,6 +2612,19 @@ def _affirmative_meaning_matches(text: str, meaning: Any) -> bool:
     return any(_affirmative_groups_match(clause, meaning) for clause in clauses)
 
 
+def _scoped_missing_meaning_matches(text: str, meaning: Any) -> bool:
+    """Require subject, missing input and uncertainty in one sentence/line."""
+    scopes = [
+        item.strip()
+        for item in re.split(
+            r"(?:\r?\n)+|[。！？；;]|(?<!\d)[.!?](?!\d)",
+            text,
+        )
+        if item.strip()
+    ]
+    return any(_affirmative_groups_match(scope, meaning) for scope in scopes)
+
+
 def _affirmative_document_groups_match(text: str, groups: list[list[str]]) -> bool:
     """Match each semantic group affirmatively, allowing groups in different clauses."""
     clauses = [
@@ -2083,6 +2642,73 @@ def _affirmative_document_groups_match(text: str, groups: list[list[str]]) -> bo
     )
 
 
+_CONFLICT_SIGNAL = re.compile(
+    r"不一致|不符|冲突|错误|异常|inconsisten(?:t|cy)|conflict|incorrect|"
+    r"(?:does|do|did)\s+not\s+match|not\s+equal",
+    re.IGNORECASE,
+)
+_CONFLICT_DENIAL = re.compile(
+    r"(?:未发现|没有发现|不存在|没有|并无|并未发现).{0,24}$|"
+    r"\b(?:no|never|without)\b.{0,24}$|\bnot\b.{0,16}$",
+    re.IGNORECASE,
+)
+
+
+def _affirmative_conflict_signal(text: str) -> bool:
+    for match in _CONFLICT_SIGNAL.finditer(text):
+        signal = match.group(0).casefold()
+        if "not match" in signal or "not equal" in signal:
+            return True
+        prefix = text[max(0, match.start() - 32) : match.start()]
+        if not _CONFLICT_DENIAL.search(prefix):
+            return True
+    return False
+
+
+def _conflict_proposition_matches(
+    text: str,
+    facts_by_id: dict[str, ExpectedFact],
+) -> bool:
+    required = [
+        facts_by_id.get("printed_total"),
+        facts_by_id.get("recomputed_total"),
+        facts_by_id.get("total_difference"),
+    ]
+    if any(fact is None for fact in required):
+        return False
+    propositions = [
+        item.strip()
+        for item in re.split(
+            r"(?:\r?\n)+|[。！？；;]|(?<!\d)[.!?](?!\d)",
+            text,
+        )
+        if item.strip()
+    ]
+    return any(
+        _affirmative_conflict_signal(proposition)
+        and all(_fact_matches(fact, proposition) for fact in required if fact is not None)
+        for proposition in propositions
+    )
+
+
+def _required_business_meanings_match(
+    text: str,
+    *,
+    oracle: BusinessEvalOracle,
+    facts_by_id: dict[str, ExpectedFact],
+) -> bool:
+    groups = oracle.communication.required_meanings
+    if _affirmative_document_groups_match(text, groups):
+        return True
+    if (
+        oracle.requirement.decision_status == "CONTRADICTED"
+        and groups
+        and _conflict_proposition_matches(text, facts_by_id)
+    ):
+        return _affirmative_document_groups_match(text, groups[1:])
+    return False
+
+
 def _affirmative_groups_match(text: str, meaning: Any) -> bool:
     normalized = _semantic_normalized(text)
     groups = meaning if isinstance(meaning, list) else getattr(meaning, "all_of", [])
@@ -2095,7 +2721,9 @@ def _affirmative_groups_match(text: str, meaning: Any) -> bool:
             for occurrence in re.finditer(re.escape(needle), normalized):
                 prefix = normalized[max(0, occurrence.start() - 16) : occurrence.start()]
                 if re.search(
-                    r"(?:\b(?:not|no|never|without)\s+|(?:不|未|无|并非|没有|并不)(?:完全|一定|能|是)?\s*)$",
+                    r"(?:\b(?:not|no|never|without)\s+|"
+                    r"(?:未发现|没有发现|不存在|并无)\s*|"
+                    r"(?:不|未|无|并非|没有|并不)(?:完全|一定|能|是)?\s*)$",
                     prefix,
                     re.IGNORECASE,
                 ):
@@ -2166,6 +2794,381 @@ def _approved_tools(snapshot: EvalSnapshot) -> set[str]:
     return approved
 
 
+def _score_framework_protocol(
+    oracle: FrameworkOracle | None,
+    snapshot: EvalSnapshot,
+) -> tuple[Decimal, bool, list[FrameworkCheck]]:
+    if oracle is None:
+        return Decimal("100"), True, []
+
+    protocol = _framework_observation(snapshot)
+    calls = protocol["calls"]
+    successful = [item for item in calls if not item["error"]]
+    successful_names = [str(item["name"]) for item in successful]
+    all_names = [str(item["name"]) for item in calls]
+    role_calls = protocol["roles"]
+    successful_role_names = [
+        str(item["name"]) for item in role_calls if not item["error"]
+    ]
+    approved_names = protocol["approved_names"]
+    definitions: list[tuple[str, bool, Any, Any, str]] = []
+
+    for requirement in oracle.required_tools:
+        name = _canonical_tool_name(requirement.name)
+        observed = sum(1 for item in successful_names if item == name)
+        definitions.append(
+            (
+                f"framework.required_tool.{name}",
+                observed >= requirement.min_calls,
+                {"tool": name, "min_successful_calls": requirement.min_calls},
+                {
+                    "successful_calls": observed,
+                    "total_calls": sum(1 for item in all_names if item == name),
+                },
+                "必需工具按成功调用次数核对；失败尝试不能满足最低调用要求。",
+            )
+        )
+
+    for requirement in oracle.required_roles:
+        name = _canonical_tool_name(requirement.name)
+        observed = sum(1 for item in successful_role_names if item == name)
+        definitions.append(
+            (
+                f"framework.required_role.{name}",
+                observed >= requirement.min_calls,
+                {"role": name, "min_successful_calls": requirement.min_calls},
+                {"successful_calls": observed},
+                "必需角色按成功调用次数核对；不绑定角色内部实现路径。",
+            )
+        )
+
+    for raw_name in oracle.required_approved_tools:
+        name = _canonical_tool_name(raw_name)
+        definitions.append(
+            (
+                f"framework.required_approval.{name}",
+                name in approved_names,
+                {"approved_tool": name},
+                {"approved": name in approved_names},
+                "有副作用工具必须存在显式批准记录，工具调用本身不能替代批准。",
+            )
+        )
+
+    for raw_name in oracle.forbidden_tools:
+        name = _canonical_tool_name(raw_name)
+        observed = sum(1 for item in all_names if item == name)
+        definitions.append(
+            (
+                f"framework.forbidden_tool.{name}",
+                observed == 0,
+                {"tool": name, "max_calls": 0},
+                {"calls": observed},
+                "禁用工具一经尝试即失败，不以调用是否成功为转移。",
+            )
+        )
+
+    if oracle.max_tool_errors is not None:
+        errors = [item for item in calls if item["error"]]
+        definitions.append(
+            (
+                "framework.max_tool_errors",
+                len(errors) <= oracle.max_tool_errors,
+                {"max_tool_errors": oracle.max_tool_errors},
+                {
+                    "tool_errors": len(errors),
+                    "tools": [item["name"] for item in errors],
+                },
+                "工具拒绝、失败以及只有开始事件而没有完成事件都计入错误预算。",
+            )
+        )
+
+    if oracle.max_total_calls is not None:
+        definitions.append(
+            (
+                "framework.max_total_calls",
+                len(calls) <= oracle.max_total_calls,
+                {"max_total_calls": oracle.max_total_calls},
+                {"total_calls": len(calls), "tools": all_names},
+                "总调用预算只约束工具尝试数量，不限制未被禁止且仍在预算内的辅助工具。",
+            )
+        )
+
+    if oracle.ordered_milestones:
+        expected = [
+            [_canonical_milestone_token(item) for item in alternatives]
+            for alternatives in oracle.ordered_milestones
+        ]
+        successful_tokens = protocol["successful_sequence"]
+        orderable = bool(protocol["orderable"])
+        matched: list[dict[str, Any]] = []
+        cursor = 0
+        for alternatives in expected:
+            match_index = next(
+                (
+                    index
+                    for index in range(cursor, len(successful_tokens))
+                    if successful_tokens[index] in alternatives
+                ),
+                None,
+            )
+            if match_index is None:
+                break
+            matched.append(
+                {"milestone": successful_tokens[match_index], "successful_index": match_index}
+            )
+            cursor = match_index + 1
+        definitions.append(
+            (
+                "framework.ordered_milestones",
+                orderable and len(matched) == len(expected),
+                expected,
+                {
+                    "orderable": orderable,
+                    "matched": matched,
+                    "successful_sequence": successful_tokens,
+                },
+                (
+                    "只要求基本工具/角色里程碑按顺序出现；中间允许插入其他无害步骤。"
+                    "跨 events/trace 无时间戳时无法证明顺序，必须 fail-closed。"
+                ),
+            )
+        )
+
+    weights = _split_points(Decimal("100"), len(definitions))
+    checks = [
+        FrameworkCheck(
+            id=definition[0],
+            points=points,
+            earned=points if definition[1] else Decimal("0"),
+            passed=definition[1],
+            expected=definition[2],
+            observed=definition[3],
+            detail=definition[4],
+        )
+        for definition, points in zip(definitions, weights)
+    ]
+    score = sum((item.earned for item in checks), Decimal("0"))
+    return score, all(item.passed for item in checks), checks
+
+
+def _framework_observation(snapshot: EvalSnapshot) -> dict[str, Any]:
+    """Normalize the protocol once: events are canonical, trace is fallback."""
+
+    calls: list[dict[str, Any]] = []
+    roles: list[dict[str, Any]] = []
+    steps: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+
+    if snapshot.events:
+        for event_index, event in enumerate(snapshot.events):
+            if not isinstance(event, dict):
+                continue
+            kind = str(event.get("kind") or event.get("type") or "").strip().casefold()
+            if kind in {
+                "tool_started", "provider_tool_started", "tool_called",
+                "tool_finished", "provider_tool_finished", "tool_output",
+                "tool_error", "provider_tool_error",
+                "tool_call", "tool", "manager_tool", "manager_tool_call",
+            }:
+                name = _event_tool_name(event)
+                if not name:
+                    continue
+                if kind in {"tool_started", "provider_tool_started", "tool_called"}:
+                    call = _protocol_step("tool", name, error=True, event_index=event_index)
+                    calls.append(call)
+                    steps.append(call)
+                    pending.append(call)
+                elif kind in {"tool_finished", "provider_tool_finished", "tool_output"}:
+                    call = next((item for item in reversed(pending) if item["name"] == name), None)
+                    if call is None:
+                        call = _protocol_step(
+                            "tool", name, error=_tool_record_is_error(event), event_index=event_index
+                        )
+                        calls.append(call)
+                        steps.append(call)
+                    else:
+                        call["error"] = _tool_record_is_error(event)
+                        pending.remove(call)
+                elif kind in {"tool_error", "provider_tool_error"}:
+                    call = next((item for item in reversed(pending) if item["name"] == name), None)
+                    if call is None:
+                        call = _protocol_step("tool", name, error=True, event_index=event_index)
+                        calls.append(call)
+                        steps.append(call)
+                    else:
+                        call["error"] = True
+                        pending.remove(call)
+                else:
+                    call = _protocol_step(
+                        "tool", name, error=_tool_record_is_error(event), event_index=event_index
+                    )
+                    calls.append(call)
+                    steps.append(call)
+                continue
+            if kind in {"role_call", "specialist_call", "agent_call"}:
+                name = _event_role_name(event)
+                if name:
+                    role = _protocol_step(
+                        "role", name, error=_tool_record_is_error(event), event_index=event_index
+                    )
+                    roles.append(role)
+                    steps.append(role)
+                continue
+            if kind == "approval_decision":
+                payload = _mapping(event.get("payload"))
+                name = _canonical_tool_name(payload.get("tool") or event.get("tool"))
+                if name and bool(payload.get("approved")):
+                    steps.append(_protocol_step("approval", name, event_index=event_index))
+        orderable = True
+    else:
+        groups: set[str] = set()
+        for keys, step_kind in (
+            (("tool_calls", "manager_tool_calls"), "tool"),
+            (("provider_tool_calls", "sandbox_tool_calls"), "tool"),
+            (("role_calls",), "role"),
+        ):
+            key = next((item for item in keys if _dict_items(snapshot.trace.get(item))), "")
+            if not key:
+                continue
+            groups.add(key)
+            for trace_index, row in enumerate(_dict_items(snapshot.trace.get(key))):
+                name = _event_tool_name(row) if step_kind == "tool" else _event_role_name(row)
+                if not name:
+                    continue
+                step = _protocol_step(
+                    step_kind,
+                    name,
+                    error=_tool_record_is_error(row),
+                    ts=_tool_record_timestamp(row),
+                    trace_group=key,
+                    trace_index=trace_index,
+                )
+                (calls if step_kind == "tool" else roles).append(step)
+                steps.append(step)
+        if steps and all(item["ts"] for item in steps):
+            steps.sort(key=lambda item: item["ts"])
+            orderable = True
+        elif len(groups) == 1:
+            steps.sort(key=lambda item: int(item["trace_index"]))
+            orderable = bool(steps)
+        else:
+            orderable = False
+
+    return {
+        "calls": calls,
+        "roles": roles,
+        "approved_names": {_canonical_tool_name(item) for item in _approved_tools(snapshot)},
+        "orderable": orderable,
+        "successful_sequence": [item["token"] for item in steps if not item["error"]],
+    }
+
+
+def _protocol_step(
+    kind: str,
+    name: str,
+    *,
+    error: bool = False,
+    event_index: int | None = None,
+    ts: str = "",
+    trace_group: str = "",
+    trace_index: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "name": name,
+        "token": f"{kind}:{name}",
+        "error": error,
+        "event_index": event_index,
+        "ts": ts,
+        "trace_group": trace_group,
+        "trace_index": trace_index,
+    }
+
+
+def _event_tool_name(value: dict[str, Any]) -> str:
+    payload = _mapping(value.get("payload"))
+    candidates: list[Any] = [
+        payload.get("tool"),
+        value.get("tool"),
+        _mapping(payload.get("function")).get("name"),
+        _mapping(value.get("function")).get("name"),
+        payload.get("tool_name"),
+        value.get("tool_name"),
+        payload.get("name"),
+        value.get("name"),
+    ]
+    for candidate in candidates:
+        name = _canonical_tool_name(candidate)
+        if name and name not in {
+            "tool_call",
+            "tool_started",
+            "tool_finished",
+            "tool_error",
+            "executor",
+        }:
+            return name
+    return ""
+
+
+def _canonical_tool_name(value: Any) -> str:
+    name = str(value or "").strip().casefold()
+    if not name:
+        return ""
+    name = re.sub(r"^(?:call_tool|tool|function)\s*[:/]\s*", "", name)
+    if "__" in name:
+        name = name.rsplit("__", 1)[-1]
+    if any(separator in name for separator in (".", "/", ":")):
+        name = re.split(r"[./:]", name)[-1]
+    return re.sub(r"[^a-z0-9_]+", "_", name).strip("_")
+
+
+def _tool_record_is_error(value: dict[str, Any]) -> bool:
+    payload = _mapping(value.get("payload"))
+    error = payload.get("error", value.get("error"))
+    if error not in (None, "", False, {}, []):
+        return True
+    result = _mapping(payload.get("result"))
+    result_error = result.get("error")
+    if result_error not in (None, "", False, {}, []):
+        return True
+    status = str(
+        payload.get("status") or result.get("status") or value.get("status") or ""
+    ).casefold()
+    if status in {"error", "failed", "rejected", "blocked", "cancelled", "canceled"}:
+        return True
+    return bool(payload.get("hook_code") or value.get("hook_code"))
+
+
+def _tool_record_timestamp(value: dict[str, Any]) -> str:
+    payload = _mapping(value.get("payload"))
+    return str(value.get("ts") or payload.get("ts") or "")
+
+
+def _event_role_name(value: dict[str, Any]) -> str:
+    payload = _mapping(value.get("payload"))
+    for candidate in (
+        payload.get("role"),
+        value.get("role"),
+        payload.get("agent"),
+        value.get("agent"),
+        payload.get("name"),
+        value.get("name"),
+    ):
+        name = _canonical_tool_name(candidate)
+        if name and name not in {"role_call", "specialist_call", "agent_call"}:
+            return name
+    return ""
+
+
+def _canonical_milestone_token(value: Any) -> str:
+    raw = str(value or "").strip().casefold()
+    if ":" in raw:
+        kind, name = raw.split(":", 1)
+        if kind in {"tool", "role", "approval"}:
+            return f"{kind}:{_canonical_tool_name(name)}"
+    return f"tool:{_canonical_tool_name(raw)}"
+
+
 def _engineering_metrics(snapshot: EvalSnapshot) -> dict[str, Any]:
     provider_calls = [item for item in snapshot.events if item.get("kind") == "provider_call"]
     api_prompt_tokens = 0
@@ -2202,6 +3205,7 @@ def _engineering_metrics(snapshot: EvalSnapshot) -> dict[str, Any]:
             if snapshot.transcript_path.endswith(suffix)
             else ""
         )
+    tool_calls = _framework_observation(snapshot)["calls"]
     return {
         "provider_calls": len(provider_calls),
         "role_calls": int(model_metrics.get("call_count") or 0),
@@ -2223,6 +3227,9 @@ def _engineering_metrics(snapshot: EvalSnapshot) -> dict[str, Any]:
         else {},
         "blocked_actions": sum(1 for item in snapshot.events if item.get("kind") == "supervisor_decision_blocked"),
         "hook_rejections": hook_rejections,
+        "tool_calls": len(tool_calls),
+        "tool_error_calls": sum(1 for item in tool_calls if item["error"]),
+        "tool_names": [item["name"] for item in tool_calls],
         "report_count": len(snapshot.reports),
         "report_bytes": sum(item.bytes for item in snapshot.reports),
         "approved_tools": sorted(_approved_tools(snapshot)),

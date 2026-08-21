@@ -17,6 +17,7 @@ from app.compiler_runtime.models import (
     ReviewArtifact,
 )
 from app.compiler_runtime.policy import policy_excerpt_for, policy_hash
+from app.compiler_runtime.signatures import proof_signature_for, proof_signature_hash_for
 from app.state.case_store import CaseStore
 from app.state.schemas import CaseState, Requirement
 
@@ -53,16 +54,20 @@ def _artifact(
 ) -> ReviewArtifact:
     policy = policy_excerpt_for(requirement_ids)
     policy_refs = sorted((policy.get("values") or {}).keys())
-    nodes = [
-        ProofNode(
-            id=f"check:{requirement_id}",
-            kind="CHECK",
-            statement=f"Evidence establishes {requirement_id}",
-            requirement_refs=[requirement_id],
-            policy_refs=policy_refs if index == 0 else [],
+    nodes: list[ProofNode] = []
+    for requirement_id in requirement_ids:
+        signature = proof_signature_for(requirement_id)
+        requirement_policy = policy_excerpt_for([requirement_id])
+        nodes.append(
+            ProofNode(
+                id=f"check:{requirement_id}",
+                kind="CHECK",
+                statement=f"Evidence establishes {requirement_id}",
+                requirement_refs=[requirement_id],
+                policy_refs=sorted((requirement_policy.get("values") or {}).keys()),
+                facet_refs=[facet.id for facet in signature.facets] if signature else [],
+            )
         )
-        for index, requirement_id in enumerate(requirement_ids)
-    ]
     plan = ProofPlan(
         plan_id="plan-case-store",
         objective="Compile the active case requirements",
@@ -100,18 +105,32 @@ def _artifact(
         )
         for node in nodes
     ]
-    return ReviewArtifact(
+    configured_policy = {
+        key: spec.get("value")
+        for key, spec in (policy.get("values") or {}).items()
+        if isinstance(spec, dict) and spec.get("configured") is True
+    }
+    unconfigured_policy = [
+        key
+        for key, spec in (policy.get("values") or {}).items()
+        if not isinstance(spec, dict) or spec.get("configured") is not True
+    ]
+    artifact = ReviewArtifact(
         plan=plan,
         plan_hash=plan.content_hash(),
+        proof_signature_hash=proof_signature_hash_for(plan.active_requirement_ids),
         evidence_ir=evidence_ir,
         evidence_snapshot_hash=evidence_ir.content_hash(),
         assessments=assessments,
         submitted_claim_refs={node.id: list(claim_ids) for node in nodes},
         policy_hash=policy_hash(policy),
+        resolved_policy_terms=configured_policy,
+        unconfigured_policy_refs=unconfigured_policy,
         compiler_version="test",
         model="test-model",
         prompt_versions={"test": "1"},
     )
+    return artifact.model_copy(update={"artifact_hash": artifact.content_hash()})
 
 
 def _review_patch(requirement_ids: list[str], *, fingerprint: str = SOURCE_FINGERPRINT) -> dict:
@@ -308,6 +327,7 @@ def test_contradicted_projection_uses_only_contradicting_leaf_sources() -> None:
     artifact = ReviewArtifact(
         plan=plan,
         plan_hash=plan.content_hash(),
+        proof_signature_hash=proof_signature_hash_for(plan.active_requirement_ids),
         evidence_ir=evidence_ir,
         evidence_snapshot_hash=evidence_ir.content_hash(),
         assessments=[
@@ -334,6 +354,7 @@ def test_contradicted_projection_uses_only_contradicting_leaf_sources() -> None:
         compiler_version="test",
         model="fixture",
     )
+    artifact = artifact.model_copy(update={"artifact_hash": artifact.content_hash()})
     state = CaseState(
         case_id="case-polarity-projection",
         requirements=[Requirement(id="invoice")],

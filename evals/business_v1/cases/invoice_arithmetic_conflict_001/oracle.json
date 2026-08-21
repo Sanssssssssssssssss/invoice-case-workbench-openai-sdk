@@ -1,7 +1,7 @@
 {
   "schema_version": "2",
   "case_id": "invoice_arithmetic_conflict_001",
-  "oracle_version": "3",
+  "oracle_version": "4",
   "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::invoice_arithmetic_conflict_001",
   "facts": [
     {
@@ -521,6 +521,7 @@
   "milestones": [
     {
       "id": "line_extensions",
+      "facet_ref": "line_extensions",
       "statement_meaning": {
         "all_of": [
           [
@@ -596,6 +597,7 @@
     },
     {
       "id": "subtotal_aggregation",
+      "facet_ref": "subtotal_aggregation",
       "statement_meaning": {
         "all_of": [
           [
@@ -653,6 +655,7 @@
     },
     {
       "id": "stated_component_rate_base_validation",
+      "facet_ref": "stated_components",
       "statement_meaning": {
         "all_of": [
           [
@@ -696,6 +699,7 @@
     },
     {
       "id": "final_total_reconciliation",
+      "facet_ref": "final_total",
       "statement_meaning": {
         "all_of": [
           [

@@ -3,13 +3,24 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
+from app.config import get_settings
 from app.compiler_runtime.kernel import compile_review_artifact
 from app.compiler_runtime.models import CheckAssessment, Claim, EvidenceIR, ProofNode, ProofPlan, ReviewArtifact
 from app.compiler_runtime.policy import policy_excerpt_for, policy_hash
+from app.compiler_runtime.signatures import proof_signature_hash_for
 from app.compiler_runtime.runtime import COMPILER_VERSION, CompilerRunResult, ExecutorSummary, compiler_trace_metadata
 from app.harness import HarnessRuntime
 from app.runtime.turn_runner import TurnRunner
 from app.state.schemas import AgentTurnRequest, Attachment
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cached_settings() -> None:
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def test_evidence_reviewer_keeps_external_tool_name_and_atomically_writes_artifact(
@@ -95,6 +106,7 @@ def test_evidence_reviewer_keeps_external_tool_name_and_atomically_writes_artifa
             artifact = ReviewArtifact(
                 plan=plan,
                 plan_hash=plan.content_hash(),
+                proof_signature_hash=proof_signature_hash_for(plan.active_requirement_ids),
                 evidence_ir=ir,
                 evidence_snapshot_hash=ir.content_hash(),
                 assessments=[assessment],
@@ -103,6 +115,7 @@ def test_evidence_reviewer_keeps_external_tool_name_and_atomically_writes_artifa
                 compiler_version=COMPILER_VERSION,
                 model="fake",
             )
+            artifact = artifact.model_copy(update={"artifact_hash": artifact.content_hash()})
             proof = compile_review_artifact(artifact)
             evidence = {
                 "id": source.record.source_id,

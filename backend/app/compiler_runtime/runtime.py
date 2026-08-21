@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from agents import Agent, FunctionTool, ModelSettings, ToolsToFinalOutputResult
-from agents.exceptions import MaxTurnsExceeded
+from agents.exceptions import MaxTurnsExceeded, UserError
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.thinking import model_extra_body_for_thinking, temperature_for_thinking
@@ -31,18 +33,31 @@ from .models import (
     CheckAssessment,
     CompiledProof,
     EvidenceIR,
+    ExecutionStatus,
     ProofPlan,
     ReviewArtifact,
     explicit_final_statuses,
 )
+from .proof_terms import (
+    CalculationOperation,
+    CalculationWitness,
+    ProofTermRef,
+    SemanticBindingProposal,
+)
 from .sandbox import EvidenceSandbox, SourceRecord
+from .signatures import (
+    PlanConformanceGate,
+    proof_signature_for,
+    proof_signature_hash_for,
+)
 
 
-COMPILER_VERSION = "evidence_compiler_runtime_v2"
+COMPILER_VERSION = "typed_evidence_compiler_runtime_v8"
+EXECUTOR_MAX_TURNS = 10
 PROMPT_VERSIONS = {
-    "task_compiler": "task_compiler_v8",
-    "executor": "evidence_executor_v4",
-    "verifier": "fine_verifier_v9",
+    "task_compiler": "typed_task_compiler_v10",
+    "executor": "typed_evidence_executor_v8",
+    "verifier": "typed_fine_verifier_v13",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
 _TRACE_METADATA = {
@@ -51,7 +66,13 @@ _TRACE_METADATA = {
     "output_model": "EvidenceReviewResult",
     "context_policy": ["active_requirement_ids", "source_catalog", "extraction_summary", "supervisor_task"],
     "max_retries": 1,
-    "allowed_tools": ["list_sources", "read_source", "bind_claim", "submit_check"],
+    "allowed_tools": [
+        "list_sources",
+        "read_source",
+        "bind_claim",
+        "compute_witness",
+        "submit_check",
+    ],
     "side_effects": "none",
     "owner": "route_policy",
     "guard_policy": ["proof_plan_schema", "source_hook", "fine_verifier", "proof_kernel"],
@@ -130,6 +151,7 @@ class ExecutorSummary(_RuntimeModel):
     completed_check_ids: list[str] = Field(default_factory=list)
     unresolved_check_ids: list[str] = Field(default_factory=list)
     summary: str = ""
+    execution_status: ExecutionStatus = "COMPLETED"
 
 
 class VerificationBatch(_RuntimeModel):
@@ -156,9 +178,18 @@ class _BindClaimInput(_RuntimeModel):
     claim_id: str = ""
 
 
+class _ComputeWitnessInput(_RuntimeModel):
+    check_id: str
+    facet_ref: str
+    operation: CalculationOperation
+    refs: list[ProofTermRef]
+
+
 class _SubmitCheckInput(_RuntimeModel):
     check_id: str
     claim_ids: list[str] = Field(default_factory=list)
+    binding_proposals: list[SemanticBindingProposal] = Field(default_factory=list)
+    witness_ids: list[str] = Field(default_factory=list)
     note: str = ""
     submission_id: str = ""
 
@@ -213,6 +244,7 @@ class EvidenceCompilerRuntime:
         )
         payload = {
             "active_requirements": requirement_context(requirement_ids),
+            "proof_signatures": _active_proof_signatures(requirement_ids),
             "policy": policy_excerpt,
             "source_catalog": _planning_source_catalog(source_catalog),
             "extraction_summary": _planning_extraction_summary(extraction_summary),
@@ -237,6 +269,19 @@ class EvidenceCompilerRuntime:
             raise ValueError(
                 f"Task Compiler policy coverage mismatch: expected={expected_policy_refs}, got={sorted(plan.policy_refs)}"
             )
+        signatures = [
+            signature
+            for requirement_id in requirement_ids
+            if (signature := proof_signature_for(requirement_id)) is not None
+        ]
+        try:
+            PlanConformanceGate(signatures).validate(plan)
+        except ValueError:
+            self._progress_error(
+                "task_compiler",
+                "Proof Plan 没有满足 Requirement 的最小 ProofSignature。",
+            )
+            raise
         self._progress(
             "model_thinking",
             stage="task_compiler",
@@ -261,9 +306,24 @@ class EvidenceCompilerRuntime:
     ) -> tuple[ExecutorSummary, EvidenceSandbox]:
         source_records = [item.record for item in prepared_sources]
         check_ids = [node.id for node in plan.nodes if node.kind == "CHECK"]
+        requested_focus = _unique(focus_check_ids)
+        unknown_focus = sorted(set(requested_focus) - set(check_ids))
+        if unknown_focus:
+            raise ValueError(
+                f"Executor focus references checks outside the ProofPlan: {unknown_focus}"
+            )
+        is_continuation = sandbox is not None
         sandbox = sandbox or EvidenceSandbox(
             sources=source_records,
             allowed_check_ids=check_ids,
+            allowed_check_facets={
+                node.id: node.facet_refs for node in plan.nodes if node.kind == "CHECK"
+            },
+            allowed_check_policy_refs={
+                node.id: node.policy_refs for node in plan.nodes if node.kind == "CHECK"
+            },
+            policy_values=_configured_policy_values(policy_excerpt),
+            policy_snapshot_hash=policy_hash(policy_excerpt),
             evidence_ir=EvidenceIR(
                 source_ids=sorted(item.source_id for item in source_records),
                 source_fingerprints={
@@ -272,8 +332,15 @@ class EvidenceCompilerRuntime:
                 },
             ),
         )
+        rollback_sandbox = sandbox
+        if requested_focus:
+            # Focused execution is speculative until its CHECK ownership is
+            # validated. Never let a rejected repair mutate the frozen chain.
+            sandbox = copy.deepcopy(sandbox)
         payload = {
             "proof_plan": plan.model_dump(mode="json"),
+            "proof_signatures": _active_proof_signatures(plan.active_requirement_ids),
+            "calculation_operation_protocol": _calculation_operation_protocol(),
             "policy": policy_excerpt,
             "source_catalog": [
                 {
@@ -284,18 +351,26 @@ class EvidenceCompilerRuntime:
                 }
                 for item in sandbox.source_records
             ],
-            "focus_check_ids": _unique(focus_check_ids),
+            "focus_check_ids": requested_focus,
             "already_admitted_claims": sandbox.evidence_ir.model_dump(mode="json")["claims"],
+            "prior_binding_proposals": [
+                item.model_dump(mode="json") for item in sandbox.binding_proposals
+            ],
+            "prior_calculation_witnesses": [
+                item.model_dump(mode="json") for item in sandbox.calculation_witnesses
+            ],
             "prior_submissions": [
                 {
                     "check_id": item.check_id,
                     "claim_ids": list(item.claim_ids),
+                    "binding_ids": list(item.binding_ids),
+                    "witness_ids": list(item.witness_ids),
                 }
                 for item in sandbox.submissions
             ],
             "hook_feedback": list(hook_feedback),
         }
-        target_check_ids = _unique(focus_check_ids) or check_ids
+        target_check_ids = requested_focus or check_ids
         self._progress(
             "model_started",
             stage="executor",
@@ -311,43 +386,151 @@ class EvidenceCompilerRuntime:
             for check_id in target_check_ids
         }
         try:
-            summary = self._run_phase(
-                name="executor",
-                prompt_file="executor.md",
-                payload=payload,
-                output_type=ExecutorSummary,
-                tools=_sandbox_tools(sandbox, progress_sink=self._sandbox_progress),
-                max_turns=6,
-                tool_use_behavior=_completion_hook(
-                    sandbox,
-                    target_check_ids,
-                    prior_submission_counts=submission_counts,
-                ),
+            write_scope = (
+                sandbox.focused_writes(requested_focus)
+                if requested_focus
+                else nullcontext()
             )
-        except MaxTurnsExceeded:
-            submitted = {item.check_id for item in sandbox.submissions}
+            with write_scope:
+                summary = self._run_phase(
+                    name="executor",
+                    prompt_file="executor.md",
+                    payload=payload,
+                    output_type=ExecutorSummary,
+                    tools=_sandbox_tools(sandbox, progress_sink=self._sandbox_progress),
+                    max_turns=EXECUTOR_MAX_TURNS,
+                    tool_use_behavior=_completion_hook(
+                        sandbox,
+                        target_check_ids,
+                        prior_submission_counts=submission_counts,
+                    ),
+                )
+        except UserError:
+            submitted = {
+                check_id
+                for check_id in target_check_ids
+                if sum(1 for item in sandbox.submissions if item.check_id == check_id)
+                > submission_counts.get(check_id, 0)
+            }
+            if not submitted:
+                raise
             summary = ExecutorSummary(
                 completed_check_ids=sorted(submitted),
-                unresolved_check_ids=sorted(set(check_ids) - submitted),
-                summary="Executor turn budget exhausted; admitted work was preserved and missing checks remain unresolved.",
+                unresolved_check_ids=sorted(set(target_check_ids) - submitted),
+                summary=(
+                    "Executor stopped on an SDK UserError after preserving newly accepted "
+                    "CHECK submissions; unsubmitted checks remain unresolved."
+                ),
+                execution_status="PARTIAL",
             )
+        except MaxTurnsExceeded:
+            submitted = {
+                check_id
+                for check_id in target_check_ids
+                if sum(1 for item in sandbox.submissions if item.check_id == check_id)
+                > submission_counts.get(check_id, 0)
+            }
+            if not submitted:
+                if is_continuation:
+                    summary = ExecutorSummary(
+                        completed_check_ids=[],
+                        unresolved_check_ids=sorted(target_check_ids),
+                        summary=(
+                            "Executor retry exhausted its turn budget without new proof terms; "
+                            "the previously compiled artifact remains available."
+                        ),
+                        execution_status="PARTIAL",
+                    )
+                    self._progress(
+                        "model_thinking",
+                        stage="executor",
+                        status="partial",
+                        action="Evidence Worker 重试未产生新的证明工件",
+                        public_reason="已保留首轮 Artifact，不把重试耗尽伪装成业务缺料。",
+                        unresolved_check_count=len(target_check_ids),
+                    )
+                else:
+                    self._progress_error(
+                        "executor",
+                        "Evidence Worker 超出轮次预算，且没有留下可提交的部分工件。",
+                    )
+                    raise
+            else:
+                summary = ExecutorSummary(
+                    completed_check_ids=sorted(submitted),
+                    unresolved_check_ids=sorted(set(target_check_ids) - submitted),
+                    summary="Executor turn budget exhausted; admitted work was preserved and missing checks remain unresolved.",
+                    execution_status=(
+                        "COMPLETED" if set(target_check_ids) <= submitted else "PARTIAL"
+                    ),
+                )
         unknown = sorted(
             (set(summary.completed_check_ids) | set(summary.unresolved_check_ids)) - set(check_ids)
         )
         if unknown:
             self._progress_error("executor", "Worker 提交了 Proof Plan 之外的检查。")
             raise ValueError(f"Executor referenced checks outside the ProofPlan: {unknown}")
+        outside_focus = sorted(
+            (set(summary.completed_check_ids) | set(summary.unresolved_check_ids))
+            - set(target_check_ids)
+        )
+        scope_violation = (
+            _focused_candidate_scope_violation(
+                rollback_sandbox,
+                sandbox,
+                focused_check_ids=requested_focus,
+            )
+            if requested_focus
+            else None
+        )
+        if requested_focus and (outside_focus or scope_violation is not None):
+            details = dict(scope_violation or {})
+            if outside_focus:
+                details["summary_check_ids_outside_focus"] = outside_focus
+            self._progress(
+                "model_thinking",
+                stage="executor",
+                status="boundary_violation",
+                action="Evidence Worker 聚焦修复越过了 CHECK 写入边界",
+                public_reason=(
+                    "候选沙箱已整体丢弃；原 Artifact、非聚焦 CHECK 与既有证明工件保持冻结。"
+                ),
+                violation_code="FOCUSED_CHECK_SCOPE_VIOLATION",
+                focused_check_ids=requested_focus,
+                **details,
+            )
+            return (
+                ExecutorSummary(
+                    completed_check_ids=[],
+                    unresolved_check_ids=sorted(target_check_ids),
+                    summary=(
+                        "Focused Executor candidate crossed its CHECK ownership boundary; "
+                        "the candidate was discarded transactionally."
+                    ),
+                    execution_status="PARTIAL",
+                ),
+                rollback_sandbox,
+            )
         self._progress(
             "model_thinking",
             stage="executor",
-            status="completed",
-            action="Evidence Worker 已完成本轮证据工作",
-            public_reason="已采纳的 Claim 与检查提交已冻结，等待独立 Verifier 核查。",
+            status=("partial" if summary.execution_status == "PARTIAL" else "completed"),
+            action=(
+                "Evidence Worker 已保留本轮部分证据工作"
+                if summary.execution_status == "PARTIAL"
+                else "Evidence Worker 已完成本轮证据工作"
+            ),
+            public_reason=(
+                "已采纳的合法工件将继续交给独立 Verifier；未提交 CHECK 保持 unresolved。"
+                if summary.execution_status == "PARTIAL"
+                else "已采纳的 Claim 与检查提交已冻结，等待独立 Verifier 核查。"
+            ),
             source_count=len(sandbox.source_records),
             read_source_count=len(sandbox.read_source_ids),
             claim_count=len(sandbox.evidence_ir.claims),
             submitted_check_count=len({item.check_id for item in sandbox.submissions}),
             unresolved_check_count=len(summary.unresolved_check_ids),
+            execution_status=summary.execution_status,
         )
         return summary, sandbox
 
@@ -357,18 +540,44 @@ class EvidenceCompilerRuntime:
         plan: ProofPlan,
         sandbox: EvidenceSandbox,
         policy_excerpt: dict[str, Any],
+        focus_check_ids: Sequence[str] = (),
+        repair_feedback: Sequence[dict[str, Any]] = (),
     ) -> list[CheckAssessment]:
+        all_check_ids = [node.id for node in plan.nodes if node.kind == "CHECK"]
+        requested_check_ids = _unique(focus_check_ids)
+        unknown_focus = sorted(set(requested_check_ids) - set(all_check_ids))
+        if unknown_focus:
+            raise ValueError(
+                f"Fine Verifier focus references checks outside the ProofPlan: {unknown_focus}"
+            )
+        if repair_feedback and not requested_check_ids:
+            raise ValueError("Fine Verifier repair_feedback requires explicit focus_check_ids")
+        feedback_check_ids = {
+            str(item.get("check_id") or "").strip()
+            for item in repair_feedback
+            if str(item.get("check_id") or "").strip()
+        }
+        if not feedback_check_ids.issubset(set(requested_check_ids)):
+            raise ValueError(
+                "Fine Verifier repair_feedback references checks outside focus_check_ids"
+            )
+        target_check_ids = set(requested_check_ids or all_check_ids)
         self._progress(
             "model_started",
             stage="fine_verifier",
             status="started",
             action="Fine Verifier 正在逐项核查原子命题",
             public_reason="Verifier 只读取检查、Claim、原始引用与 Policy，不沿用 Worker 的最终判断。",
-            check_count=sum(1 for node in plan.nodes if node.kind == "CHECK"),
+            check_count=len(target_check_ids),
             claim_count=len(sandbox.evidence_ir.claims),
+            focused_repair=bool(requested_check_ids),
         )
         claims = {claim.id: claim for claim in sandbox.evidence_ir.claims}
         submitted_refs = _submitted_claim_refs(sandbox)
+        submitted_binding_refs = _submitted_binding_refs(sandbox)
+        submitted_witness_refs = _submitted_witness_refs(sandbox)
+        bindings = {item.id: item for item in sandbox.binding_proposals}
+        witnesses = {item.id: item for item in sandbox.calculation_witnesses}
         sources = [
             {
                 "source_id": source.source_id,
@@ -390,7 +599,7 @@ class EvidenceCompilerRuntime:
             )
         checks = []
         for node in plan.nodes:
-            if node.kind != "CHECK":
+            if node.kind != "CHECK" or node.id not in target_check_ids:
                 continue
             candidate_ids = submitted_refs.get(node.id, [])
             checks.append(
@@ -402,10 +611,27 @@ class EvidenceCompilerRuntime:
                         for claim_id in candidate_ids
                         if claim_id in claims
                     ],
+                    "submitted_binding_refs": submitted_binding_refs.get(node.id, []),
+                    "candidate_binding_proposals": [
+                        bindings[binding_id].model_dump(mode="json")
+                        for binding_id in submitted_binding_refs.get(node.id, [])
+                        if binding_id in bindings
+                    ],
+                    "submitted_witness_refs": submitted_witness_refs.get(node.id, []),
+                    "candidate_calculation_witnesses": [
+                        witnesses[witness_id].model_dump(mode="json")
+                        for witness_id in submitted_witness_refs.get(node.id, [])
+                        if witness_id in witnesses
+                    ],
                 }
             )
         payload = {
             "checks": checks,
+            "proof_signatures": _active_proof_signatures(plan.active_requirement_ids),
+            "calculation_operation_protocol": _calculation_operation_protocol(),
+            "strong_status_link_protocol": _strong_status_link_protocol(),
+            "focus_check_ids": requested_check_ids,
+            "repair_feedback": list(repair_feedback),
             "sources": sources,
             "policy": policy_excerpt,
         }
@@ -426,8 +652,33 @@ class EvidenceCompilerRuntime:
         reconciled: list[CheckAssessment] = []
         corrections: list[dict[str, str]] = []
         for assessment in batch.assessments:
+            unknown_accepted_bindings = sorted(
+                set(assessment.accepted_binding_ids)
+                - set(submitted_binding_refs.get(assessment.check_id, []))
+            )
+            unknown_accepted_witnesses = sorted(
+                set(assessment.accepted_witness_ids)
+                - set(submitted_witness_refs.get(assessment.check_id, []))
+            )
+            if unknown_accepted_bindings or unknown_accepted_witnesses:
+                self._progress(
+                    "model_thinking",
+                    stage="fine_verifier",
+                    status="boundary_violation",
+                    action="Verifier 返回了越权的 Proof Term 引用",
+                    public_reason=(
+                        "越权引用将保留在 Artifact 中，由 Proof Kernel 显式降级为 NOT_FOUND。"
+                    ),
+                    check_id=assessment.check_id,
+                    unknown_binding_ids=unknown_accepted_bindings,
+                    unknown_witness_ids=unknown_accepted_witnesses,
+                )
             explicit_statuses = explicit_final_statuses(assessment.reason)
-            if len(explicit_statuses) == 1 and assessment.status not in explicit_statuses:
+            if (
+                not requested_check_ids
+                and len(explicit_statuses) == 1
+                and assessment.status not in explicit_statuses
+            ):
                 corrected_status = next(iter(explicit_statuses))
                 corrections.append(
                     {
@@ -437,6 +688,23 @@ class EvidenceCompilerRuntime:
                     }
                 )
                 assessment = assessment.model_copy(update={"status": corrected_status})
+            polarity_violations = _strong_status_link_boundary_violations(
+                assessment,
+                witnesses,
+            )
+            if polarity_violations:
+                self._progress(
+                    "model_thinking",
+                    stage="fine_verifier",
+                    status="boundary_violation",
+                    action="Verifier 的终端 Witness 极性协议不一致",
+                    public_reason=(
+                        "错误链接将原样保留，由 Proof Kernel 显式降级；Runtime 不会从当前结果或说明文字反推极性。"
+                    ),
+                    check_id=assessment.check_id,
+                    violation_code="STRONG_STATUS_LINK_POLARITY_CONFLICT",
+                    polarity_violations=polarity_violations,
+                )
             reconciled.append(assessment)
         if corrections:
             batch = batch.model_copy(update={"assessments": reconciled})
@@ -499,7 +767,7 @@ class EvidenceCompilerRuntime:
             ],
             extraction_summary=extraction_summary,
         )
-        _, sandbox = self.execute_plan(
+        executor_summary, sandbox = self.execute_plan(
             plan=plan,
             prepared_sources=prepared_sources,
             policy_excerpt=policy_excerpt,
@@ -510,8 +778,16 @@ class EvidenceCompilerRuntime:
             evidence_ir=sandbox.evidence_ir,
             assessments=assessments,
             submitted_claim_refs=_submitted_claim_refs(sandbox),
+            submitted_binding_refs=_submitted_binding_refs(sandbox),
+            submitted_witness_refs=_submitted_witness_refs(sandbox),
             policy_excerpt=policy_excerpt,
             model=self.settings.llm_model,
+            sandbox=sandbox,
+            execution_status=(
+                "PARTIAL"
+                if executor_summary.execution_status == "PARTIAL"
+                else _derived_execution_status(plan, sandbox, assessments)
+            ),
         )
         self._progress(
             "model_started",
@@ -527,15 +803,88 @@ class EvidenceCompilerRuntime:
         )
         self._emit_kernel_completed(proof)
 
+        retry_count = 0
+        verifier_repair_attempted: set[str] = set()
+        (
+            assessments,
+            artifact,
+            proof,
+            verifier_repair_ids,
+        ) = self._repair_terminal_status_mismatches_once(
+            plan=plan,
+            policy_excerpt=policy_excerpt,
+            requirement_requiredness=requiredness,
+            sandbox=sandbox,
+            assessments=assessments,
+            artifact=artifact,
+            proof=proof,
+            exclude_check_ids=verifier_repair_attempted,
+        )
+        if verifier_repair_ids:
+            verifier_repair_attempted.update(verifier_repair_ids)
+            retry_count += 1
+
+        terminal_executor_repair_attempted: set[str] = set()
+        (
+            sandbox,
+            assessments,
+            artifact,
+            proof,
+            terminal_executor_repair_ids,
+        ) = self._repair_missing_terminal_witnesses_once(
+            plan=plan,
+            prepared_sources=prepared_sources,
+            policy_excerpt=policy_excerpt,
+            requirement_requiredness=requiredness,
+            sandbox=sandbox,
+            assessments=assessments,
+            artifact=artifact,
+            proof=proof,
+            exclude_check_ids=terminal_executor_repair_attempted,
+        )
+        if terminal_executor_repair_ids:
+            terminal_executor_repair_attempted.update(terminal_executor_repair_ids)
+            retry_count += 1
+
+        # The focused Executor can add the missing terminal correctly while its
+        # focused Verifier still links the boolean result to the wrong strong
+        # status.  Route that newly produced, Verifier-owned diagnostic once;
+        # never auto-flip a status and never retry the same CHECK again.
+        (
+            assessments,
+            artifact,
+            proof,
+            verifier_repair_ids,
+        ) = self._repair_terminal_status_mismatches_once(
+            plan=plan,
+            policy_excerpt=policy_excerpt,
+            requirement_requiredness=requiredness,
+            sandbox=sandbox,
+            assessments=assessments,
+            artifact=artifact,
+            proof=proof,
+            exclude_check_ids=verifier_repair_attempted,
+        )
+        if verifier_repair_ids:
+            verifier_repair_attempted.update(verifier_repair_ids)
+            retry_count += 1
+
         blocking_check_ids = sorted(
             {item.check_id for item in proof.obligations if item.blocking}
         )
-        retryable = _retryable_checks(plan, blocking_check_ids, policy_excerpt)
-        retry_count = 0
+        retryable = _retryable_checks(
+            plan,
+            [
+                check_id
+                for check_id in blocking_check_ids
+                if check_id not in verifier_repair_attempted
+                and check_id not in terminal_executor_repair_attempted
+            ],
+            policy_excerpt,
+        )
         if retryable:
-            before_evidence_hash = sandbox.evidence_ir.content_hash()
-            before_submitted_refs = _submitted_claim_refs(sandbox)
-            _, sandbox = self.execute_plan(
+            before_sandbox_hash = _sandbox_proof_material_hash(sandbox)
+            retry_summary, sandbox = self.execute_plan(
                 plan=plan,
                 prepared_sources=prepared_sources,
                 policy_excerpt=policy_excerpt,
@@ -551,10 +900,9 @@ class EvidenceCompilerRuntime:
                     if item.check_id in retryable
                 ],
             )
-            retry_count = 1
+            retry_count += 1
             if (
-                sandbox.evidence_ir.content_hash() != before_evidence_hash
-                or _submitted_claim_refs(sandbox) != before_submitted_refs
+                _sandbox_proof_material_hash(sandbox) != before_sandbox_hash
             ):
                 assessments = self.verify(plan=plan, sandbox=sandbox, policy_excerpt=policy_excerpt)
                 artifact = _artifact(
@@ -562,15 +910,23 @@ class EvidenceCompilerRuntime:
                     evidence_ir=sandbox.evidence_ir,
                     assessments=assessments,
                     submitted_claim_refs=_submitted_claim_refs(sandbox),
+                    submitted_binding_refs=_submitted_binding_refs(sandbox),
+                    submitted_witness_refs=_submitted_witness_refs(sandbox),
                     policy_excerpt=policy_excerpt,
                     model=self.settings.llm_model,
+                    sandbox=sandbox,
+                    execution_status=(
+                        "PARTIAL"
+                        if retry_summary.execution_status == "PARTIAL"
+                        else _derived_execution_status(plan, sandbox, assessments)
+                    ),
                 )
                 self._progress(
                     "model_started",
                     stage="proof_kernel",
                     status="started",
                     action="Proof Kernel 正在重新聚合新增证据",
-                    public_reason="主动验证产生了新的有效 Claim，Kernel 将重新计算 DecisionProof。",
+                    public_reason="主动验证产生了新的有效 Proof Term，Kernel 将重新计算 DecisionProof。",
                     assessment_count=len(assessments),
                     retry=1,
                 )
@@ -579,6 +935,75 @@ class EvidenceCompilerRuntime:
                     requirement_requiredness=requiredness,
                 )
                 self._emit_kernel_completed(proof)
+
+        # A blocking retry performs a full verification and can itself expose a
+        # polarity mismatch. Keep owner routing explicit and bounded per CHECK.
+        (
+            assessments,
+            artifact,
+            proof,
+            verifier_repair_ids,
+        ) = self._repair_terminal_status_mismatches_once(
+            plan=plan,
+            policy_excerpt=policy_excerpt,
+            requirement_requiredness=requiredness,
+            sandbox=sandbox,
+            assessments=assessments,
+            artifact=artifact,
+            proof=proof,
+            exclude_check_ids=verifier_repair_attempted,
+        )
+        if verifier_repair_ids:
+            verifier_repair_attempted.update(verifier_repair_ids)
+            retry_count += 1
+
+        # A blocking-evidence retry can expose a typed closure gap that did not
+        # exist in the first Kernel pass (for example, it may add a numeric
+        # Witness but omit the required boolean terminal). Give that Executor-
+        # owned diagnostic the same single focused opportunity, never a second
+        # attempt for checks already handled above.
+        (
+            sandbox,
+            assessments,
+            artifact,
+            proof,
+            terminal_executor_repair_ids,
+        ) = self._repair_missing_terminal_witnesses_once(
+            plan=plan,
+            prepared_sources=prepared_sources,
+            policy_excerpt=policy_excerpt,
+            requirement_requiredness=requiredness,
+            sandbox=sandbox,
+            assessments=assessments,
+            artifact=artifact,
+            proof=proof,
+            exclude_check_ids=terminal_executor_repair_attempted,
+        )
+        if terminal_executor_repair_ids:
+            terminal_executor_repair_attempted.update(terminal_executor_repair_ids)
+            retry_count += 1
+
+        # The post-blocking terminal repair has the same Executor -> Verifier ->
+        # Kernel boundary as the initial one, so it receives the same one-shot
+        # Verifier-owner handoff when it creates a polarity mismatch.
+        (
+            assessments,
+            artifact,
+            proof,
+            verifier_repair_ids,
+        ) = self._repair_terminal_status_mismatches_once(
+            plan=plan,
+            policy_excerpt=policy_excerpt,
+            requirement_requiredness=requiredness,
+            sandbox=sandbox,
+            assessments=assessments,
+            artifact=artifact,
+            proof=proof,
+            exclude_check_ids=verifier_repair_attempted,
+        )
+        if verifier_repair_ids:
+            verifier_repair_attempted.update(verifier_repair_ids)
+            retry_count += 1
 
         return CompilerRunResult(
             artifact=artifact,
@@ -590,6 +1015,306 @@ class EvidenceCompilerRuntime:
                 proof=proof,
             ),
             retry_count=retry_count,
+        )
+
+    def _repair_terminal_status_mismatches_once(
+        self,
+        *,
+        plan: ProofPlan,
+        policy_excerpt: dict[str, Any],
+        requirement_requiredness: Mapping[str, bool],
+        sandbox: EvidenceSandbox,
+        assessments: Sequence[CheckAssessment],
+        artifact: ReviewArtifact,
+        proof: CompiledProof,
+        exclude_check_ids: set[str] | frozenset[str] = frozenset(),
+    ) -> tuple[
+        list[CheckAssessment],
+        ReviewArtifact,
+        CompiledProof,
+        list[str],
+    ]:
+        """Give Verifier-owned terminal polarity mismatches one focused repair.
+
+        The caller owns the per-CHECK attempt ledger. A failed repair preserves
+        the frozen Artifact and Kernel result; this method never changes a
+        status or StrongStatusLink itself.
+        """
+
+        repair_ids = sorted(
+            {
+                item.node_id
+                for item in proof.diagnostics
+                if item.code == "TERMINAL_WITNESS_STATUS_MISMATCH"
+                and item.node_id
+                and item.node_id not in exclude_check_ids
+            }
+        )
+        current_assessments = list(assessments)
+        if not repair_ids:
+            return current_assessments, artifact, proof, []
+
+        previous_assessments = {
+            item.check_id: item
+            for item in current_assessments
+            if item.check_id in repair_ids
+        }
+        repair_feedback = [
+            {
+                "check_id": diagnostic.node_id,
+                "diagnostic_code": diagnostic.code,
+                "kernel_message": diagnostic.message,
+                **(
+                    {
+                        "previous_assessment": previous_assessments[
+                            diagnostic.node_id
+                        ].model_dump(mode="json")
+                    }
+                    if diagnostic.node_id in previous_assessments
+                    else {}
+                ),
+            }
+            for diagnostic in proof.diagnostics
+            if diagnostic.code == "TERMINAL_WITNESS_STATUS_MISMATCH"
+            and diagnostic.node_id in repair_ids
+        ]
+        self._progress(
+            "model_thinking",
+            stage="fine_verifier",
+            status="repair_started",
+            action="Fine Verifier 正在修复终端 Witness 极性协议",
+            public_reason=(
+                "只重新核查 Kernel 标记为极性不一致的 CHECK，不改写 Witness 或业务证据。"
+            ),
+            focused_check_ids=repair_ids,
+            repair_attempt=1,
+        )
+        try:
+            repaired_assessments = self.verify(
+                plan=plan,
+                sandbox=sandbox,
+                policy_excerpt=policy_excerpt,
+                focus_check_ids=repair_ids,
+                repair_feedback=repair_feedback,
+            )
+        except Exception as exc:
+            self._progress(
+                "model_thinking",
+                stage="fine_verifier",
+                status="repair_failed",
+                action="Fine Verifier 极性修复失败，保留原始 NOT_FOUND",
+                public_reason=(
+                    f"{type(exc).__name__}: 修复调用没有产生可接受输出；不会自动翻转状态或链接。"
+                ),
+                focused_check_ids=repair_ids,
+                repair_attempt=1,
+            )
+            return current_assessments, artifact, proof, repair_ids
+
+        candidate_assessments = _merge_assessments(
+            current_assessments,
+            repaired_assessments,
+        )
+        candidate_artifact = _artifact(
+            plan=plan,
+            evidence_ir=sandbox.evidence_ir,
+            assessments=candidate_assessments,
+            submitted_claim_refs=_submitted_claim_refs(sandbox),
+            submitted_binding_refs=_submitted_binding_refs(sandbox),
+            submitted_witness_refs=_submitted_witness_refs(sandbox),
+            policy_excerpt=policy_excerpt,
+            model=self.settings.llm_model,
+            sandbox=sandbox,
+            execution_status=(
+                "PARTIAL"
+                if artifact.execution_status == "PARTIAL"
+                else _derived_execution_status(plan, sandbox, candidate_assessments)
+            ),
+        )
+        self._progress(
+            "model_started",
+            stage="proof_kernel",
+            status="started",
+            action="Proof Kernel 正在核验 Verifier 极性修复",
+            public_reason=(
+                "修复输出已重新封装为 Artifact；最终状态仍只由 Kernel 投影。"
+            ),
+            assessment_count=len(candidate_assessments),
+            repair_attempt=1,
+        )
+        candidate_proof = compile_review_artifact(
+            candidate_artifact,
+            requirement_requiredness=requirement_requiredness,
+        )
+        self._emit_kernel_completed(candidate_proof)
+        return (
+            candidate_assessments,
+            candidate_artifact,
+            candidate_proof,
+            repair_ids,
+        )
+
+    def _repair_missing_terminal_witnesses_once(
+        self,
+        *,
+        plan: ProofPlan,
+        prepared_sources: Sequence[PreparedSource],
+        policy_excerpt: dict[str, Any],
+        requirement_requiredness: Mapping[str, bool],
+        sandbox: EvidenceSandbox,
+        assessments: Sequence[CheckAssessment],
+        artifact: ReviewArtifact,
+        proof: CompiledProof,
+        exclude_check_ids: set[str] | frozenset[str] = frozenset(),
+    ) -> tuple[
+        EvidenceSandbox,
+        list[CheckAssessment],
+        ReviewArtifact,
+        CompiledProof,
+        list[str],
+    ]:
+        """Give Executor-owned terminal gaps one transactional focused repair.
+
+        The caller controls the per-CHECK one-attempt budget.  This method either
+        commits a fully re-verified and recompiled candidate or returns the
+        original frozen chain unchanged.
+        """
+
+        repair_ids = sorted(
+            {
+                item.node_id
+                for item in proof.diagnostics
+                if item.code == "TERMINAL_WITNESS_REQUIRED"
+                and item.node_id
+                and item.node_id not in exclude_check_ids
+            }
+        )
+        current_assessments = list(assessments)
+        if not repair_ids:
+            return sandbox, current_assessments, artifact, proof, []
+
+        previous_assessments = {
+            item.check_id: item for item in current_assessments if item.check_id in repair_ids
+        }
+        repair_feedback = [
+            {
+                "check_id": diagnostic.node_id,
+                "diagnostic_code": diagnostic.code,
+                "kernel_message": diagnostic.message,
+                **(
+                    {
+                        "previous_assessment": previous_assessments[
+                            diagnostic.node_id
+                        ].model_dump(mode="json")
+                    }
+                    if diagnostic.node_id in previous_assessments
+                    else {}
+                ),
+            }
+            for diagnostic in proof.diagnostics
+            if diagnostic.code == "TERMINAL_WITNESS_REQUIRED"
+            and diagnostic.node_id in repair_ids
+        ]
+        self._progress(
+            "model_thinking",
+            stage="executor",
+            status="terminal_repair_started",
+            action="Evidence Worker 正在补全缺失的终端 Witness",
+            public_reason=(
+                "只重开 Kernel 标记为缺少布尔终端的 CHECK；不会改写其他检查或自动制造结论。"
+            ),
+            focused_check_ids=repair_ids,
+            repair_attempt=1,
+        )
+
+        # Work on a private copy so an exception or no-op cannot leak partial
+        # Claims/Witnesses into the frozen Artifact or later reporting path.
+        candidate_sandbox = copy.deepcopy(sandbox)
+        before_hash = _sandbox_proof_material_hash(candidate_sandbox)
+        try:
+            _summary, candidate_sandbox = self.execute_plan(
+                plan=plan,
+                prepared_sources=prepared_sources,
+                policy_excerpt=policy_excerpt,
+                sandbox=candidate_sandbox,
+                focus_check_ids=repair_ids,
+                hook_feedback=repair_feedback,
+            )
+            if _sandbox_proof_material_hash(candidate_sandbox) == before_hash:
+                self._progress(
+                    "model_thinking",
+                    stage="executor",
+                    status="terminal_repair_no_change",
+                    action="Evidence Worker 未补充新的终端证明工件",
+                    public_reason="保留原始 NOT_FOUND；无新 Proof Material 时不重跑 Verifier 或 Kernel。",
+                    focused_check_ids=repair_ids,
+                    repair_attempt=1,
+                )
+                return sandbox, current_assessments, artifact, proof, repair_ids
+
+            repaired_assessments = self.verify(
+                plan=plan,
+                sandbox=candidate_sandbox,
+                policy_excerpt=policy_excerpt,
+                focus_check_ids=repair_ids,
+                repair_feedback=repair_feedback,
+            )
+            candidate_assessments = _merge_assessments(
+                current_assessments,
+                repaired_assessments,
+            )
+            candidate_artifact = _artifact(
+                plan=plan,
+                evidence_ir=candidate_sandbox.evidence_ir,
+                assessments=candidate_assessments,
+                submitted_claim_refs=_submitted_claim_refs(candidate_sandbox),
+                submitted_binding_refs=_submitted_binding_refs(candidate_sandbox),
+                submitted_witness_refs=_submitted_witness_refs(candidate_sandbox),
+                policy_excerpt=policy_excerpt,
+                model=self.settings.llm_model,
+                sandbox=candidate_sandbox,
+                execution_status=_derived_execution_status(
+                    plan,
+                    candidate_sandbox,
+                    candidate_assessments,
+                ),
+            )
+            self._progress(
+                "model_started",
+                stage="proof_kernel",
+                status="started",
+                action="Proof Kernel 正在核验新增的终端 Witness",
+                public_reason=(
+                    "新增工件已由聚焦 Verifier 核查并重新封装；最终状态仍只由 Kernel 投影。"
+                ),
+                assessment_count=len(candidate_assessments),
+                repair_attempt=1,
+            )
+            candidate_proof = compile_review_artifact(
+                candidate_artifact,
+                requirement_requiredness=requirement_requiredness,
+            )
+        except Exception as exc:
+            self._progress(
+                "model_thinking",
+                stage="executor",
+                status="terminal_repair_failed",
+                action="终端 Witness 修复失败，保留原始 NOT_FOUND",
+                public_reason=(
+                    f"{type(exc).__name__}: 修复链没有形成可接受的新 Artifact；原始证据与结论保持冻结。"
+                ),
+                focused_check_ids=repair_ids,
+                repair_attempt=1,
+            )
+            return sandbox, current_assessments, artifact, proof, repair_ids
+
+        self._emit_kernel_completed(candidate_proof)
+        return (
+            candidate_sandbox,
+            candidate_assessments,
+            candidate_artifact,
+            candidate_proof,
+            repair_ids,
         )
 
     def _run_phase(
@@ -877,25 +1602,51 @@ def _artifact(
     evidence_ir: EvidenceIR,
     assessments: list[CheckAssessment],
     submitted_claim_refs: Mapping[str, Sequence[str]],
+    submitted_binding_refs: Mapping[str, Sequence[str]] | None = None,
+    submitted_witness_refs: Mapping[str, Sequence[str]] | None = None,
     policy_excerpt: dict[str, Any],
     model: str,
+    sandbox: EvidenceSandbox | None = None,
+    execution_status: ExecutionStatus = "COMPLETED",
 ) -> ReviewArtifact:
-    return ReviewArtifact(
+    artifact = ReviewArtifact(
         plan=plan,
         plan_hash=plan.content_hash(),
+        proof_signature_hash=proof_signature_hash_for(plan.active_requirement_ids),
         evidence_ir=evidence_ir,
         evidence_snapshot_hash=evidence_ir.content_hash(),
         assessments=assessments,
+        binding_proposals=list(sandbox.binding_proposals) if sandbox is not None else [],
+        calculation_witnesses=list(sandbox.calculation_witnesses) if sandbox is not None else [],
         submitted_claim_refs={
             check_id: _unique(claim_ids)
             for check_id, claim_ids in sorted(submitted_claim_refs.items())
         },
+        submitted_binding_refs={
+            check_id: _unique(binding_ids)
+            for check_id, binding_ids in sorted((submitted_binding_refs or {}).items())
+        },
+        submitted_witness_refs={
+            check_id: _unique(witness_ids)
+            for check_id, witness_ids in sorted((submitted_witness_refs or {}).items())
+        },
         policy_hash=policy_hash(policy_excerpt),
+        resolved_policy_terms={
+            ref_id: value
+            for ref_id, value in (
+                sandbox.resolved_policy_terms
+                if sandbox is not None
+                else _configured_policy_values(policy_excerpt)
+            ).items()
+            if ref_id in plan.policy_refs
+        },
         unconfigured_policy_refs=_unconfigured_policy_refs(plan, policy_excerpt),
+        execution_status=execution_status,
         compiler_version=COMPILER_VERSION,
         model=model,
         prompt_versions=PROMPT_VERSIONS,
     )
+    return artifact.model_copy(update={"artifact_hash": artifact.content_hash()})
 
 
 def _submitted_claim_refs(sandbox: EvidenceSandbox) -> dict[str, list[str]]:
@@ -907,6 +1658,254 @@ def _submitted_claim_refs(sandbox: EvidenceSandbox) -> dict[str, list[str]]:
         check_id: _unique(claim_ids)
         for check_id, claim_ids in sorted(result.items())
     }
+
+
+def _submitted_binding_refs(sandbox: EvidenceSandbox) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for submission in sandbox.submissions:
+        result.setdefault(submission.check_id, [])
+        result[submission.check_id].extend(submission.binding_ids)
+    return {
+        check_id: _unique(binding_ids)
+        for check_id, binding_ids in sorted(result.items())
+    }
+
+
+def _submitted_witness_refs(sandbox: EvidenceSandbox) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for submission in sandbox.submissions:
+        result.setdefault(submission.check_id, [])
+        result[submission.check_id].extend(submission.witness_ids)
+    return {
+        check_id: _unique(witness_ids)
+        for check_id, witness_ids in sorted(result.items())
+    }
+
+
+def _sandbox_proof_material_hash(sandbox: EvidenceSandbox) -> str:
+    return _hash(
+        {
+            "evidence_ir": sandbox.evidence_ir.model_dump(mode="json"),
+            "binding_proposals": [
+                item.model_dump(mode="json") for item in sandbox.binding_proposals
+            ],
+            "calculation_witnesses": [
+                item.model_dump(mode="json") for item in sandbox.calculation_witnesses
+            ],
+            "submitted_claim_refs": _submitted_claim_refs(sandbox),
+            "submitted_binding_refs": _submitted_binding_refs(sandbox),
+            "submitted_witness_refs": _submitted_witness_refs(sandbox),
+        }
+    )
+
+
+def _focused_candidate_scope_violation(
+    before: EvidenceSandbox,
+    after: EvidenceSandbox,
+    *,
+    focused_check_ids: Sequence[str],
+) -> dict[str, Any] | None:
+    """Validate a focused candidate without assigning global Claims by fiat.
+
+    CHECK-owned tools are blocked in ``EvidenceSandbox``. Claims intentionally
+    remain globally typed observations, so every Claim created during a focused
+    run must be reachable from a newly submitted focused CHECK (directly,
+    through a submitted Binding, or through a submitted Witness DAG).
+    """
+
+    focused = set(focused_check_ids)
+    before_claims = list(before.evidence_ir.claims)
+    after_claims = list(after.evidence_ir.claims)
+    before_bindings = list(before.binding_proposals)
+    after_bindings = list(after.binding_proposals)
+    before_witnesses = list(before.calculation_witnesses)
+    after_witnesses = list(after.calculation_witnesses)
+    before_submissions = list(before.submissions)
+    after_submissions = list(after.submissions)
+
+    frozen_prefixes = {
+        "claim": (before_claims, after_claims),
+        "binding": (before_bindings, after_bindings),
+        "witness": (before_witnesses, after_witnesses),
+        "submission": (before_submissions, after_submissions),
+    }
+    changed_prefixes = sorted(
+        kind
+        for kind, (frozen, candidate) in frozen_prefixes.items()
+        if len(candidate) < len(frozen) or candidate[: len(frozen)] != frozen
+    )
+    if changed_prefixes:
+        return {
+            "scope_error": "PREEXISTING_PROOF_MATERIAL_CHANGED",
+            "changed_material_kinds": changed_prefixes,
+        }
+
+    new_claims = after_claims[len(before_claims) :]
+    new_bindings = after_bindings[len(before_bindings) :]
+    new_witnesses = after_witnesses[len(before_witnesses) :]
+    new_submissions = after_submissions[len(before_submissions) :]
+
+    outside_focus = sorted(
+        {
+            item.check_id
+            for item in [*new_bindings, *new_witnesses, *new_submissions]
+            if item.check_id not in focused
+        }
+    )
+    if outside_focus:
+        return {
+            "scope_error": "NON_FOCUSED_PROOF_MATERIAL_ADDED",
+            "non_focused_check_ids": outside_focus,
+        }
+
+    binding_by_id = {item.id: item for item in after_bindings}
+    witness_by_id = {item.id: item for item in after_witnesses}
+    owned_claim_ids: set[str] = set()
+    owned_binding_ids: set[str] = set()
+    owned_witness_ids: set[str] = set()
+
+    def admit_ref(ref: ProofTermRef) -> None:
+        if ref.kind == "CLAIM":
+            owned_claim_ids.add(ref.ref_id)
+            return
+        if ref.kind != "WITNESS" or ref.ref_id in owned_witness_ids:
+            return
+        witness = witness_by_id.get(ref.ref_id)
+        if witness is None:
+            return
+        owned_witness_ids.add(witness.id)
+        for operand in witness.operands:
+            admit_ref(operand.ref)
+
+    for submission in new_submissions:
+        if submission.check_id not in focused:
+            continue
+        owned_claim_ids.update(submission.claim_ids)
+        for binding_id in submission.binding_ids:
+            binding = binding_by_id.get(binding_id)
+            if binding is None:
+                continue
+            owned_binding_ids.add(binding.id)
+            for ref in binding.term_refs:
+                admit_ref(ref)
+        for witness_id in submission.witness_ids:
+            admit_ref(ProofTermRef(kind="WITNESS", ref_id=witness_id))
+
+    orphan_claim_ids = sorted({item.id for item in new_claims} - owned_claim_ids)
+    orphan_binding_ids = sorted({item.id for item in new_bindings} - owned_binding_ids)
+    orphan_witness_ids = sorted({item.id for item in new_witnesses} - owned_witness_ids)
+    if orphan_claim_ids or orphan_binding_ids or orphan_witness_ids:
+        return {
+            "scope_error": "UNOWNED_FOCUSED_PROOF_MATERIAL",
+            "orphan_claim_ids": orphan_claim_ids,
+            "orphan_binding_ids": orphan_binding_ids,
+            "orphan_witness_ids": orphan_witness_ids,
+        }
+    return None
+
+
+def _derived_execution_status(
+    plan: ProofPlan,
+    sandbox: EvidenceSandbox,
+    assessments: Sequence[CheckAssessment],
+) -> ExecutionStatus:
+    check_ids = {node.id for node in plan.nodes if node.kind == "CHECK"}
+    submitted_ids = {item.check_id for item in sandbox.submissions}
+    assessed_ids = {item.check_id for item in assessments}
+    if check_ids and check_ids <= submitted_ids and check_ids <= assessed_ids:
+        return "COMPLETED"
+    if submitted_ids or assessed_ids:
+        return "PARTIAL"
+    return "FAILED"
+
+
+def _calculation_operation_protocol() -> dict[str, dict[str, Any]]:
+    """Expose existing deterministic-engine semantics next to model inputs."""
+
+    return {
+        "GREATER_THAN": {
+            "ordered_semantics": "refs[0] > refs[1]",
+            "equality_result": False,
+            "symmetric": False,
+        }
+    }
+
+
+def _strong_status_link_protocol() -> dict[str, str]:
+    """Describe the typed polarity field without adding a business rule."""
+
+    return {
+        "true_status": (
+            "the CHECK classification that would follow if the linked boolean Witness "
+            "replayed to true; it is not the current classification"
+        ),
+        "false_status": "the opposite strong classification, derived by the Proof Kernel",
+    }
+
+
+def _merge_assessments(
+    current: Sequence[CheckAssessment],
+    replacements: Sequence[CheckAssessment],
+) -> list[CheckAssessment]:
+    """Replace focused Verifier outputs without disturbing full-plan ordering."""
+
+    current_ids = {item.check_id for item in current}
+    replacement_by_id = {item.check_id: item for item in replacements}
+    if len(replacement_by_id) != len(replacements):
+        raise ValueError("Focused Fine Verifier returned duplicate CHECK assessments")
+    unknown = sorted(set(replacement_by_id) - current_ids)
+    if unknown:
+        raise ValueError(
+            f"Focused Fine Verifier returned checks outside the original batch: {unknown}"
+        )
+    return [replacement_by_id.get(item.check_id, item) for item in current]
+
+
+def _strong_status_link_boundary_violations(
+    assessment: CheckAssessment,
+    witnesses: Mapping[str, CalculationWitness],
+) -> list[dict[str, Any]]:
+    """Detect definite polarity conflicts while preserving verifier output.
+
+    This is deliberately narrower than Kernel validation.  It never invents a
+    polarity or edits an assessment: it only makes an already-structured
+    contradiction observable before the Kernel performs the authoritative
+    fail-closed projection.
+    """
+
+    if assessment.status not in {"SUPPORTED", "CONTRADICTED"}:
+        return []
+
+    accepted = set(assessment.accepted_witness_ids)
+    observed: list[dict[str, Any]] = []
+    for link in assessment.strong_status_links:
+        witness = witnesses.get(link.witness_id)
+        if (
+            witness is None
+            or link.witness_id not in accepted
+            or witness.check_id != assessment.check_id
+            or not isinstance(witness.result, bool)
+        ):
+            continue
+        mapped_status = (
+            link.true_status
+            if witness.result
+            else ("CONTRADICTED" if link.true_status == "SUPPORTED" else "SUPPORTED")
+        )
+        observed.append(
+            {
+                "witness_id": link.witness_id,
+                "witness_result": witness.result,
+                "true_status": link.true_status,
+                "mapped_status": mapped_status,
+            }
+        )
+
+    if assessment.status == "SUPPORTED":
+        return [item for item in observed if item["mapped_status"] == "CONTRADICTED"]
+    if observed and not any(item["mapped_status"] == "CONTRADICTED" for item in observed):
+        return observed
+    return []
 
 
 def _sandbox_tools(
@@ -926,6 +1925,13 @@ def _sandbox_tools(
         data = _BindClaimInput.model_validate_json(raw)
         return _observed_tool("bind_claim", lambda: sandbox.bind_claim(**data.model_dump()))
 
+    async def compute_witness_tool(_context: Any, raw: str) -> str:
+        data = _ComputeWitnessInput.model_validate_json(raw)
+        return _observed_tool(
+            "compute_witness",
+            lambda: sandbox.compute_witness(**data.model_dump()),
+        )
+
     async def submit_check(_context: Any, raw: str) -> str:
         data = _SubmitCheckInput.model_validate_json(raw)
         return _observed_tool("submit_check", lambda: sandbox.submit_check(**data.model_dump()))
@@ -941,8 +1947,24 @@ def _sandbox_tools(
     return [
         _function_tool("list_sources", "List the evidence sources available in this run.", _ListSourcesInput, list_sources),
         _function_tool("read_source", "Read one source by source_id before binding claims.", _ReadSourceInput, read_source),
-        _function_tool("bind_claim", "Append one source-grounded fact or semantic relation to EvidenceIR.", _BindClaimInput, bind_claim),
-        _function_tool("submit_check", "Submit candidate claim references and remaining questions for one CHECK; this is not a verdict.", _SubmitCheckInput, submit_check),
+        _function_tool(
+            "bind_claim",
+            "Append one fact directly observed in an exact source quote to EvidenceIR; never encode a semantic relation or calculation.",
+            _BindClaimInput,
+            bind_claim,
+        ),
+        _function_tool(
+            "compute_witness",
+            "Compute a deterministic Decimal witness from ordered typed refs; no values or results are accepted. GREATER_THAN means refs[0] > refs[1], is not symmetric, and returns false at equality.",
+            _ComputeWitnessInput,
+            compute_witness_tool,
+        ),
+        _function_tool(
+            "submit_check",
+            "Submit candidate Claim refs, semantic binding proposals, Witness refs, and remaining questions for one CHECK; this is not a verdict.",
+            _SubmitCheckInput,
+            submit_check,
+        ),
     ]
 
 
@@ -966,13 +1988,18 @@ def _completion_hook(
         ):
             return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
         latest = {check_id: items[-1] for check_id, items in submissions_by_check.items()}
-        unresolved = sorted(check_id for check_id, item in latest.items() if not item.claim_ids)
+        unresolved = sorted(
+            check_id
+            for check_id, item in latest.items()
+            if not (item.claim_ids or item.binding_ids or item.witness_ids)
+        )
         return ToolsToFinalOutputResult(
             is_final_output=True,
             final_output=ExecutorSummary(
                 completed_check_ids=sorted(expected - set(unresolved)),
                 unresolved_check_ids=unresolved,
                 summary="Every executable CHECK was submitted; the Runtime completion hook stopped the worker.",
+                execution_status="COMPLETED",
             ),
         )
 
@@ -1255,6 +2282,14 @@ def _planning_extraction_summary(items: Sequence[Mapping[str, Any]]) -> list[dic
     ]
 
 
+def _active_proof_signatures(requirement_ids: Sequence[str]) -> list[dict[str, Any]]:
+    return [
+        signature.model_dump(mode="json")
+        for requirement_id in requirement_ids
+        if (signature := proof_signature_for(requirement_id)) is not None
+    ]
+
+
 def _retryable_checks(
     plan: ProofPlan,
     unresolved_check_ids: Sequence[str],
@@ -1282,6 +2317,40 @@ def _unconfigured_policy_refs(
         if not isinstance(values.get(policy_ref), Mapping)
         or values[policy_ref].get("configured") is not True
     )
+
+
+def _configured_policy_values(policy_excerpt: Mapping[str, Any]) -> dict[str, Any]:
+    """Lower policy envelopes to the tiny numeric shape accepted by proof_terms.
+
+    Business metadata (scope/note) is intentionally not executable. The
+    document_currency alias is retained here and resolved against concrete
+    monetary operands by EvidenceSandbox immediately before computation.
+    """
+
+    raw_values = policy_excerpt.get("values")
+    values = raw_values if isinstance(raw_values, Mapping) else {}
+    configured: dict[str, Any] = {}
+    for ref_id, envelope in values.items():
+        if not isinstance(envelope, Mapping) or envelope.get("configured") is not True:
+            continue
+        raw = envelope.get("value")
+        if isinstance(raw, Mapping):
+            if "amount" in raw:
+                configured[str(ref_id)] = {
+                    "value": raw.get("amount"),
+                    "currency": str(raw.get("currency") or "").strip(),
+                    "unit": str(raw.get("unit") or "").strip(),
+                }
+                continue
+            if "value" in raw:
+                configured[str(ref_id)] = {
+                    "value": raw.get("value"),
+                    "currency": str(raw.get("currency") or "").strip(),
+                    "unit": str(raw.get("unit") or "").strip(),
+                }
+                continue
+        configured[str(ref_id)] = raw
+    return configured
 
 
 def _tool_json(value: Any) -> str:

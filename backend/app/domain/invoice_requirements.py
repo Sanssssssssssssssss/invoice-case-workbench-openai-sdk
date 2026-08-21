@@ -12,6 +12,17 @@ _KINDS = {"document", "field", "cross_check", "visual", "risk_check"}
 _OWNERS = {"evidence", "reviewer", "compiler"}
 _HINT_ACTIVATIONS = {"explicit", "derived"}
 _HINT_FIELDS = {"activation", "activation_requirement_groups", "capability", "target_predicate"}
+_SIGNATURE_FIELDS = {
+    "signature_id",
+    "version",
+    "requirement_id",
+    "root_composition",
+    "required_policy_refs",
+    "facets",
+}
+_FACET_FIELDS = {"id", "minimum_proof_terms"}
+_ROOT_COMPOSITIONS = {"ALL_REQUIRED", "ANY_SUFFICIENT"}
+_PROOF_TERMS = {"CLAIM", "BINDING", "WITNESS"}
 
 
 def load_requirement_pack(path: Path = POLICY_PATH) -> dict[str, Any]:
@@ -50,6 +61,54 @@ def load_requirement_pack(path: Path = POLICY_PATH) -> dict[str, Any]:
             requirements[str(item)].get("owner") != "evidence" for item in premises
         ):
             raise ValueError(f"Reviewer premises must be evidence-owned: {requirement_id}")
+    raw_signatures = pack.get("proof_signatures") or []
+    if not isinstance(raw_signatures, list):
+        raise ValueError("Invalid proof signatures")
+    seen_signature_ids: set[str] = set()
+    seen_signature_requirements: set[str] = set()
+    for signature in raw_signatures:
+        if not isinstance(signature, dict) or set(signature) != _SIGNATURE_FIELDS:
+            raise ValueError("Invalid proof signature fields")
+        signature_id = str(signature.get("signature_id") or "").strip()
+        version = str(signature.get("version") or "").strip()
+        requirement_id = str(signature.get("requirement_id") or "").strip()
+        if not signature_id or not version or requirement_id not in requirements:
+            raise ValueError(f"Invalid proof signature: {signature_id or requirement_id}")
+        if signature_id in seen_signature_ids or requirement_id in seen_signature_requirements:
+            raise ValueError(f"Duplicate proof signature: {signature_id or requirement_id}")
+        seen_signature_ids.add(signature_id)
+        seen_signature_requirements.add(requirement_id)
+        if signature.get("root_composition") not in _ROOT_COMPOSITIONS:
+            raise ValueError(f"Invalid proof signature root composition: {signature_id}")
+        policy_refs = signature.get("required_policy_refs")
+        definition_policy_refs = set(requirements[requirement_id].get("required_policy_values") or [])
+        if (
+            not isinstance(policy_refs, list)
+            or any(not str(item).strip() for item in policy_refs)
+            or len({str(item) for item in policy_refs}) != len(policy_refs)
+            or not set(str(item) for item in policy_refs).issubset(definition_policy_refs)
+        ):
+            raise ValueError(f"Invalid proof signature policy refs: {signature_id}")
+        facets = signature.get("facets")
+        if not isinstance(facets, list) or not facets:
+            raise ValueError(f"Invalid proof signature facets: {signature_id}")
+        facet_ids: list[str] = []
+        for facet in facets:
+            if not isinstance(facet, dict) or set(facet) != _FACET_FIELDS:
+                raise ValueError(f"Invalid proof signature facet fields: {signature_id}")
+            facet_id = str(facet.get("id") or "").strip()
+            terms = facet.get("minimum_proof_terms")
+            if (
+                not facet_id
+                or not isinstance(terms, list)
+                or not terms
+                or any(str(term) not in _PROOF_TERMS for term in terms)
+                or len({str(term) for term in terms}) != len(terms)
+            ):
+                raise ValueError(f"Invalid proof signature facet: {signature_id}")
+            facet_ids.append(facet_id)
+        if len(set(facet_ids)) != len(facet_ids):
+            raise ValueError(f"Duplicate proof signature facet: {signature_id}")
     for profile_id, rows in profiles.items():
         if not isinstance(rows, list) or any(not isinstance(row, dict) or row.get("id") not in requirements for row in rows):
             raise ValueError(f"Invalid requirement profile: {profile_id}")
@@ -105,6 +164,9 @@ REQUIREMENT_PROFILES: dict[str, list[dict[str, Any]]] = REQUIREMENT_PACK["profil
 UNCONFIGURED_POLICY_VALUES = frozenset(str(item) for item in REQUIREMENT_PACK.get("unconfigured_policy_values") or [])
 REQUIREMENT_CATALOG_VERSION = str(REQUIREMENT_PACK["requirement_pack_version"])
 REQUIREMENT_PLANNING_HINTS: dict[str, dict[str, Any]] = REQUIREMENT_PACK.get("planning_hints") or {}
+REQUIREMENT_PROOF_SIGNATURES: tuple[dict[str, Any], ...] = tuple(
+    REQUIREMENT_PACK.get("proof_signatures") or []
+)
 
 
 def profile_requirements(profile_id: str, *, required: bool | None = None) -> tuple[str, ...]:

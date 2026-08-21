@@ -85,6 +85,7 @@ CASES: dict[str, dict[str, Any]] = {
         ],
     },
     "invoice_subtotal_conflict_0006": {
+        "framework": True,
         "source": "pia_inv_2026_0006",
         "title": "含税行金额正确但票面小计错误",
         "holes": ["invoice_arithmetic", "subtotal_integrity", "tax_inclusive_prices"],
@@ -198,6 +199,7 @@ CASES: dict[str, dict[str, Any]] = {
         "component_checks": [],
     },
     "invoice_total_conflict_0025": {
+        "framework": True,
         "source": "pia_inv_2026_0025",
         "title": "单行瑞士数值发票最终金额错误",
         "holes": ["invoice_arithmetic", "single_item", "total_reconciliation", "swiss_number_format"],
@@ -273,6 +275,7 @@ CASES: dict[str, dict[str, Any]] = {
         ],
     },
     "tax_inclusive_arithmetic_supported_0053": {
+        "framework": True,
         "source": "pia_inv_2026_0053",
         "title": "含税德式行金额与框架调整计算一致",
         "holes": ["invoice_arithmetic", "tax_inclusive_prices", "german_number_format"],
@@ -834,6 +837,7 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
     milestones: list[dict[str, Any]] = [
         {
             "id": "line_extensions",
+            "facet_ref": "line_extensions",
             "statement_meaning": _meaning(
                 ["line item", "line items", "行项目"],
                 ["quantity", "qty", "数量"],
@@ -862,6 +866,7 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
         },
         {
             "id": "subtotal_aggregation",
+            "facet_ref": "subtotal_aggregation",
             "statement_meaning": _meaning(
                 [
                     "line extension",
@@ -891,6 +896,7 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
         milestones.append(
             {
                 "id": "stated_component_rate_base_validation",
+                "facet_ref": "stated_components",
                 "statement_meaning": _meaning(
                     ["tax", "VAT", "discount", "adjustment", "component", "税费", "增值税", "折扣", "调整"],
                     [
@@ -913,6 +919,23 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
                 "relation_ids": component_relation_ids,
             }
         )
+        if spec["status"] == "NOT_FOUND" and component_status == "NOT_FOUND":
+            milestones[-1]["missing_meaning"] = _meaning(
+                ["tax", "VAT", "discount", "adjustment", "component", "税", "增值税", "折扣", "调整"],
+                ["rate", "base", "allocation", "calculation basis", "税率", "基数", "分摊", "计算依据"],
+                [
+                    "missing",
+                    "not visible",
+                    "not provided",
+                    "cannot verify",
+                    "insufficient",
+                    "缺失",
+                    "未显示",
+                    "未提供",
+                    "无法核验",
+                    "证据不足",
+                ],
+            )
 
     total_meaning = _meaning(
         ["printed final total", "printed total", "final total", "amount due", "票面总额", "最终金额", "应付金额"],
@@ -925,6 +948,7 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
             [
                 {
                     "id": "printed_subtotal_total_reconciliation",
+                    "facet_ref": "final_total",
                     "statement_meaning": _meaning(
                         ["printed subtotal", "stated subtotal", "票面小计"],
                         ["tax", "VAT", "discount", "adjustment", "component", "税", "折扣", "调整"],
@@ -937,6 +961,7 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
                 },
                 {
                     "id": "line_derived_total_reconciliation",
+                    "facet_ref": "final_total",
                     "statement_meaning": total_meaning,
                     "expected_status": "SUPPORTED",
                     "fact_ids": list(dict.fromkeys(final_fact_ids)),
@@ -948,6 +973,7 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
         milestones.append(
             {
                 "id": "final_total_reconciliation",
+                "facet_ref": "final_total",
                 "statement_meaning": total_meaning,
                 "expected_status": spec["total_status"],
                 "fact_ids": list(dict.fromkeys(final_fact_ids)),
@@ -958,6 +984,7 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
         milestones.append(
             {
                 "id": "credit_note_sign_semantics",
+                "facet_ref": "final_total",
                 "statement_meaning": _meaning(
                     ["credit note", "贷项", "贷记"],
                     ["negative", "sign", "reversal", "负数", "符号", "冲销"],
@@ -972,6 +999,7 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
         milestones.append(
             {
                 "id": "reverse_charge_arithmetic_treatment",
+                "facet_ref": "stated_components",
                 "statement_meaning": _meaning(
                     ["reverse charge", "反向征税"],
                     ["VAT", "tax", "增值税", "税"],
@@ -1140,14 +1168,11 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
                 ],
             ),
         ]
-        forbidden_phrases = [
-            "发票计算正确",
-            "金额核对通过",
-            "内部计算一致",
-            "发票计算错误",
-            "金额核对未通过",
-            "确定存在计算错误",
-        ]
+        # NOT_FOUND is a root-level epistemic state.  Local verified or
+        # contradicted leaves remain reportable, so global phrase bans would
+        # incorrectly veto a faithful partial report.  Root overclaims are
+        # caught by the structured opposite conclusions instead.
+        forbidden_phrases = []
     else:
         required_conclusion_meanings = [
             "内部计算一致",
@@ -1174,10 +1199,10 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
         forbidden_phrases = ["结论：金额核对未通过", "结论：发票计算错误"]
 
     projected_status = "conflict" if contradicted else "weak" if not_found else "satisfied"
-    return {
+    oracle = {
         "schema_version": "2",
         "case_id": case_id,
-        "oracle_version": "3",
+        "oracle_version": "4",
         "sentinel": f"ORACLE_SENTINEL_DO_NOT_SEND::{case_id}",
         "facts": facts,
         "intent": {
@@ -1216,6 +1241,37 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
             "require_report_links": True,
         },
     }
+    if spec.get("framework"):
+        oracle["framework"] = {
+            "required_tools": [
+                {"name": name, "min_calls": 1}
+                for name in (
+                    "read_attachment",
+                    "read_source",
+                    "bind_claim",
+                    "compute_witness",
+                    "submit_check",
+                    "write_case_file",
+                    "render_pdf",
+                )
+            ],
+            "required_roles": [{"name": "report_writer", "min_calls": 1}],
+            "required_approved_tools": ["write_case_file", "render_pdf"],
+            "max_tool_errors": 0,
+            "ordered_milestones": [
+                ["read_attachment"],
+                ["read_source"],
+                ["bind_claim"],
+                ["compute_witness"],
+                ["submit_check"],
+                ["role:report_writer"],
+                ["approval:write_case_file"],
+                ["write_case_file"],
+                ["approval:render_pdf"],
+                ["render_pdf"],
+            ],
+        }
+    return oracle
 
 
 def _normalize(value: str) -> str:

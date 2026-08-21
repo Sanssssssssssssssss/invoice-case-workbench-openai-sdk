@@ -308,7 +308,7 @@ def _assert_timestamped_report_generated(store: CaseStore, case_id: str, *, star
         "|---|---|---|---|---|---|---|---|\n"
         "| C-001 | 回归 case 已保存证据并刷新状态 | ev_001 | case_state | partial/full | 见状态桶 | medium | 合成 fixture |\n\n"
         "## 第三章 证据图录\n\n"
-        "字段截图和原始附件截图由 PDF renderer 根据 evidence metadata 自动补充。\n"
+        "PDF renderer 会在正文后自动追加原始材料附录；附录仅供人工核对，不构成系统结论，以正文 canonical Proof 为准。\n"
     )
     write_result = registry.call(
         "write_case_file",

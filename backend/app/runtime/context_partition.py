@@ -55,7 +55,7 @@ DYNAMIC_CONTEXT_KEYS = (
     "rag_context",
     "attachment_manifest",
     "open_questions",
-    "evidence_chain_context",
+    "canonical_consumer_packet",
     "role_result",
     "case_state",
     "evidence",

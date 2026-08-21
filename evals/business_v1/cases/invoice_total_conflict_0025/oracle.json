@@ -1,7 +1,7 @@
 {
   "schema_version": "2",
   "case_id": "invoice_total_conflict_0025",
-  "oracle_version": "3",
+  "oracle_version": "4",
   "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::invoice_total_conflict_0025",
   "facts": [
     {
@@ -226,6 +226,7 @@
   "milestones": [
     {
       "id": "line_extensions",
+      "facet_ref": "line_extensions",
       "statement_meaning": {
         "all_of": [
           [
@@ -281,6 +282,7 @@
     },
     {
       "id": "subtotal_aggregation",
+      "facet_ref": "subtotal_aggregation",
       "statement_meaning": {
         "all_of": [
           [
@@ -334,6 +336,7 @@
     },
     {
       "id": "stated_component_rate_base_validation",
+      "facet_ref": "stated_components",
       "statement_meaning": {
         "all_of": [
           [
@@ -375,6 +378,7 @@
     },
     {
       "id": "final_total_reconciliation",
+      "facet_ref": "final_total",
       "statement_meaning": {
         "all_of": [
           [
@@ -620,5 +624,80 @@
     ],
     "require_chinese": true,
     "require_report_links": true
+  },
+  "framework": {
+    "required_tools": [
+      {
+        "name": "read_attachment",
+        "min_calls": 1
+      },
+      {
+        "name": "read_source",
+        "min_calls": 1
+      },
+      {
+        "name": "bind_claim",
+        "min_calls": 1
+      },
+      {
+        "name": "compute_witness",
+        "min_calls": 1
+      },
+      {
+        "name": "submit_check",
+        "min_calls": 1
+      },
+      {
+        "name": "write_case_file",
+        "min_calls": 1
+      },
+      {
+        "name": "render_pdf",
+        "min_calls": 1
+      }
+    ],
+    "required_roles": [
+      {
+        "name": "report_writer",
+        "min_calls": 1
+      }
+    ],
+    "required_approved_tools": [
+      "write_case_file",
+      "render_pdf"
+    ],
+    "max_tool_errors": 0,
+    "ordered_milestones": [
+      [
+        "read_attachment"
+      ],
+      [
+        "read_source"
+      ],
+      [
+        "bind_claim"
+      ],
+      [
+        "compute_witness"
+      ],
+      [
+        "submit_check"
+      ],
+      [
+        "role:report_writer"
+      ],
+      [
+        "approval:write_case_file"
+      ],
+      [
+        "write_case_file"
+      ],
+      [
+        "approval:render_pdf"
+      ],
+      [
+        "render_pdf"
+      ]
+    ]
   }
 }

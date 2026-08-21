@@ -1,30 +1,30 @@
 {
   "planner": {
-    "stable_prefix_hash": "0b5fb333593451c27cdbfc9faf89e8a3f2b3edc1da6a562eb6e04ef4f21b3595",
-    "tool_catalog_hash": "4e1f3f4abf2989c54467aee372669c563113fcdf3d2661bcc338b8a819e9f3d9",
-    "skill_hash": "06d9641dfe6d3bea443467c2a31cd715e97220fe2ce33427bf08301099b3a089",
-    "tenant_policy_hash": "d5088b28b9a9137bd980db97dc3efdbdb5e5c631cbbf3b75a037badcf198f06d",
-    "prompt_cache_key": "invoice_workbench:d5088b28b9a9137b:planner:supervisor_planner_v2.4_native_tools:0b5fb333593451c27cdbfc9f"
+    "stable_prefix_hash": "461c8ff7b074f82bc5d7900df8a07bb5befc5ee4d94a47f7c057c5e2c09fa03f",
+    "tool_catalog_hash": "36fdbee659947bc94ac6eca02ff62cb3931266d63db2ed8fccffea2ca8a67811",
+    "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
+    "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:planner:supervisor_planner_v2.4_native_tools:461c8ff7b074f82bc5d7900d"
   },
   "materials_advisor": {
-    "stable_prefix_hash": "c92bddb796c6e06fac970b183f008abddf3d255d9ff4528accfccc4d49359568",
+    "stable_prefix_hash": "e03eafdd1c6019d8c879ae4800d3a8ae47b31f246a87783d01b3aa86c7939669",
     "tool_catalog_hash": "282fe52c728d6d59ea379ae6089ea976c0cf8e63590d7f445c65d01842405623",
-    "skill_hash": "06d9641dfe6d3bea443467c2a31cd715e97220fe2ce33427bf08301099b3a089",
-    "tenant_policy_hash": "d5088b28b9a9137bd980db97dc3efdbdb5e5c631cbbf3b75a037badcf198f06d",
-    "prompt_cache_key": "invoice_workbench:d5088b28b9a9137b:materials_advisor:materials_advisor_v4.5+global_policy_v1.2+task_skill_v1.2+rag_guidance_context+supervisor_task+optional_quality_split:c92bddb796c6e06fac970b18"
+    "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
+    "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:materials_advisor:materials_advisor_v4.5+global_policy_v1.2+task_skill_v1.2+rag_guidance_context+supervisor_task+optional_quality_split:e03eafdd1c6019d8c879ae48"
   },
   "case_patch_writer": {
-    "stable_prefix_hash": "62ed81dac811ab2f23433b3a3da829f1fe9faeaf03db739e1bfaa4ce605c99e2",
+    "stable_prefix_hash": "70881a198c6332db4baa9da045e311b7b4a576d1b94208266e98fdb9df05314a",
     "tool_catalog_hash": "282fe52c728d6d59ea379ae6089ea976c0cf8e63590d7f445c65d01842405623",
-    "skill_hash": "06d9641dfe6d3bea443467c2a31cd715e97220fe2ce33427bf08301099b3a089",
-    "tenant_policy_hash": "d5088b28b9a9137bd980db97dc3efdbdb5e5c631cbbf3b75a037badcf198f06d",
-    "prompt_cache_key": "invoice_workbench:d5088b28b9a9137b:case_patch_writer:case_patch_writer_v4.8+global_policy_v1.2:62ed81dac811ab2f23433b3a"
+    "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
+    "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:case_patch_writer:case_patch_writer_v4.8+global_policy_v1.2:70881a198c6332db4baa9da0"
   },
   "report_writer": {
-    "stable_prefix_hash": "04cdcd55345d4d98341f80562323122ca963c6f88a7aba5bb85a736b8b9bdc38",
+    "stable_prefix_hash": "d9f26e3fca324718e24cd901e274a8a3292cc73ee7bbb14ab7294b78f91e398e",
     "tool_catalog_hash": "282fe52c728d6d59ea379ae6089ea976c0cf8e63590d7f445c65d01842405623",
-    "skill_hash": "06d9641dfe6d3bea443467c2a31cd715e97220fe2ce33427bf08301099b3a089",
-    "tenant_policy_hash": "d5088b28b9a9137bd980db97dc3efdbdb5e5c631cbbf3b75a037badcf198f06d",
-    "prompt_cache_key": "invoice_workbench:d5088b28b9a9137b:report_writer:report_writer_v5.2+global_policy_v1.2+pdf_skill_v2.1:04cdcd55345d4d98341f8056"
+    "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
+    "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:report_writer:report_writer_v7+global_policy_v1.2+canonical_consumer_v1+pdf_skill_v4:d9f26e3fca324718e24cd901"
   }
 }

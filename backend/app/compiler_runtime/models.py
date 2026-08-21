@@ -11,6 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 NodeKind = Literal["CHECK", "ALL", "ANY"]
 AssessmentStatus = Literal["SUPPORTED", "CONTRADICTED", "NOT_FOUND"]
+ExecutionStatus = Literal["COMPLETED", "PARTIAL", "FAILED"]
+BusinessGapCode = Literal[
+    "SOURCE_MISSING",
+    "SOURCE_AMBIGUOUS",
+    "BINDING_MISSING",
+    "POLICY_UNCONFIGURED",
+    "WITNESS_MISSING",
+]
 
 
 def _stable_hash(value: Any) -> str:
@@ -43,13 +51,14 @@ class ProofNode(_CompilerModel):
     depends_on: list[str] = Field(default_factory=list)
     requirement_refs: list[str] = Field(default_factory=list)
     policy_refs: list[str] = Field(default_factory=list)
+    facet_refs: list[str] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
     def validate_id(cls, value: str) -> str:
         return _require_text(value, field_name="node id")
 
-    @field_validator("depends_on", "requirement_refs", "policy_refs")
+    @field_validator("depends_on", "requirement_refs", "policy_refs", "facet_refs")
     @classmethod
     def validate_references(cls, value: list[str], info: Any) -> list[str]:
         return _unique_strings(value, field_name=info.field_name)
@@ -68,8 +77,10 @@ class ProofNode(_CompilerModel):
 
         if self.statement:
             raise ValueError(f"{self.kind} node {self.id!r} cannot contain a check statement")
-        if self.requirement_refs or self.policy_refs:
-            raise ValueError(f"{self.kind} node {self.id!r} cannot contain requirement or policy refs")
+        if self.requirement_refs or self.policy_refs or self.facet_refs:
+            raise ValueError(
+                f"{self.kind} node {self.id!r} cannot contain requirement, policy, or facet refs"
+            )
         if not self.depends_on:
             raise ValueError(f"{self.kind} node {self.id!r} requires at least one dependency")
         return self
@@ -196,6 +207,7 @@ class ProofPlan(_CompilerModel):
             node["depends_on"] = sorted(node["depends_on"])
             node["requirement_refs"] = sorted(node["requirement_refs"])
             node["policy_refs"] = sorted(node["policy_refs"])
+            node["facet_refs"] = sorted(node["facet_refs"])
         return _stable_hash(payload)
 
 
@@ -214,6 +226,30 @@ class Claim(_CompilerModel):
     @classmethod
     def validate_text(cls, value: str, info: Any) -> str:
         return _require_text(value, field_name=info.field_name)
+
+    @field_validator("attributes")
+    @classmethod
+    def validate_observation_attributes(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # Claim is the source-observation layer. Cross-claim meaning belongs in a
+        # SemanticBindingProposal and arithmetic lineage belongs in a Witness.
+        reserved = {
+            "binding",
+            "binding_group",
+            "binding_id",
+            "claim_ids",
+            "operands",
+            "related_claim_ids",
+            "relation",
+            "term_refs",
+            "witness_ids",
+        }
+        forbidden = sorted(reserved.intersection(value))
+        if forbidden:
+            raise ValueError(
+                "Claim attributes cannot encode semantic bindings or calculations: "
+                f"{forbidden}"
+            )
+        return value
 
 
 class EvidenceIR(_CompilerModel):
@@ -262,14 +298,46 @@ class EvidenceIR(_CompilerModel):
         payload["claims"] = sorted(payload["claims"], key=lambda item: item["id"])
         return _stable_hash(payload)
 
+    def source_snapshot_hash(self) -> str:
+        """Hash only the admitted, immutable source snapshot used by Witnesses."""
+        return _stable_hash(
+            {
+                "kind": "compiler_runtime.evidence_source_snapshot",
+                "schema_version": self.schema_version,
+                "source_ids": sorted(self.source_ids),
+                "source_fingerprints": dict(sorted(self.source_fingerprints.items())),
+            }
+        )
+
+
+class StrongStatusLink(_CompilerModel):
+    """Verifier-owned polarity link to one replayable boolean Witness.
+
+    The link intentionally carries no result, threshold, formula, or Policy
+    value.  The Proof Kernel obtains the boolean only by replaying the named
+    Witness and derives the false polarity as the opposite strong status.
+    """
+
+    witness_id: str
+    true_status: Literal["SUPPORTED", "CONTRADICTED"]
+
+    @field_validator("witness_id")
+    @classmethod
+    def validate_witness_id(cls, value: str) -> str:
+        return _require_text(value, field_name="witness_id")
+
 
 class CheckAssessment(_CompilerModel):
     check_id: str
     claim_ids: list[str] = Field(default_factory=list)
+    accepted_binding_ids: list[str] = Field(default_factory=list)
+    accepted_witness_ids: list[str] = Field(default_factory=list)
+    strong_status_links: list["StrongStatusLink"] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
     examined_source_ids: list[str] = Field(default_factory=list)
     reason: str = ""
     missing_fact: str = ""
+    gap_code: BusinessGapCode | None = None
     # Keep the verdict last in the structured output. Autoregressive models must
     # finish checking the evidence before committing to the classification.
     status: AssessmentStatus
@@ -279,7 +347,13 @@ class CheckAssessment(_CompilerModel):
     def validate_check_id(cls, value: str) -> str:
         return _require_text(value, field_name="check_id")
 
-    @field_validator("claim_ids", "source_ids", "examined_source_ids")
+    @field_validator(
+        "claim_ids",
+        "accepted_binding_ids",
+        "accepted_witness_ids",
+        "source_ids",
+        "examined_source_ids",
+    )
     @classmethod
     def validate_refs(cls, value: list[str], info: Any) -> list[str]:
         return _unique_strings(value, field_name=info.field_name)
@@ -288,6 +362,9 @@ class CheckAssessment(_CompilerModel):
     def normalize_explanation(self) -> CheckAssessment:
         self.reason = self.reason.strip()
         self.missing_fact = self.missing_fact.strip()
+        witness_ids = [item.witness_id for item in self.strong_status_links]
+        if len(set(witness_ids)) != len(witness_ids):
+            raise ValueError("strong_status_links must not contain duplicate witness ids")
         return self
 
 
@@ -311,15 +388,23 @@ def explicit_final_statuses(reason: str) -> set[str]:
 class ReviewArtifact(_CompilerModel):
     plan: ProofPlan
     plan_hash: str
+    proof_signature_hash: str = ""
     evidence_ir: EvidenceIR
     evidence_snapshot_hash: str
     assessments: list[CheckAssessment] = Field(default_factory=list)
+    binding_proposals: list["SemanticBindingProposal"] = Field(default_factory=list)
+    calculation_witnesses: list["CalculationWitness"] = Field(default_factory=list)
     submitted_claim_refs: dict[str, list[str]] = Field(default_factory=dict)
+    submitted_binding_refs: dict[str, list[str]] = Field(default_factory=dict)
+    submitted_witness_refs: dict[str, list[str]] = Field(default_factory=dict)
     policy_hash: str
+    resolved_policy_terms: dict[str, Any] = Field(default_factory=dict)
     unconfigured_policy_refs: list[str] = Field(default_factory=list)
+    execution_status: ExecutionStatus = "COMPLETED"
     compiler_version: str
     model: str
     prompt_versions: dict[str, str] = Field(default_factory=dict)
+    artifact_hash: str = ""
 
     @field_validator(
         "plan_hash",
@@ -332,41 +417,80 @@ class ReviewArtifact(_CompilerModel):
     def validate_text(cls, value: str, info: Any) -> str:
         return _require_text(value, field_name=info.field_name)
 
+    @field_validator("proof_signature_hash")
+    @classmethod
+    def normalize_proof_signature_hash(cls, value: str) -> str:
+        return value.strip()
+
     @field_validator("unconfigured_policy_refs")
     @classmethod
     def validate_unconfigured_policy_refs(cls, value: list[str]) -> list[str]:
         return _unique_strings(value, field_name="unconfigured_policy_refs")
 
-    @field_validator("submitted_claim_refs")
+    @field_validator("submitted_claim_refs", "submitted_binding_refs", "submitted_witness_refs")
     @classmethod
-    def validate_submitted_claim_refs(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+    def validate_submitted_refs(
+        cls,
+        value: dict[str, list[str]],
+        info: Any,
+    ) -> dict[str, list[str]]:
         return {
-            _require_text(check_id, field_name="submitted_claim_refs check id"): _unique_strings(
-                claim_ids,
-                field_name=f"submitted_claim_refs[{check_id!r}]",
+            _require_text(check_id, field_name=f"{info.field_name} check id"): _unique_strings(
+                ref_ids,
+                field_name=f"{info.field_name}[{check_id!r}]",
             )
-            for check_id, claim_ids in value.items()
+            for check_id, ref_ids in value.items()
         }
+
+    @field_validator("artifact_hash")
+    @classmethod
+    def normalize_artifact_hash(cls, value: str) -> str:
+        return value.strip()
 
     @model_validator(mode="after")
     def validate_assessment_ids(self) -> ReviewArtifact:
         assessment_ids = [assessment.check_id for assessment in self.assessments]
         if len(set(assessment_ids)) != len(assessment_ids):
             raise ValueError("ReviewArtifact contains duplicate assessments for a check")
-        check_ids = {node.id for node in self.plan.nodes if node.kind == "CHECK"}
-        unknown_submissions = sorted(set(self.submitted_claim_refs) - check_ids)
-        if unknown_submissions:
-            raise ValueError(
-                "ReviewArtifact contains submissions outside its ProofPlan CHECK nodes: "
-                f"{unknown_submissions}"
-            )
-        unknown_policy_refs = sorted(set(self.unconfigured_policy_refs) - set(self.plan.policy_refs))
-        if unknown_policy_refs:
-            raise ValueError(
-                "ReviewArtifact contains unconfigured policy refs outside its ProofPlan: "
-                f"{unknown_policy_refs}"
-            )
+        binding_ids = [item.id for item in self.binding_proposals]
+        witness_ids = [item.id for item in self.calculation_witnesses]
+        if len(set(binding_ids)) != len(binding_ids):
+            raise ValueError("ReviewArtifact contains duplicate semantic binding ids")
+        if len(set(witness_ids)) != len(witness_ids):
+            raise ValueError("ReviewArtifact contains duplicate calculation witness ids")
+        # Cross-object truth (whether a ref exists, belongs to this CHECK/facet,
+        # or was actually submitted) is deliberately not a Pydantic concern.
+        # The Runtime rejects it on the normal path and the Proof Kernel must
+        # diagnose hostile/stale artifacts fail-closed instead of losing that
+        # attack surface during schema parsing.
         return self
+
+    def content_hash(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"artifact_hash"})
+        payload["assessments"] = sorted(payload["assessments"], key=lambda item: item["check_id"])
+        for assessment in payload["assessments"]:
+            assessment["strong_status_links"] = sorted(
+                assessment["strong_status_links"],
+                key=lambda item: item["witness_id"],
+            )
+        payload["binding_proposals"] = sorted(
+            payload["binding_proposals"], key=lambda item: item["id"]
+        )
+        payload["calculation_witnesses"] = sorted(
+            payload["calculation_witnesses"], key=lambda item: item["id"]
+        )
+        for field_name in (
+            "submitted_claim_refs",
+            "submitted_binding_refs",
+            "submitted_witness_refs",
+        ):
+            payload[field_name] = {
+                check_id: sorted(ref_ids)
+                for check_id, ref_ids in sorted(payload[field_name].items())
+            }
+        payload["unconfigured_policy_refs"] = sorted(payload["unconfigured_policy_refs"])
+        payload["prompt_versions"] = dict(sorted(payload["prompt_versions"].items()))
+        return _stable_hash(payload)
 
 
 class NodeResult(_CompilerModel):
@@ -375,7 +499,15 @@ class NodeResult(_CompilerModel):
     status: AssessmentStatus
     reason: str = ""
     claim_ids: list[str] = Field(default_factory=list)
+    binding_ids: list[str] = Field(default_factory=list)
+    witness_ids: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
+    gap_code: BusinessGapCode | None = None
+
+    @field_validator("claim_ids", "binding_ids", "witness_ids", "source_ids")
+    @classmethod
+    def validate_result_refs(cls, value: list[str], info: Any) -> list[str]:
+        return _unique_strings(value, field_name=info.field_name)
 
 
 class CompilationDiagnostic(_CompilerModel):
@@ -419,3 +551,16 @@ class CompiledProof(_CompilerModel):
 
     def decision_for(self, requirement_id: str) -> DecisionProof | None:
         return next((item for item in self.decisions if item.requirement_id == requirement_id), None)
+
+
+# Resolve typed proof-term fields without making proof_terms depend on a partially
+# initialized ReviewArtifact module. proof_terms imports Claim, which is defined
+# above before this late import runs.
+from .proof_terms import CalculationWitness, SemanticBindingProposal  # noqa: E402
+
+ReviewArtifact.model_rebuild(
+    _types_namespace={
+        "CalculationWitness": CalculationWitness,
+        "SemanticBindingProposal": SemanticBindingProposal,
+    }
+)

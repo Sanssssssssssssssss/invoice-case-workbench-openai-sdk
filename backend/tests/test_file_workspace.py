@@ -10,6 +10,7 @@ from app.context import classify_runtime_error
 from app.state.attachment_manifest import (
     link_manifest_evidence,
     load_attachment_manifest,
+    save_attachment_manifest,
     trusted_sources_for_evidence,
     update_manifest_summaries,
 )
@@ -759,9 +760,9 @@ def test_render_pdf_generates_clickable_toc_and_chapter_page_breaks(tmp_path) ->
                 "发票显示 BIC 与 IBAN 字段。",
                 "",
                 "## 第三章 证据图录",
-                "字段截图和原始附件截图由渲染器自动插入。",
+                "原始材料附录由 renderer 在正文后按需追加。",
                 "",
-                "### 字段截图与证明点",
+                "### 字段截图",
                 "不要出现的手工截图说明",
             ]
         ),
@@ -1208,6 +1209,129 @@ def test_render_pdf_collects_field_crops_from_chain_and_manifest(tmp_path) -> No
     assert result["field_crop_count"] >= 2
     assert crop_chain in result["snapshot_paths"]
     assert crop_claim in result["snapshot_paths"]
+
+
+def test_render_pdf_keeps_canonical_body_and_labels_raw_appendix(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    case_id = "case_canonical_pdf"
+    original_ref = "attachments/raw_invoice.pdf"
+    preview_ref = "attachments/previews/raw_invoice_page_1.png"
+    amount_crop_ref = "evidence/crops/raw/amount_total.png"
+    bank_crop_ref = "evidence/crops/raw/bank_details.png"
+
+    original = store.resolve_case_path(case_id, original_ref)
+    original.parent.mkdir(parents=True, exist_ok=True)
+    _write_text_pdf(original, "RAW_ONLY_IBAN amount_total=13")
+    for relative_path, text in (
+        (preview_ref, "RAW_ONLY_PREVIEW"),
+        (amount_crop_ref, "amount_total=13"),
+        (bank_crop_ref, "RAW_ONLY_IBAN"),
+    ):
+        target = store.resolve_case_path(case_id, relative_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _draw_invoice_image(target, text)
+
+    raw_fields = [
+        {
+            "field": "amount_total",
+            "value": 13,
+            "crop_path": amount_crop_ref,
+            "proof_label": "RAW_ONLY_AMOUNT_TOTAL_13",
+        },
+        {
+            "field": "bank_details",
+            "value": "RAW_ONLY_IBAN",
+            "crop_path": bank_crop_ref,
+            "proof_label": "RAW_ONLY_IBAN_PROOF",
+        },
+    ]
+    store.apply_patch(
+        case_id,
+        {
+            "patch_type": "add_evidence",
+            "case_updates": {
+                "add_evidence": [
+                    {
+                        "id": "ev_raw_only",
+                        "type": "invoice",
+                        "summary": "RAW_ONLY_CASE_SUMMARY",
+                        "metadata": {
+                            "original_ref": original_ref,
+                            "preview_paths": [preview_ref],
+                            "field_inventory": raw_fields,
+                            "block_crops": raw_fields,
+                        },
+                    }
+                ]
+            },
+            "audit_note": "seed raw-only renderer regression data",
+        },
+    )
+    save_attachment_manifest(
+        store,
+        case_id,
+        {
+            "attachments": [
+                {
+                    "attachment_id": "att_raw_only",
+                    "name": "raw_invoice.pdf",
+                    "status": "active",
+                    "original_ref": original_ref,
+                    "preview_paths": [preview_ref],
+                    "evidence_ids": ["ev_raw_only"],
+                    "field_inventory": raw_fields,
+                    "block_crops": raw_fields,
+                }
+            ]
+        },
+    )
+    FileWorkspace(store).write_case_file(
+        case_id,
+        "reports/final_report.md",
+        "# 已批准审查报告\n\n## 审核结论\n\nCANONICAL_APPROVED_FACT：重算差额为 406.92。",
+    )
+
+    def raw_assets() -> dict[str, bytes]:
+        return {
+            relative_path: store.resolve_case_path(case_id, relative_path).read_bytes()
+            for relative_path in (original_ref, preview_ref, amount_crop_ref, bank_crop_ref)
+        }
+
+    before_assets = raw_assets()
+
+    result = FileWorkspace(store).render_pdf(case_id, "reports/final_report.md", "reports/final_report.pdf")
+
+    assert set(result) == {
+        "case_id",
+        "markdown_path",
+        "pdf_path",
+        "status",
+        "page_count",
+        "evidence_snapshot_count",
+        "field_crop_count",
+        "snapshot_paths",
+    }
+    assert result["status"] == "success"
+    assert result["evidence_snapshot_count"] == 3
+    assert result["field_crop_count"] == 2
+    assert raw_assets() == before_assets
+
+    import fitz
+
+    document = fitz.open(store.resolve_case_path(case_id, result["pdf_path"]))
+    try:
+        rendered_text = "\n".join(page.get_text() for page in document)
+        rendered_image_count = sum(len(page.get_images(full=True)) for page in document)
+    finally:
+        document.close()
+    appendix_index = rendered_text.index("原始材料附录")
+    canonical_body = rendered_text[:appendix_index]
+    raw_appendix = rendered_text[appendix_index:]
+    assert "CANONICAL_APPROVED_FACT" in canonical_body
+    assert "仅供人工核对，不构成系统结论；以正文 canonical Proof 为准。" in raw_appendix
+    assert "字段截图" in raw_appendix
+    assert "原始附件预览" in raw_appendix
+    assert rendered_image_count >= 3
 
 
 def test_manifest_links_text_supplement_evidence_without_original_ref(tmp_path) -> None:

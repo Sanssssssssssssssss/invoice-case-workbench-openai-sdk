@@ -1,7 +1,7 @@
 {
   "schema_version": "2",
   "case_id": "mixed_vat_arithmetic_supported_0062",
-  "oracle_version": "3",
+  "oracle_version": "4",
   "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::mixed_vat_arithmetic_supported_0062",
   "facts": [
     {
@@ -487,6 +487,7 @@
   "milestones": [
     {
       "id": "line_extensions",
+      "facet_ref": "line_extensions",
       "statement_meaning": {
         "all_of": [
           [
@@ -566,6 +567,7 @@
     },
     {
       "id": "subtotal_aggregation",
+      "facet_ref": "subtotal_aggregation",
       "statement_meaning": {
         "all_of": [
           [
@@ -624,6 +626,7 @@
     },
     {
       "id": "stated_component_rate_base_validation",
+      "facet_ref": "stated_components",
       "statement_meaning": {
         "all_of": [
           [
@@ -657,10 +660,48 @@
       "fact_ids": [
         "vat_1"
       ],
-      "relation_ids": []
+      "relation_ids": [],
+      "missing_meaning": {
+        "all_of": [
+          [
+            "tax",
+            "VAT",
+            "discount",
+            "adjustment",
+            "component",
+            "税",
+            "增值税",
+            "折扣",
+            "调整"
+          ],
+          [
+            "rate",
+            "base",
+            "allocation",
+            "calculation basis",
+            "税率",
+            "基数",
+            "分摊",
+            "计算依据"
+          ],
+          [
+            "missing",
+            "not visible",
+            "not provided",
+            "cannot verify",
+            "insufficient",
+            "缺失",
+            "未显示",
+            "未提供",
+            "无法核验",
+            "证据不足"
+          ]
+        ]
+      }
     },
     {
       "id": "final_total_reconciliation",
+      "facet_ref": "final_total",
       "statement_meaning": {
         "all_of": [
           [
@@ -962,14 +1003,7 @@
         ]
       }
     ],
-    "forbidden_phrases": [
-      "发票计算正确",
-      "金额核对通过",
-      "内部计算一致",
-      "发票计算错误",
-      "金额核对未通过",
-      "确定存在计算错误"
-    ],
+    "forbidden_phrases": [],
     "require_chinese": true,
     "require_report_links": true
   }

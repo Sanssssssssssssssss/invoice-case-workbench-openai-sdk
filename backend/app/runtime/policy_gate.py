@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.compiler_runtime.policy import proof_is_reportable
+from app.compiler_runtime.consumer import derive_consumer_packet
 from app.domain.invoice_requirements import is_known_requirement
 from app.state.attachment_manifest import resolve_manifest_attachment
 from app.state.case_store import CaseStore
@@ -208,8 +208,10 @@ class PolicyGate:
         )
         report_requested = _report_requested(user_message)
         evidence_pipeline_pending = _evidence_pipeline_pending(request, state)
-        case_state = self.store.load(request.case_id) if report_requested and not evidence_pipeline_pending else None
-        reportable = proof_is_reportable(getattr(case_state, "compiled_proof", None))
+        case_state = self.store.load(request.case_id) if not evidence_pipeline_pending else None
+        consumer_packet = derive_consumer_packet(case_state) if case_state is not None else None
+        reportability = consumer_packet.reportability if consumer_packet is not None else "NONE"
+        reportable = reportability in {"FULL", "PARTIAL"}
         report_action = (
             decision.action == "delegate_agent" and decision.target == "report_writer"
         ) or (
@@ -223,10 +225,24 @@ class PolicyGate:
             ]
             return block(
                 "report_blocked_by_proof",
-                "A report requires canonical proof with no required unresolved checks.",
+                "A report requires at least one integrity-accepted canonical leaf finding.",
                 constraints=[
-                    "Use final_answer to explain the unresolved proof work instead of drafting a report.",
+                    "Use final_answer to explain that no reportable Kernel leaf is available.",
                     *[f"Blocking: {item}" for item in blocking[:5]],
+                ],
+            )
+
+        if (
+            reportability == "PARTIAL"
+            and decision.action in {"final_answer", "ask_user"}
+            and _claims_formal_approval(str(decision.final_answer or ""))
+        ):
+            return block(
+                "partial_proof_cannot_approve",
+                "A PARTIAL proof may report accepted leaf findings but cannot authorize payment or final approval.",
+                constraints=[
+                    "State that the review is partial and name the unresolved obligations.",
+                    "Do not claim whole-case support, payment readiness, posting readiness, or final approval.",
                 ],
             )
 
@@ -761,6 +777,19 @@ def _report_requested(message: str) -> bool:
             "give me a report",
         )
     ) or any(term in compact for term in ("生成报告", "最终报告", "导出报告", "出具报告", "制作报告", "渲染pdf", "生成pdf", "导出pdf"))
+
+
+def _claims_formal_approval(message: str) -> bool:
+    text = str(message or "")
+    return bool(
+        re.search(
+            r"(?:可|可以|建议|应当)\s*(?:直接)?\s*(?:付款|支付|审批|批准|过账|提交)"
+            r"|(?:最终审批|付款审批)\s*(?:通过|完成|已完成)"
+            r"|\b(?:ready|safe|approved)\s+to\s+(?:pay|post|approve|submit)\b",
+            text,
+            flags=re.I,
+        )
+    )
 
 
 def _evidence_pipeline_pending(request: AgentTurnRequest, state: HarnessRunState) -> bool:

@@ -54,6 +54,10 @@ def test_requirement_profiles_are_loaded_from_versioned_policy_pack() -> None:
     assert COMPILER_DERIVED_REQUIREMENTS == {"three_way_amount_match", "no_active_duplicate"}
     assert "vendor_bank_account_authorized" in REVIEWER_DERIVED_REQUIREMENTS
     assert "approval_authority_limits" in REQUIREMENT_PACK["unconfigured_policy_values"]
+    assert "invoice_template_baseline_ref" in REQUIREMENT_PACK["unconfigured_policy_values"]
+    assert REQUIREMENT_PACK["requirements"]["template_match"]["required_policy_values"] == [
+        "invoice_template_baseline_ref"
+    ]
     assert "invoice_calculation_rounding_tolerance" not in REQUIREMENT_PACK["unconfigured_policy_values"]
     assert REQUIREMENT_PACK["invoice_calculation_rounding_tolerance"] == {
         "amount": "0.01",

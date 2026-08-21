@@ -27,6 +27,7 @@
     "approval_authority_limits",
     "bank_change_cooling_period",
     "payment_release_thresholds",
+    "invoice_template_baseline_ref",
     "jurisdiction_tax_rules",
     "record_retention_period"
   ],
@@ -118,6 +119,31 @@
       "activation": "explicit"
     }
   },
+  "proof_signatures": [
+    {
+      "signature_id": "invoice_arithmetic",
+      "version": "1",
+      "requirement_id": "invoice_calculation_valid",
+      "root_composition": "ALL_REQUIRED",
+      "required_policy_refs": ["invoice_calculation_rounding_tolerance"],
+      "facets": [
+        {"id": "line_extensions", "minimum_proof_terms": ["WITNESS"]},
+        {"id": "subtotal_aggregation", "minimum_proof_terms": ["WITNESS"]},
+        {"id": "stated_components", "minimum_proof_terms": ["BINDING", "WITNESS"]},
+        {"id": "final_total", "minimum_proof_terms": ["WITNESS"]}
+      ]
+    },
+    {
+      "signature_id": "invoice_template_comparison",
+      "version": "1",
+      "requirement_id": "template_match",
+      "root_composition": "ALL_REQUIRED",
+      "required_policy_refs": ["invoice_template_baseline_ref"],
+      "facets": [
+        {"id": "baseline_comparison", "minimum_proof_terms": ["BINDING"]}
+      ]
+    }
+  ],
   "requirements": {
     "invoice": {"label": "发票文档", "kind": "document", "owner": "evidence", "evidence_type": "invoice", "default_required": true},
     "purchase_order": {"label": "采购订单", "kind": "document", "owner": "evidence", "evidence_type": "purchase_order", "default_required": true},
@@ -141,7 +167,7 @@
     "source_traceability": {"label": "上传附件来源链可追溯", "kind": "visual", "owner": "evidence", "default_required": true},
     "line_items_product_title": {"label": "商品行/服务标题", "kind": "field", "owner": "evidence", "default_required": false},
     "signature_or_authorized_signatory": {"label": "签名/授权签署", "kind": "visual", "owner": "evidence", "default_required": false},
-    "template_match": {"label": "模板/版式匹配", "kind": "risk_check", "owner": "evidence", "default_required": false},
+    "template_match": {"label": "模板/版式匹配", "kind": "risk_check", "owner": "evidence", "default_required": false, "required_policy_values": ["invoice_template_baseline_ref"]},
 
     "po_number": {"label": "采购订单号", "kind": "field", "owner": "evidence", "default_required": false},
     "po_ref": {"label": "采购订单引用", "kind": "field", "owner": "evidence", "default_required": false},

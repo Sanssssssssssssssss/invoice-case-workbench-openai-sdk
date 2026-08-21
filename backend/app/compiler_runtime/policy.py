@@ -5,6 +5,7 @@ import json
 from typing import Any, Sequence
 
 from app.compiler_runtime.models import CompiledProof
+from app.compiler_runtime.consumer import Reportability, derive_consumer_packet
 from app.domain.invoice_requirements import (
     REQUIREMENT_DEFINITIONS,
     REQUIREMENT_PACK,
@@ -100,14 +101,31 @@ def required_policy_refs(requirement_ids: Sequence[str]) -> set[str]:
     }
 
 
-def proof_is_reportable(proof: CompiledProof | None) -> bool:
-    """Return whether canonical proof has no required unresolved work."""
+def proof_decision_ready(proof: CompiledProof | None) -> bool:
+    """Return whether required proof scope has no unresolved obligation.
+
+    This proof-only helper is used while CaseState is being projected.  Report
+    generation must use ``case_reportability`` because execution/integrity state
+    lives on ReviewArtifact, not CompiledProof.
+    """
 
     return bool(
         proof
         and proof.decisions
         and not any(obligation.blocking for obligation in proof.obligations)
     )
+
+
+def case_reportability(case_state: Any) -> Reportability:
+    return derive_consumer_packet(case_state).reportability
+
+
+def case_review_complete(case_state: Any) -> bool:
+    return derive_consumer_packet(case_state).review_complete
+
+
+def case_decision_ready(case_state: Any) -> bool:
+    return derive_consumer_packet(case_state).decision_ready
 
 
 def _unique(values: Sequence[str]) -> list[str]:
@@ -118,7 +136,10 @@ __all__ = [
     "expand_active_requirements",
     "policy_excerpt_for",
     "policy_hash",
-    "proof_is_reportable",
+    "proof_decision_ready",
+    "case_decision_ready",
+    "case_reportability",
+    "case_review_complete",
     "required_policy_refs",
     "requirement_context",
 ]

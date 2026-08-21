@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import pytest
 
 from app.compiler_runtime import (
     CheckAssessment,
@@ -12,6 +13,7 @@ from app.compiler_runtime import (
     compile_review_artifact,
 )
 from app.context import ContextCompiler
+from app.compiler_runtime.signatures import proof_signature_hash_for
 from app.harness import HarnessRuntime
 from app.llm import LlmClient
 from app.state.case_store import CaseStore
@@ -134,11 +136,12 @@ def _runtime_artifact(
         evidence_snapshot_hash=evidence_ir.content_hash(),
         assessments=[assessment],
         submitted_claim_refs={check_id: [claim.id for claim in relevant]},
+        proof_signature_hash=proof_signature_hash_for(plan.active_requirement_ids),
         policy_hash="sha256:policy",
         compiler_version="test",
         model="fixture",
     )
-    return artifact
+    return artifact.model_copy(update={"artifact_hash": artifact.content_hash()})
 
 
 def test_context_compiler_stores_raw_artifact_but_planner_gets_summary(tmp_path) -> None:
@@ -519,7 +522,8 @@ def test_context_compiler_resolves_report_content_ref(tmp_path) -> None:
     )
     state.observations.append(observation)
 
-    assert compiler.resolve_content_ref("case_ref", state, "last_role:report_writer.markdown") == "# Report\n\nBody"
+    with pytest.raises(ValueError, match="no reportable Kernel"):
+        compiler.resolve_content_ref("case_ref", state, "last_role:report_writer.markdown")
 
 
 def test_report_content_ref_sanitizes_guardrail_phrases_before_write(tmp_path) -> None:
@@ -537,14 +541,8 @@ def test_report_content_ref_sanitizes_guardrail_phrases_before_write(tmp_path) -
     )
     state.observations.append(observation)
 
-    markdown = compiler.resolve_content_ref("case_report_sanitize", state, "last_role:report_writer.markdown")
-
-    assert "可付款" not in markdown
-    assert "已付款" not in markdown
-    assert "材料齐全" not in markdown
-    assert "证据链完整。" not in markdown
-    assert "无保留报告" not in markdown
-    assert "限制未解除的报告" in markdown
+    with pytest.raises(ValueError, match="no reportable Kernel"):
+        compiler.resolve_content_ref("case_report_sanitize", state, "last_role:report_writer.markdown")
 
 
 def test_context_manifest_is_written(tmp_path) -> None:
@@ -577,7 +575,7 @@ def test_context_manifest_is_written(tmp_path) -> None:
     assert "compact_triggered" in text
 
 
-def test_report_writer_context_includes_user_report_instructions(tmp_path) -> None:
+def test_report_writer_context_uses_user_request_without_duplicate_instructions(tmp_path) -> None:
     store = CaseStore(tmp_path / "cases")
     state = HarnessRuntime(store).begin_run("case_report_context", "revise report")
     compiler = ContextCompiler(store, LlmClient())
@@ -591,8 +589,9 @@ def test_report_writer_context_includes_user_report_instructions(tmp_path) -> No
         case_state=case_state,
     )
 
-    assert "最终报告归档" in context["report_instructions"]
+    assert set(context) == {"canonical_consumer_packet", "user_request"}
     assert "重复付款检查" in context["user_request"]
+    assert "report_instructions" not in context
 
 
 def test_materials_advisor_receives_only_canonical_gap_context(tmp_path, monkeypatch) -> None:
@@ -714,12 +713,16 @@ def test_report_writer_context_excludes_unreviewed_attachment_context(tmp_path) 
         case_state=store.load("case_report_chain_context"),
     )
 
-    chain = context["evidence_chain_context"]
-    assert chain["attachments"] == []
-    assert chain["evidence_items"] == []
-    assert context["attachment_manifest"] == {"attachments": []}
-    assert "conversation_summary" not in context
-    assert "full_text" not in json.dumps(chain, ensure_ascii=False)
+    assert set(context) == {
+        "canonical_consumer_packet",
+        "user_request",
+    }
+    packet = context["canonical_consumer_packet"]
+    assert packet["reportability"] == "NONE"
+    assert packet["claims"] == []
+    serialized = json.dumps(context, ensure_ascii=False)
+    assert "attachment_manifest" not in serialized
+    assert "full_text" not in serialized
 
 
 def test_report_writer_receives_only_compiler_admitted_claims(tmp_path) -> None:
@@ -758,11 +761,11 @@ def test_report_writer_receives_only_compiler_admitted_claims(tmp_path) -> None:
         case_state=case_state,
     )
 
-    row = context["evidence_chain_context"]["evidence_items"][0]
-    assert [item["claim_id"] for item in row["admitted_claims"]] == ["CLM_ADMITTED"]
-    assert "supports" not in row
-    assert "conflicts" not in row
-    assert "claim_to_source_refs" not in row
+    packet = context["canonical_consumer_packet"]
+    assert [item["id"] for item in packet["claims"]] == ["CLM_ADMITTED"]
+    assert "supports" not in packet
+    assert "conflicts" not in packet
+    assert "claim_to_source_refs" not in packet
     assert "CLM_REJECTED" not in json.dumps(context, ensure_ascii=False)
 
 
@@ -796,12 +799,12 @@ def test_report_writer_receives_canonical_contradiction_without_plan_or_assessme
         case_state=case_state,
     )
 
-    assert context["case_state"]["reportable"] is True
-    assert context["case_state"]["compiled_proof"]["decisions"][0]["status"] == "CONTRADICTED"
-    assert "review_artifact" not in context["case_state"]
-    assert context["evidence_chain_context"]["decisions"][0]["status"] == "CONTRADICTED"
-    assert "plan" not in context["case_state"]["compiled_proof"]
-    assert "assessments" not in context["case_state"]["compiled_proof"]
+    packet = context["canonical_consumer_packet"]
+    assert packet["reportability"] == "FULL"
+    assert packet["root_decisions"][0]["status"] == "CONTRADICTED"
+    assert "review_artifact" not in context
+    assert "plan" not in packet
+    assert "assessments" not in packet
 
 
 def test_report_content_ref_preserves_explicit_report_feedback(tmp_path) -> None:
@@ -820,11 +823,8 @@ def test_report_content_ref_preserves_explicit_report_feedback(tmp_path) -> None
     )
     state.observations.append(observation)
 
-    markdown = compiler.resolve_content_ref("case_report_ref", state, "last_role:report_writer.markdown")
-
-    assert "本报告用于本地材料审查与报告归档；证据链完整性以材料状态和 Claim-to-Evidence Matrix 为准" in markdown
-    assert "重复付款检查细节" in markdown
-    assert "Clear Invoice 边界" in markdown
+    with pytest.raises(ValueError, match="no reportable Kernel"):
+        compiler.resolve_content_ref("case_report_ref", state, "last_role:report_writer.markdown")
 
 
 def test_planner_context_filters_session_runtime_noise(tmp_path) -> None:

@@ -1,7 +1,7 @@
 {
   "schema_version": "2",
   "case_id": "reverse_charge_arithmetic_supported_0020",
-  "oracle_version": "3",
+  "oracle_version": "4",
   "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::reverse_charge_arithmetic_supported_0020",
   "facts": [
     {
@@ -439,6 +439,7 @@
   "milestones": [
     {
       "id": "line_extensions",
+      "facet_ref": "line_extensions",
       "statement_meaning": {
         "all_of": [
           [
@@ -514,6 +515,7 @@
     },
     {
       "id": "subtotal_aggregation",
+      "facet_ref": "subtotal_aggregation",
       "statement_meaning": {
         "all_of": [
           [
@@ -571,6 +573,7 @@
     },
     {
       "id": "final_total_reconciliation",
+      "facet_ref": "final_total",
       "statement_meaning": {
         "all_of": [
           [
@@ -629,6 +632,7 @@
     },
     {
       "id": "reverse_charge_arithmetic_treatment",
+      "facet_ref": "stated_components",
       "statement_meaning": {
         "all_of": [
           [

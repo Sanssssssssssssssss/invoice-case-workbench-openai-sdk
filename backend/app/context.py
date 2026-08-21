@@ -3,15 +3,13 @@
 import hashlib
 import json
 import re
-import csv
 from datetime import datetime, timezone
-from io import StringIO
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.capabilities import role_input_keys
-from app.compiler_runtime.policy import proof_is_reportable
+from app.compiler_runtime.consumer import derive_consumer_packet, finalize_consumer_report
 from app.domain.invoice_requirements import (
     AUTO_DERIVED_COMPILER_REQUIREMENTS,
     REQUIREMENT_CATALOG_VERSION,
@@ -146,7 +144,8 @@ class ContextManager:
         if not runtime_feedback and int(getattr(state, "max_steps", 0) or 0) - int(getattr(state, "step_count", 0) or 0) <= 1:
             runtime_feedback = step_budget_runtime_feedback()
         report_markdown_path, report_pdf_path = report_paths_for_run(getattr(state, "started_at", ""))
-        return {
+        consumer_packet = derive_consumer_packet(case_state)
+        planner_context = {
             "case_brief": _case_brief(case_state),
             "requirement_catalog": {
                 "version": REQUIREMENT_CATALOG_VERSION,
@@ -162,7 +161,6 @@ class ContextManager:
             "case_profile": getattr(case_state, "case_profile", {}) or {},
             "case_next_action_hint": getattr(case_state, "next_action_hint", "") or "",
             "reply_brief": _planner_safe_text(getattr(case_state, "reply_brief", "") or "", max_chars=700),
-            "evidence_cards": _brief_records(getattr(case_state, "evidence_cards", []) or [], 8),
             "session_summary": _planner_safe_text(session_data.get("session_summary") or "", max_chars=900),
             "recent_turns": _planner_recent_turns(prior_turns),
             "memory_hints": self._memory_hints_for_context(
@@ -184,6 +182,27 @@ class ContextManager:
             "runtime_feedback": runtime_feedback,
             "report_paths": {"markdown_path": report_markdown_path, "pdf_path": report_pdf_path},
         }
+        if consumer_packet.root_decisions:
+            proof_observations = _proof_consumer_observations(observations)
+            safe_feedback = _safe_runtime_feedback(planner_context["runtime_feedback"])
+            planner_context = {
+                "case_brief": planner_context["case_brief"],
+                "requirement_catalog": planner_context["requirement_catalog"],
+                "canonical_consumer_packet": consumer_packet.model_dump(mode="json"),
+                "current_goal": planner_context["current_goal"],
+                "attachments": [_safe_attachment_identity(item) for item in attachments],
+                "attachment_manifest": _safe_attachment_manifest_identity(
+                    planner_context["attachment_manifest"]
+                ),
+                "recent_observations": proof_observations,
+                "next_expected_action": str(
+                    safe_feedback.get("recommended_action")
+                    or _latest_next_action_hint(proof_observations)
+                ),
+                "runtime_feedback": safe_feedback,
+                "report_paths": planner_context["report_paths"],
+            }
+        return planner_context
 
     def build_role_context(
         self,
@@ -195,10 +214,15 @@ class ContextManager:
         case_state: Any,
     ) -> dict[str, Any]:
         hydrated = dict(payload)
+        if role == "report_writer":
+            packet = derive_consumer_packet(case_state)
+            report_payload = {
+                "canonical_consumer_packet": packet.model_dump(mode="json"),
+                "user_request": user_message,
+            }
+            return _filter_role_payload(role, report_payload)
         hydrated["case_state"] = (
-            _report_case_state(case_state)
-            if role == "report_writer"
-            else _advisor_case_state(case_state)
+            _advisor_case_state(case_state)
             if role == "materials_advisor"
             else _sanitize_case_state(case_state)
         )
@@ -230,23 +254,6 @@ class ContextManager:
         elif role == "case_patch_writer":
             hydrated.setdefault("role_result", self.last_evidence_reviewer_result(state, mode=("review", "repair")) or self.last_role_result(state))
             hydrated.setdefault("user_message", user_message)
-        elif role == "report_writer":
-            hydrated.setdefault("evidence", list(hydrated["case_state"].get("evidence_items") or []))
-            hydrated.setdefault("user_request", user_message)
-            hydrated.setdefault("report_instructions", user_message)
-        canonical_evidence_chain = _evidence_chain_context(
-            self.store,
-            state.case_id,
-            case_state,
-            hydrated.get("attachment_manifest") or {},
-        )
-        if role == "report_writer":
-            hydrated["evidence_chain_context"] = canonical_evidence_chain
-            hydrated["attachment_manifest"] = {
-                "attachments": list(canonical_evidence_chain.get("attachments") or [])
-            }
-        else:
-            hydrated.setdefault("evidence_chain_context", canonical_evidence_chain)
         return _filter_role_payload(role, hydrated)
 
     def pop_pending_rag_debug(self, state: Any, role: str) -> list[dict[str, Any]]:
@@ -284,8 +291,10 @@ class ContextManager:
                 if value is not None:
                     text = str(value)
                     if role_name == "report_writer" and field == "markdown":
-                        text = _apply_report_instruction_appendix(text, getattr(state, "user_message_for_planner", ""))
                         case_state = self.store.load(case_id)
+                        packet = derive_consumer_packet(case_state)
+                        text = finalize_consumer_report(text, packet)
+                        text = _apply_report_instruction_appendix(text, getattr(state, "user_message_for_planner", ""))
                         text = _sanitize_report_markdown_for_guards(text, case_state)
                         text = enforce_no_execution_wording(text)
                         text = enforce_report_proof_consistency(text, case_state)
@@ -1061,6 +1070,25 @@ def _unique_nonempty(values: list[Any]) -> list[str]:
 
 
 def _case_brief(case_state: Any) -> str:
+    packet = derive_consumer_packet(case_state)
+    if packet.root_decisions:
+        decision_brief = ", ".join(
+            f"{item.requirement_id}={item.status}"
+            for item in packet.root_decisions
+        )
+        obligation_brief = ", ".join(
+            f"{item.id}[missing_fact={item.missing_fact};"
+            f"candidate_actions={'|'.join(item.candidate_actions)}]"
+            for item in packet.obligations
+            if item.blocking
+        )
+        return (
+            f"case_id={packet.case_id}; execution_status={packet.execution_status}; "
+            f"review_complete={str(packet.review_complete).lower()}; "
+            f"decision_ready={str(packet.decision_ready).lower()}; "
+            f"reportability={packet.reportability}; proof_decisions={decision_brief}; "
+            f"blocking_obligations={obligation_brief}"
+        )
     requirements = [
         f"{item.id}:{item.status}({len(item.evidence_ids)})"
         for item in getattr(case_state, "requirements", []) or []
@@ -1342,7 +1370,9 @@ def _planner_safe_observation(observation: dict[str, Any]) -> dict[str, Any]:
         "summary": _planner_safe_text(observation.get("summary", ""), max_chars=260),
         "next_action_hint": observation.get("next_action_hint", ""),
     }
-    if observation.get("artifact_ref"):
+    if observation.get("kind") == "role" and observation.get("name") == "report_writer":
+        safe["content_ref"] = "last_role:report_writer.markdown"
+    elif observation.get("artifact_ref"):
         safe["artifact_ref"] = observation.get("artifact_ref")
     if observation.get("runtime_feedback"):
         safe["runtime_feedback"] = observation.get("runtime_feedback")
@@ -1383,14 +1413,6 @@ def _planner_safe_text(value: Any, max_chars: int = 220) -> str:
             text = text.split(marker, 1)[0].strip()
             break
     text = _redact_planner_raw_details(text)
-    return text[:max_chars] + ("..." if len(text) > max_chars else "")
-
-
-def _report_context_text(value: Any, max_chars: int = 220) -> str:
-    text = " ".join(str(value or "").split())
-    if not text:
-        return ""
-    text = PROMPT_INJECTION_OUTPUT_SEGMENT_RE.sub(PROMPT_INJECTION_NEUTRAL, text)
     return text[:max_chars] + ("..." if len(text) > max_chars else "")
 
 
@@ -1481,6 +1503,89 @@ def _advisor_case_state(case_state: Any) -> dict[str, Any]:
     }
 
 
+def _safe_attachment_identity(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": str(item.get("name") or ""),
+        "content_type": str(item.get("content_type") or ""),
+    }
+
+
+def _safe_attachment_manifest_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "manifest_ref": str(manifest.get("manifest_ref") or ""),
+        "version": str(manifest.get("version") or ""),
+        "status_counts": dict(manifest.get("status_counts") or {}),
+        "attachments": [
+            {
+                "attachment_id": str(item.get("attachment_id") or ""),
+                "name": str(item.get("name") or ""),
+                "content_kind": str(item.get("content_kind") or ""),
+                "status": str(item.get("status") or ""),
+            }
+            for item in list(manifest.get("attachments") or [])
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _proof_consumer_observations(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep routing state while dropping specialist summaries and extracted values."""
+
+    safe: list[dict[str, Any]] = []
+    for item in observations:
+        if not isinstance(item, dict):
+            continue
+        is_report_draft = item.get("kind") == "role" and item.get("name") == "report_writer"
+        row = {
+            key: item[key]
+            for key in (("kind", "name") if is_report_draft else ("kind", "name", "artifact_ref"))
+            if item.get(key) not in (None, "", [], {})
+        }
+        if is_report_draft:
+            row["content_ref"] = "last_role:report_writer.markdown"
+        route = _safe_routing_hint(item.get("next_action_hint"))
+        if route:
+            row["next_action_hint"] = route
+        safe.append(row)
+    return safe
+
+
+def _safe_runtime_feedback(feedback: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    error_type = str(feedback.get("error_type") or "")
+    if re.fullmatch(r"[a-zA-Z0-9_.:-]{1,80}", error_type):
+        safe["error_type"] = error_type
+    if isinstance(feedback.get("retry_allowed"), bool):
+        safe["retry_allowed"] = feedback["retry_allowed"]
+    for key in ("recommended_action", "blocked_action"):
+        route = _safe_routing_hint(feedback.get(key))
+        if route:
+            safe[key] = route
+    return safe
+
+
+def _safe_routing_hint(value: Any) -> str:
+    route = str(value or "").strip()
+    if route in {
+        "dispatch",
+        "final_answer",
+        "ask_user",
+        "needs_user_input",
+        "ready_for_summary",
+        "ready_for_report",
+        "generate_report_requested",
+        "retry_or_final_answer",
+        "write_case_patch",
+    }:
+        return route
+    if re.fullmatch(
+        r"(?:call_tool|call_role|delegate_agent):[a-zA-Z0-9_.:-]{1,80}",
+        route,
+    ):
+        return route
+    return ""
+
+
 def _advisor_attachment_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     return {
         "manifest_ref": manifest.get("manifest_ref", ""),
@@ -1510,38 +1615,6 @@ def _advisor_attachment_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _report_case_state(case_state: Any) -> dict[str, Any]:
-    artifact = getattr(case_state, "review_artifact", None)
-    proof = getattr(case_state, "compiled_proof", None)
-    evidence_ir = getattr(artifact, "evidence_ir", None)
-    source_ids = set(getattr(evidence_ir, "source_ids", []) or [])
-    source_fingerprints = dict(getattr(evidence_ir, "source_fingerprints", {}) or {})
-    return {
-        "case_id": str(getattr(case_state, "case_id", "") or ""),
-        "case_type": str(getattr(case_state, "case_type", "") or ""),
-        "status": str(getattr(case_state, "status", "") or ""),
-        "case_profile": dict(getattr(case_state, "case_profile", {}) or {}),
-        "reportable": proof_is_reportable(proof),
-        "requirement_labels": {
-            str(getattr(item, "id", "") or ""): str(getattr(item, "label", "") or "")
-            for item in list(getattr(case_state, "requirements", []) or [])
-            if str(getattr(item, "id", "") or "")
-        },
-        "compiled_proof": proof.model_dump(mode="json") if proof is not None else None,
-        "evidence_items": [
-            {
-                "id": str(getattr(item, "id", "") or ""),
-                "type": str(getattr(item, "type", "") or ""),
-                "source": str(getattr(item, "source", "") or ""),
-                "credibility": str(getattr(item, "credibility", "") or ""),
-                "source_fingerprint": source_fingerprints.get(str(getattr(item, "id", "") or ""), ""),
-            }
-            for item in list(getattr(case_state, "evidence_items", []) or [])
-            if str(getattr(item, "id", "") or "") in source_ids
-        ],
-    }
-
-
 def _sanitize_evidence(item: Any) -> dict[str, Any]:
     data = item.model_dump() if hasattr(item, "model_dump") else dict(item or {})
     data = _sanitize_prompt_injection_details(data)
@@ -1552,528 +1625,6 @@ def _sanitize_evidence(item: Any) -> dict[str, Any]:
     content = str(data.get("content") or "")
     data["content"] = content[:500] + ("..." if len(content) > 500 else "")
     return data
-
-
-def _evidence_chain_context(store: CaseStore, case_id: str, case_state: Any, attachment_manifest: dict[str, Any]) -> dict[str, Any]:
-    artifact = getattr(case_state, "review_artifact", None)
-    proof = getattr(case_state, "compiled_proof", None)
-    evidence_ir = getattr(artifact, "evidence_ir", None)
-    active_evidence_ids = set(getattr(evidence_ir, "source_ids", []) or [])
-    source_fingerprints = dict(getattr(evidence_ir, "source_fingerprints", {}) or {})
-    admitted_by_evidence: dict[str, list[dict[str, Any]]] = {}
-    for claim in list(getattr(evidence_ir, "claims", []) or []):
-        admitted_by_evidence.setdefault(claim.source_id, []).append({
-            "claim_id": claim.id,
-            "subject": claim.subject,
-            "predicate": claim.predicate,
-            "value": claim.value,
-            "source_id": claim.source_id,
-            "quote": claim.quote,
-            "locator": claim.locator,
-            "confidence": claim.confidence,
-            "attributes": dict(claim.attributes),
-        })
-    evidence_rows: list[dict[str, Any]] = []
-    for evidence in (
-        item
-        for item in list(getattr(case_state, "evidence_items", []) or [])[:40]
-        if str(getattr(item, "id", "") or "") in active_evidence_ids
-    ):
-        data = evidence.model_dump() if hasattr(evidence, "model_dump") else dict(evidence or {})
-        metadata = data.get("metadata") or {}
-        dossier = _load_dossier_context(store, case_id, str(metadata.get("dossier_ref") or metadata.get("extraction_ref") or ""))
-        line_items = _localized_line_items(metadata.get("line_items") or dossier.get("line_items") or [])
-        line_item_count = int(metadata.get("line_item_count") or dossier.get("line_item_count") or len(line_items) or 0)
-        line_item_pages = list(metadata.get("line_item_pages") or dossier.get("line_item_pages") or [])[:12]
-        bank_details = _bank_details_from_metadata(metadata) or _bank_details_from_metadata(dossier)
-        extracted_fields = dict(metadata.get("extracted_fields") or {})
-        extracted_fields.update(dossier.get("extracted_fields") or {})
-        if bank_details:
-            extracted_fields["bank_details"] = bank_details
-        field_inventory = _merge_field_inventory(metadata.get("field_inventory"), dossier.get("field_inventory"))
-        field_inventory = _enrich_field_inventory_with_extracted_fields(field_inventory, extracted_fields)
-        field_inventory = _normalize_line_item_inventory(field_inventory, line_item_count, line_item_pages)
-        context_metadata = dict(metadata)
-        if field_inventory:
-            context_metadata["field_inventory"] = field_inventory
-        if extracted_fields:
-            context_metadata["extracted_fields"] = extracted_fields
-        evidence_rows.append(
-            {
-                "evidence_id": data.get("id", ""),
-                "source": data.get("source", ""),
-                "evidence_type": data.get("type") or data.get("evidence_type", ""),
-                "credibility": data.get("credibility", ""),
-                "source_fingerprint": source_fingerprints.get(str(data.get("id") or ""), ""),
-                "dossier_ref": metadata.get("dossier_ref") or metadata.get("extraction_ref") or "",
-                "field_inventory": _brief_records(field_inventory or context_metadata.get("extracted_fields"), 24),
-                "proof_cards": _proof_cards_from_metadata(context_metadata, limit=18),
-                "line_items": _brief_records(line_items, 200),
-                "line_item_count": line_item_count,
-                "line_item_pages": line_item_pages,
-                "bank_details": bank_details,
-                "page_review": _brief_records(metadata.get("page_review"), 12),
-                "visual_check": _compact_visual_check(context_metadata.get("visual_check")),
-                "evidence_chain": _brief_records(context_metadata.get("evidence_chain"), 20),
-                "admitted_claims": _brief_records(admitted_by_evidence.get(str(data.get("id") or "")), 20),
-                "descriptive_fields_are_not_decision_authority": True,
-                "original_ref": context_metadata.get("original_ref", ""),
-                "preview_paths": list(context_metadata.get("preview_paths") or [])[:5],
-                "quality_notes": _report_quality_notes(context_metadata.get("quality_notes"), line_items, line_item_count),
-            }
-        )
-    manifest_rows: list[dict[str, Any]] = []
-    for item in (attachment_manifest.get("attachments") or [])[:18]:
-        if not isinstance(item, dict):
-            continue
-        if not active_evidence_ids.intersection(str(value) for value in item.get("evidence_ids") or []):
-            continue
-        dossier = _load_dossier_context(store, case_id, str(item.get("extraction_ref") or ""))
-        line_items = _localized_line_items(item.get("line_items") or dossier.get("line_items") or [])
-        line_item_count = int(item.get("line_item_count") or dossier.get("line_item_count") or len(line_items) or 0)
-        line_item_pages = list(item.get("line_item_pages") or dossier.get("line_item_pages") or [])[:12]
-        bank_details = _bank_details_from_metadata(item) or _bank_details_from_metadata(dossier)
-        manifest_inventory = _normalize_line_item_inventory(
-            list(item.get("field_inventory") or []),
-            line_item_count,
-            line_item_pages,
-        )
-        manifest_rows.append(
-            {
-                "attachment_id": item.get("attachment_id", ""),
-                "name": item.get("name", ""),
-                "status": item.get("status", ""),
-                "evidence_ids": list(item.get("evidence_ids") or [])[:8],
-                "extraction_ref": item.get("extraction_ref", ""),
-                "field_inventory": _brief_records(manifest_inventory, 16),
-                "proof_cards": _proof_cards_from_metadata(item, limit=12),
-                "line_items": _brief_records(line_items, 200),
-                "line_item_count": line_item_count,
-                "line_item_pages": line_item_pages,
-                "bank_details": bank_details,
-                "page_summaries": _brief_records(item.get("page_summaries"), 5),
-                "visual_regions": _brief_records(item.get("visual_regions"), 6),
-                "visual_check": _compact_visual_check(item.get("visual_check")),
-                "quality_notes": _report_quality_notes(item.get("quality_notes"), line_items, line_item_count),
-                "preview_paths": list(item.get("preview_paths") or [])[:4],
-                "original_ref": item.get("original_ref", ""),
-            }
-        )
-    return {
-        "purpose": (
-            "descriptive source context; DecisionProof is conclusion authority and only its "
-            "status-specific leaf check NodeResults are evidence authority"
-        ),
-        "reportable": proof_is_reportable(proof),
-        "decisions": [item.model_dump(mode="json") for item in list(getattr(proof, "decisions", []) or [])],
-        "node_results": [item.model_dump(mode="json") for item in list(getattr(proof, "node_results", []) or [])],
-        "obligations": [item.model_dump(mode="json") for item in list(getattr(proof, "obligations", []) or [])],
-        "evidence_ir": {
-            "schema_version": str(getattr(evidence_ir, "schema_version", "") or ""),
-            "source_ids": sorted(active_evidence_ids),
-            "source_fingerprints": source_fingerprints,
-            "claims": [
-                item.model_dump(mode="json")
-                for item in list(getattr(evidence_ir, "claims", []) or [])
-            ],
-        },
-        "evidence_items": evidence_rows,
-        "attachments": manifest_rows,
-    }
-
-
-def _bank_details_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    extracted = metadata.get("extracted_fields")
-    if isinstance(extracted, dict) and isinstance(extracted.get("bank_details"), dict):
-        return dict(extracted["bank_details"])
-    inventory = metadata.get("field_inventory")
-    if isinstance(inventory, list):
-        for row in inventory:
-            if isinstance(row, dict) and str(row.get("field") or "") == "bank_details":
-                return dict(row)
-    return {}
-
-
-def _merge_field_inventory(primary: Any, secondary: Any) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    by_field: dict[str, dict[str, Any]] = {}
-    for source in (primary, secondary):
-        if not isinstance(source, list):
-            continue
-        for row in source:
-            if not isinstance(row, dict):
-                continue
-            field = str(row.get("field") or "")
-            if not field:
-                continue
-            current = by_field.get(field)
-            candidate = dict(row)
-            if current is None or _inventory_rank(candidate) >= _inventory_rank(current):
-                by_field[field] = candidate
-    priority = {
-        "invoice_number": 0,
-        "supplier": 1,
-        "buyer": 2,
-        "invoice_date": 3,
-        "amount_total": 4,
-        "currency_tax": 5,
-        "bank_details": 6,
-        "line_items_product_title": 7,
-        "signature_or_authorized_signatory": 8,
-        "template_match": 9,
-    }
-    for field, row in sorted(by_field.items(), key=lambda item: priority.get(item[0], 99)):
-        rows.append(row)
-    return rows
-
-
-def _enrich_field_inventory_with_extracted_fields(inventory: list[dict[str, Any]], extracted_fields: dict[str, Any]) -> list[dict[str, Any]]:
-    if not inventory or not isinstance(extracted_fields, dict):
-        return inventory
-    rows: list[dict[str, Any]] = []
-    for row in inventory:
-        if not isinstance(row, dict):
-            continue
-        candidate = dict(row)
-        field = str(candidate.get("field") or "")
-        extracted = extracted_fields.get(field)
-        if isinstance(extracted, dict):
-            best_text = ""
-            for key in ("value", "source_quote", "quote"):
-                new_text = str(extracted.get(key) or "")
-                if len(new_text) > len(best_text):
-                    best_text = new_text
-                old_text = str(candidate.get(key) or "")
-                if new_text and len(new_text) > len(old_text):
-                    candidate[key] = new_text
-            if best_text and len(best_text) > len(str(candidate.get("value") or "")):
-                candidate["value"] = best_text
-        rows.append(candidate)
-    return rows
-
-
-def _normalize_line_item_inventory(inventory: list[dict[str, Any]], line_item_count: int, line_item_pages: list[Any]) -> list[dict[str, Any]]:
-    if not inventory or not line_item_count:
-        return inventory
-    pages = ", ".join(str(page) for page in line_item_pages[:12] if str(page))
-    source_quote = f"{line_item_count} structured line items"
-    if pages:
-        source_quote += f" across pages {pages}"
-    source_quote += "; complete rows are available in line_items."
-    rows: list[dict[str, Any]] = []
-    found = False
-    for row in inventory:
-        if not isinstance(row, dict):
-            continue
-        candidate = dict(row)
-        if candidate.get("field") == "line_items_product_title":
-            found = True
-            candidate["value"] = f"{line_item_count} structured line items"
-            candidate["source_quote"] = source_quote
-            candidate["status"] = "present"
-            candidate["confidence"] = "high"
-            candidate["crop_status"] = candidate.get("crop_status") or "full_page_fallback"
-        rows.append(candidate)
-    if not found:
-        rows.append(
-            {
-                "field": "line_items_product_title",
-                "value": f"{line_item_count} structured line items",
-                "status": "present",
-                "source_quote": source_quote,
-                "locator": f"tables pages {pages}".strip(),
-                "confidence": "high",
-                "crop_status": "full_page_fallback",
-                "proof_label": "证明商品/服务行项目字段可见",
-            }
-        )
-    return rows
-
-
-def _report_quality_notes(notes: Any, line_items: Any, line_item_count: int) -> list[str]:
-    result = _brief_list(notes, 10, 220)
-    if not line_item_count or not isinstance(line_items, list) or len(line_items) < line_item_count:
-        return result
-    filtered: list[str] = []
-    for note in result:
-        lower = str(note).lower()
-        if "line_items" in lower and any(marker in lower for marker in ("trunc", "截断", "ocr")):
-            continue
-        if "行项目" in note and "截断" in note:
-            continue
-        filtered.append(note)
-    return filtered
-
-
-def _localized_line_items(line_items: Any) -> list[dict[str, Any]]:
-    if not isinstance(line_items, list):
-        return []
-    result: list[dict[str, Any]] = []
-    for row in line_items[:200]:
-        if not isinstance(row, dict):
-            continue
-        item = dict(row)
-        text = str(item.get("text") or item.get("description") or "")
-        if text and not item.get("chinese_description"):
-            item["chinese_description"] = _line_item_chinese_description(text)
-        result.append(item)
-    return result
-
-
-def _line_item_chinese_description(text: str) -> str:
-    clean = " ".join(str(text or "").split())
-    lower = clean.lower()
-    exact = {
-        "changeover switches": "转换开关",
-        "cross switches": "交叉开关",
-        "sockets": "插座",
-        "flush-mounted boxes": "暗装盒",
-        "lights - small": "小型灯具",
-        "lights - medium": "中型灯具",
-        "lights - big": "大型灯具",
-        "main distribution box": "主配电箱",
-        "fuse box": "保险丝盒",
-        "safe electricity meter": "安全电表",
-        "residual current measurement": "剩余电流测量",
-        "electronic plannings": "电气规划",
-        "technical processing": "技术处理",
-        "official procedures": "行政手续",
-        "registration energy supplier": "能源供应商登记",
-        "energy supplier fees": "能源供应商费用",
-        "additional public fees": "附加公共费用",
-        "hourly wages for assembly": "安装工时费",
-        "cost for additional electrician": "额外电工费用",
-        "cost for electrical engineer": "电气工程师费用",
-    }
-    if lower in exact:
-        return exact[lower]
-    if lower.startswith("cable"):
-        return clean.replace("Cable", "电缆").replace("cable", "电缆").replace("cores", "芯")
-    if "electrical installation" in lower:
-        return clean.replace("Electrical installation", "电气安装").replace("basement", "地下室").replace("ground floor", "一层")
-    return f"英文原文描述：{clean}"
-
-
-def _inventory_rank(row: dict[str, Any]) -> int:
-    rank = 0
-    if row.get("crop_path"):
-        rank += 4
-    if row.get("locator") or row.get("source_locator"):
-        rank += 2
-    confidence = str(row.get("confidence") or "").lower()
-    if confidence == "high":
-        rank += 3
-    elif confidence == "medium":
-        rank += 1
-    if row.get("source_quote") or row.get("value"):
-        rank += 1
-    return rank
-
-
-def _load_dossier_context(store: CaseStore, case_id: str, ref: str) -> dict[str, Any]:
-    if not ref:
-        return {}
-    try:
-        path = store.resolve_case_path(case_id, ref)
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    line_items = data.get("line_items") or _line_items_from_dossier_tables(data.get("tables"))
-    fields = data.get("extracted_fields") or _fields_from_inventory(data.get("field_inventory"))
-    bank = _bank_details_from_metadata({"extracted_fields": fields, "field_inventory": data.get("field_inventory")}) or _bank_details_from_blocks(
-        data.get("block_crops")
-    )
-    if bank:
-        fields = dict(fields)
-        fields.setdefault("bank_details", bank)
-    inventory = _brief_records(data.get("field_inventory"), 24)
-    if bank and not any(isinstance(row, dict) and row.get("field") == "bank_details" for row in inventory):
-        inventory.append(bank)
-    return {
-        "line_items": _brief_records(line_items, 200),
-        "line_item_count": int(data.get("line_item_count") or len(line_items) or 0),
-        "line_item_pages": list(data.get("line_item_pages") or sorted({item.get("page") for item in line_items if isinstance(item, dict) and item.get("page")}))[:12],
-        "extracted_fields": fields,
-        "field_inventory": inventory,
-    }
-
-
-def _fields_from_inventory(inventory: Any) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    if not isinstance(inventory, list):
-        return result
-    for row in inventory:
-        if not isinstance(row, dict):
-            continue
-        field = str(row.get("field") or "")
-        if field:
-            result[field] = row
-    return result
-
-
-def _bank_details_from_blocks(blocks: Any) -> dict[str, Any]:
-    if not isinstance(blocks, list):
-        return {}
-    for row in blocks:
-        if not isinstance(row, dict):
-            continue
-        text = str(row.get("text") or row.get("source_quote") or "")
-        lower = text.lower()
-        if not any(token in lower for token in ("iban", "bic", "swift", "bank", "account")):
-            continue
-        if not re.search(r"\b[A-Z]{2}\d{2}[A-Z0-9 ]{8,}|\b[A-Z0-9]{6,}\b", text, re.I):
-            continue
-        return {
-            "field": "bank_details",
-            "value": _report_context_text(text, max_chars=220),
-            "status": "present",
-            "source_quote": _report_context_text(text, max_chars=220),
-            "locator": row.get("locator") or (f"page {row.get('page')}" if row.get("page") else ""),
-            "crop_path": row.get("crop_path", ""),
-            "preview_path": row.get("preview_path", ""),
-            "confidence": "high" if row.get("crop_path") else "medium",
-            "proof_label": "证明银行账户/付款信息字段可见",
-        }
-    return {}
-
-
-def _line_items_from_dossier_tables(tables: Any) -> list[dict[str, Any]]:
-    if not isinstance(tables, list):
-        return []
-    rows: list[dict[str, Any]] = []
-    for table in tables[:40]:
-        if not isinstance(table, dict):
-            continue
-        page = int(table.get("page") or 0)
-        table_id = str(table.get("id") or "")
-        csv_text = str(table.get("csv") or "")
-        if not csv_text.strip():
-            continue
-        for raw in csv.reader(StringIO(csv_text)):
-            cells = [str(cell or "").strip() for cell in raw if str(cell or "").strip()]
-            if len(cells) < 4 or not re.fullmatch(r"\d{1,3}\.\d{1,3}", cells[0]):
-                continue
-            numeric = [cell for cell in cells[2:] if re.search(r"[0-9][0-9,]*(?:\.[0-9]+)?", cell)]
-            rows.append(
-                {
-                    "position": cells[0],
-                    "text": cells[1],
-                    "quantity": cells[2] if len(cells) > 2 else "",
-                    "unit_price": numeric[-2] if len(numeric) >= 2 else (cells[3] if len(cells) > 3 else ""),
-                    "total_amount": numeric[-1] if numeric else (cells[4] if len(cells) > 4 else ""),
-                    "page": page,
-                    "table_id": table_id,
-                }
-            )
-            if len(rows) >= 200:
-                return rows
-    return rows
-
-
-def _proof_cards_from_metadata(metadata: dict[str, Any], *, limit: int) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    seen_fields: set[str] = set()
-
-    def add(value: Any, *, field: str = "", secondary: bool = False) -> None:
-        if not isinstance(value, dict) or not value.get("crop_path"):
-            return
-        data = dict(value)
-        if field and not data.get("field"):
-            data["field"] = field
-        field_key = re.sub(
-            r"[^a-z0-9_]+",
-            "_",
-            str(data.get("field") or data.get("requirement") or "").lower(),
-        ).strip("_")
-        if secondary and field_key and _context_field_already_covered(field_key, seen_fields):
-            return
-        if not _is_report_proof_card(data):
-            return
-        rows.append(
-            {
-                "field": data.get("field") or data.get("requirement") or data.get("claim") or "",
-                "value": _report_context_text(
-                    data.get("value") or data.get("source_quote") or data.get("quote") or "",
-                    max_chars=160,
-                ),
-                "crop_path": data.get("crop_path", ""),
-                "locator": data.get("locator") or data.get("source_locator") or "",
-                "proof": data.get("proof_label") or data.get("proves") or data.get("proof") or data.get("claim") or "",
-                "limitation": data.get("limitation") or data.get("crop_status") or "",
-            }
-        )
-        if field_key:
-            seen_fields.add(field_key)
-
-    inventory = metadata.get("field_inventory")
-    if isinstance(inventory, list):
-        for row in inventory:
-            add(row)
-            if len(rows) >= limit:
-                return rows
-    extracted = metadata.get("extracted_fields")
-    if isinstance(extracted, dict):
-        for field, value in extracted.items():
-            add(value, field=str(field))
-            if len(rows) >= limit:
-                return rows
-    for key in ("evidence_chain", "claim_to_source_refs"):
-        values = metadata.get(key)
-        if not isinstance(values, list):
-            continue
-        for row in values:
-            add(row, secondary=True)
-            if len(rows) >= limit:
-                return rows
-    return rows
-
-
-def _is_report_proof_card(row: dict[str, Any]) -> bool:
-    field = str(row.get("field") or row.get("requirement") or row.get("claim") or "")
-    crop_id = str(row.get("crop_id") or "")
-    name = f"{field} {crop_id}".lower()
-    if "_context" in name or "[truncated]" in name or "[截断]" in name:
-        return False
-    if re.fullmatch(r"p\d+_b\d+", crop_id.lower()) and not field:
-        return False
-    if "page_number" in name:
-        return False
-    known = {
-        "invoice_number",
-        "supplier",
-        "buyer",
-        "invoice_date",
-        "amount_total",
-        "currency_tax",
-        "line_items_product_title",
-        "signature_or_authorized_signatory",
-        "purchase_order",
-        "goods_receipt_or_service_acceptance",
-        "vendor_identity",
-        "duplicate_payment_screen",
-        "source_traceability",
-        "template_match",
-        "bank_details",
-    }
-    normalized = re.sub(r"[^a-z0-9_]+", "_", field.lower()).strip("_")
-    if normalized in known:
-        return True
-    proof = str(row.get("proof_label") or row.get("proves") or row.get("proof") or row.get("claim") or "")
-    return bool(proof.strip()) and "context" not in proof.lower()
-
-
-def _context_field_already_covered(field_key: str, seen_fields: set[str]) -> bool:
-    if field_key in seen_fields:
-        return True
-    aliases = {
-        "currency": {"currency_tax"},
-        "tax_amount": {"currency_tax"},
-        "tax_details": {"currency_tax"},
-        "visual_signature_mark": {"signature_or_authorized_signatory"},
-    }
-    return bool(aliases.get(field_key, set()).intersection(seen_fields))
 
 
 def _sanitize_prompt_injection_details(value: Any) -> Any:

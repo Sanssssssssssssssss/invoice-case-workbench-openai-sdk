@@ -7,14 +7,16 @@ from app.agents.report_writer.agent import SYSTEM_PROMPT as REPORT_WRITER_PROMPT
 from app.tools.rag_guidance import advisor_guidance
 
 
-def test_report_writer_uses_visual_check_as_quality_only() -> None:
-    assert "视觉检查只能说明" in REPORT_WRITER_PROMPT
-    assert "字段是否在原图/PDF中可见" in REPORT_WRITER_PROMPT
-    assert "视觉检查不能证明" in REPORT_WRITER_PROMPT
-    assert "没有重复付款" in REPORT_WRITER_PROMPT
-    assert "goods_receipt_or_service_acceptance" in REPORT_WRITER_PROMPT
-    assert "vendor_identity" in REPORT_WRITER_PROMPT
-    assert "duplicate_payment_screen" in REPORT_WRITER_PROMPT
+def test_report_writer_cannot_retrieve_rag_or_raw_attachment_fields() -> None:
+    assert "canonical_consumer_packet" in REPORT_WRITER_PROMPT
+    assert "附件 manifest" in REPORT_WRITER_PROMPT
+    assert "field inventory" in REPORT_WRITER_PROMPT
+    assert "bank details" in REPORT_WRITER_PROMPT
+    assert "RAG" in REPORT_WRITER_PROMPT
+    assert "它们不会出现在输入中" in REPORT_WRITER_PROMPT
+    assert "PDF renderer 会在 canonical 正文后追加带免责声明的“原始材料附录”" in REPORT_WRITER_PROMPT
+    assert "仅供人工" in REPORT_WRITER_PROMPT
+    assert "不构成系统结论" in REPORT_WRITER_PROMPT
 
 
 def test_materials_advisor_respects_dynamic_invoice_scope() -> None:

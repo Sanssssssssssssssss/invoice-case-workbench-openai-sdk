@@ -4,19 +4,38 @@ from decimal import Decimal
 from pathlib import Path
 
 from app.compiler_runtime.kernel import compile_review_artifact
-from app.compiler_runtime.models import EvidenceIR, ProofPlan, ReviewArtifact
+from app.compiler_runtime.models import (
+    Claim,
+    EvidenceIR,
+    ProofPlan,
+    ReviewArtifact,
+    StrongStatusLink,
+)
+from app.compiler_runtime.proof_terms import (
+    CalculationRequest,
+    CalculationWitness,
+    ProofTermRef,
+    SemanticBindingProposal,
+    compute_witness,
+)
+from app.compiler_runtime.signatures import proof_signature_hash_for
 from app.evals.business.models import (
     BusinessEvalCase,
     BusinessEvalOracle,
     EvalAttachment,
     EvalResult,
     EvalSnapshot,
+    FrameworkOracle,
     MeaningOracle,
+    RequiredRoleOracle,
+    RequiredToolOracle,
     ReportArtifact,
 )
 from app.evals.business.report import render_eval_report
 from app.evals.business.scorer import (
     STAGE_WEIGHTS,
+    _RAW_PDF_APPENDIX_HEADING,
+    _aggregate_milestone_status,
     _canonical_projection_violations,
     _claim_matches_source_fact,
     _equation_witnesses,
@@ -24,7 +43,9 @@ from app.evals.business.scorer import (
     _claim_is_grounded,
     _locator_supports_quote,
     _meaning_groups_match,
+    _match_typed_relation_witnesses,
     _predicate_matches_options,
+    _refine_shared_facet_matches,
     _text_has_decimal,
     score_business_eval,
 )
@@ -70,12 +91,12 @@ def _snapshot() -> EvalSnapshot:
             "id": f"claim_{fact.id}",
             "subject": "invoice",
             "predicate": fact.predicate_options[0] if fact.predicate_options else fact.id,
-            "value": f"{fact.value} {fact.currency}".strip(),
+            "value": fact.value,
             "source_id": "source_1",
             "quote": fact.source_quote,
             "locator": f"locator {fact.id}",
             "confidence": "high",
-            "attributes": {},
+            "attributes": {"currency": fact.currency} if fact.currency else {},
         }
         for fact in source_facts
     ]
@@ -110,7 +131,8 @@ def _snapshot() -> EvalSnapshot:
                 "statement": "For every line item, quantity multiplied by unit price equals its stated line extension.",
                 "depends_on": [],
                 "requirement_refs": ["invoice_calculation_valid"],
-                "policy_refs": [],
+                "policy_refs": ["invoice_calculation_rounding_tolerance"],
+                "facet_refs": ["line_extensions"],
             },
             {
                 "id": "subtotal_aggregation",
@@ -118,7 +140,8 @@ def _snapshot() -> EvalSnapshot:
                 "statement": "The sum of all line extensions equals and matches the printed subtotal.",
                 "depends_on": [],
                 "requirement_refs": ["invoice_calculation_valid"],
-                "policy_refs": [],
+                "policy_refs": ["invoice_calculation_rounding_tolerance"],
+                "facet_refs": ["subtotal_aggregation"],
             },
             {
                 "id": "component_discount_rate_base",
@@ -126,7 +149,8 @@ def _snapshot() -> EvalSnapshot:
                 "statement": "Recompute the discount percentage rate times its printed subtotal base.",
                 "depends_on": [],
                 "requirement_refs": ["invoice_calculation_valid"],
-                "policy_refs": [],
+                "policy_refs": ["invoice_calculation_rounding_tolerance"],
+                "facet_refs": ["stated_components"],
             },
             {
                 "id": "component_vat_rate_base",
@@ -135,6 +159,7 @@ def _snapshot() -> EvalSnapshot:
                 "depends_on": [],
                 "requirement_refs": ["invoice_calculation_valid"],
                 "policy_refs": [],
+                "facet_refs": ["stated_components"],
             },
             {
                 "id": "final_total_reconciliation",
@@ -143,6 +168,7 @@ def _snapshot() -> EvalSnapshot:
                 "depends_on": [],
                 "requirement_refs": ["invoice_calculation_valid"],
                 "policy_refs": ["invoice_calculation_rounding_tolerance"],
+                "facet_refs": ["final_total"],
             },
             {
                 "id": "root",
@@ -157,7 +183,11 @@ def _snapshot() -> EvalSnapshot:
             },
         ],
     }
-    evidence_ir = {"source_ids": ["source_1"], "claims": claims}
+    evidence_ir = {
+        "source_ids": ["source_1"],
+        "source_fingerprints": {"source_1": "sha256:fixture-source"},
+        "claims": claims,
+    }
     assessments = [
         {
             "check_id": "line_extensions",
@@ -215,22 +245,320 @@ def _snapshot() -> EvalSnapshot:
             ),
         },
     ]
-    plan_hash = ProofPlan.model_validate(plan).content_hash()
-    evidence_hash = EvidenceIR.model_validate(evidence_ir).content_hash()
+    plan_model = ProofPlan.model_validate(plan)
+    evidence_model = EvidenceIR.model_validate(evidence_ir)
+    plan_hash = plan_model.content_hash()
+    evidence_hash = evidence_model.content_hash()
+    witness_evidence_hash = evidence_model.source_snapshot_hash()
+    policy_snapshot_hash = "sha256:policy"
+    policy_terms = {
+        "invoice_calculation_rounding_tolerance": {
+            "value": "0.01",
+            "currency": "EUR",
+            "unit": "",
+        }
+    }
+    claims_by_id = {claim.id: claim for claim in evidence_model.claims}
+    witnesses = {}
+
+    def make_witness(
+        witness_id: str,
+        check_id: str,
+        facet_ref: str,
+        operation: str,
+        refs: list[ProofTermRef],
+    ):
+        witness = compute_witness(
+            CalculationRequest(
+                id=witness_id,
+                check_id=check_id,
+                facet_ref=facet_ref,
+                operation=operation,
+                operands=refs,
+            ),
+            claims=claims_by_id,
+            witnesses=witnesses,
+            policy_values=policy_terms,
+            evidence_snapshot_hash=witness_evidence_hash,
+            policy_snapshot_hash=policy_snapshot_hash,
+        )
+        witnesses[witness.id] = witness
+        return witness
+
+    line_witnesses = [
+        make_witness(
+            f"witness_line_{line_number}",
+            "line_extensions",
+            "line_extensions",
+            "MULTIPLY",
+            [
+                ProofTermRef(kind="CLAIM", ref_id=f"claim_line_{line_number}_quantity"),
+                ProofTermRef(kind="CLAIM", ref_id=f"claim_line_{line_number}_unit_price"),
+            ],
+        )
+        for line_number in range(1, 7)
+    ]
+    line_difference_witnesses = [
+        make_witness(
+            f"witness_line_{line_number}_difference",
+            "line_extensions",
+            "line_extensions",
+            "ABS_DIFF",
+            [
+                ProofTermRef(kind="WITNESS", ref_id=f"witness_line_{line_number}"),
+                ProofTermRef(kind="CLAIM", ref_id=f"claim_line_{line_number}_extension"),
+            ],
+        )
+        for line_number in range(1, 7)
+    ]
+    line_terminal_witnesses = [
+        make_witness(
+            f"witness_line_{line_number}_tolerance",
+            "line_extensions",
+            "line_extensions",
+            "GREATER_THAN",
+            [
+                ProofTermRef(
+                    kind="WITNESS",
+                    ref_id=f"witness_line_{line_number}_difference",
+                ),
+                ProofTermRef(
+                    kind="POLICY",
+                    ref_id="invoice_calculation_rounding_tolerance",
+                ),
+            ],
+        )
+        for line_number in range(1, 7)
+    ]
+    subtotal_witness = make_witness(
+        "witness_subtotal",
+        "subtotal_aggregation",
+        "subtotal_aggregation",
+        "SUM",
+        [
+            ProofTermRef(kind="CLAIM", ref_id=f"claim_line_{line_number}_extension")
+            for line_number in range(1, 7)
+        ],
+    )
+    subtotal_difference_witness = make_witness(
+        "witness_subtotal_difference",
+        "subtotal_aggregation",
+        "subtotal_aggregation",
+        "ABS_DIFF",
+        [
+            ProofTermRef(kind="WITNESS", ref_id=subtotal_witness.id),
+            ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+        ],
+    )
+    subtotal_terminal_witness = make_witness(
+        "witness_subtotal_tolerance",
+        "subtotal_aggregation",
+        "subtotal_aggregation",
+        "GREATER_THAN",
+        [
+            ProofTermRef(kind="WITNESS", ref_id=subtotal_difference_witness.id),
+            ProofTermRef(
+                kind="POLICY",
+                ref_id="invoice_calculation_rounding_tolerance",
+            ),
+        ],
+    )
+    discount_witness = make_witness(
+        "witness_discount",
+        "component_discount_rate_base",
+        "stated_components",
+        "MULTIPLY",
+        [
+            ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+            ProofTermRef(kind="CLAIM", ref_id="claim_adjustment_1_rate_factor"),
+        ],
+    )
+    discount_zero_witness = make_witness(
+        "witness_discount_zero",
+        "component_discount_rate_base",
+        "stated_components",
+        "SUBTRACT",
+        [
+            ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+            ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+        ],
+    )
+    discount_printed_magnitude_witness = make_witness(
+        "witness_discount_printed_magnitude",
+        "component_discount_rate_base",
+        "stated_components",
+        "SUBTRACT",
+        [
+            ProofTermRef(kind="WITNESS", ref_id=discount_zero_witness.id),
+            ProofTermRef(kind="CLAIM", ref_id="claim_adjustment_1"),
+        ],
+    )
+    discount_difference_witness = make_witness(
+        "witness_discount_difference",
+        "component_discount_rate_base",
+        "stated_components",
+        "ABS_DIFF",
+        [
+            ProofTermRef(kind="WITNESS", ref_id=discount_witness.id),
+            ProofTermRef(
+                kind="WITNESS",
+                ref_id=discount_printed_magnitude_witness.id,
+            ),
+        ],
+    )
+    discount_terminal_witness = make_witness(
+        "witness_discount_tolerance",
+        "component_discount_rate_base",
+        "stated_components",
+        "GREATER_THAN",
+        [
+            ProofTermRef(kind="WITNESS", ref_id=discount_difference_witness.id),
+            ProofTermRef(
+                kind="POLICY",
+                ref_id="invoice_calculation_rounding_tolerance",
+            ),
+        ],
+    )
+    final_sum_witness = make_witness(
+        "witness_final_sum",
+        "final_total_reconciliation",
+        "final_total",
+        "SUM",
+        [
+            ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+            ProofTermRef(kind="CLAIM", ref_id="claim_vat_1"),
+            ProofTermRef(kind="CLAIM", ref_id="claim_adjustment_1"),
+        ],
+    )
+    final_difference_witness = make_witness(
+        "witness_final_difference",
+        "final_total_reconciliation",
+        "final_total",
+        "ABS_DIFF",
+        [
+            ProofTermRef(kind="CLAIM", ref_id="claim_printed_total"),
+            ProofTermRef(kind="WITNESS", ref_id=final_sum_witness.id),
+        ],
+    )
+    final_tolerance_witness = make_witness(
+        "witness_final_tolerance",
+        "final_total_reconciliation",
+        "final_total",
+        "GREATER_THAN",
+        [
+            ProofTermRef(kind="WITNESS", ref_id=final_difference_witness.id),
+            ProofTermRef(
+                kind="POLICY",
+                ref_id="invoice_calculation_rounding_tolerance",
+            ),
+        ],
+    )
+    discount_binding = SemanticBindingProposal(
+        id="binding_discount_base",
+        check_id="component_discount_rate_base",
+        facet_ref="stated_components",
+        relation="the stated subtotal is the disclosed base for the discount rate",
+        term_refs=[
+            ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+            ProofTermRef(kind="CLAIM", ref_id="claim_adjustment_1_rate_factor"),
+            ProofTermRef(kind="CLAIM", ref_id="claim_adjustment_1"),
+            ProofTermRef(kind="WITNESS", ref_id=discount_witness.id),
+        ],
+        reason="The invoice states the percentage adjustment against its subtotal.",
+    )
+    witness_refs = {
+        "line_extensions": [
+            item.id
+            for item in [
+                *line_witnesses,
+                *line_difference_witnesses,
+                *line_terminal_witnesses,
+            ]
+        ],
+        "subtotal_aggregation": [
+            subtotal_witness.id,
+            subtotal_difference_witness.id,
+            subtotal_terminal_witness.id,
+        ],
+        "component_discount_rate_base": [
+            discount_witness.id,
+            discount_zero_witness.id,
+            discount_printed_magnitude_witness.id,
+            discount_difference_witness.id,
+            discount_terminal_witness.id,
+        ],
+        "component_vat_rate_base": [],
+        "final_total_reconciliation": [
+            final_sum_witness.id,
+            final_difference_witness.id,
+            final_tolerance_witness.id,
+        ],
+    }
+    binding_refs = {
+        "component_discount_rate_base": [discount_binding.id],
+    }
+    strong_status_links = {
+        "line_extensions": [
+            StrongStatusLink(
+                witness_id=item.id,
+                true_status="CONTRADICTED",
+            ).model_dump(mode="json")
+            for item in line_terminal_witnesses
+        ],
+        "subtotal_aggregation": [
+            StrongStatusLink(
+                witness_id=subtotal_terminal_witness.id,
+                true_status="CONTRADICTED",
+            ).model_dump(mode="json")
+        ],
+        "component_discount_rate_base": [
+            StrongStatusLink(
+                witness_id=discount_terminal_witness.id,
+                true_status="CONTRADICTED",
+            ).model_dump(mode="json")
+        ],
+        "final_total_reconciliation": [
+            StrongStatusLink(
+                witness_id=final_tolerance_witness.id,
+                true_status="CONTRADICTED",
+            ).model_dump(mode="json")
+        ],
+    }
+    for assessment in assessments:
+        assessment["accepted_binding_ids"] = binding_refs.get(assessment["check_id"], [])
+        assessment["accepted_witness_ids"] = witness_refs.get(assessment["check_id"], [])
+        assessment["strong_status_links"] = strong_status_links.get(
+            assessment["check_id"],
+            [],
+        )
     artifact = {
         "plan": plan,
         "plan_hash": plan_hash,
+        "proof_signature_hash": proof_signature_hash_for(
+            plan_model.active_requirement_ids
+        ),
         "evidence_ir": evidence_ir,
         "evidence_snapshot_hash": evidence_hash,
         "assessments": assessments,
+        "binding_proposals": [discount_binding.model_dump(mode="json")],
+        "calculation_witnesses": [
+            item.model_dump(mode="json") for item in witnesses.values()
+        ],
         "submitted_claim_refs": {item["check_id"]: item["claim_ids"] for item in assessments},
-        "policy_hash": "sha256:policy",
+        "submitted_binding_refs": binding_refs,
+        "submitted_witness_refs": witness_refs,
+        "policy_hash": policy_snapshot_hash,
+        "resolved_policy_terms": policy_terms,
         "unconfigured_policy_refs": [],
-        "compiler_version": "fixture-v1",
+        "execution_status": "COMPLETED",
+        "compiler_version": "fixture-vnext",
         "model": "fixture-model",
         "prompt_versions": {},
     }
     artifact_model = ReviewArtifact.model_validate(artifact)
+    artifact_model = artifact_model.model_copy(
+        update={"artifact_hash": artifact_model.content_hash()}
+    )
     compiled_proof = compile_review_artifact(
         artifact_model,
         requirement_requiredness={"invoice_calculation_valid": True},
@@ -302,6 +630,53 @@ def _strict_snapshot() -> EvalSnapshot:
     return _snapshot().model_copy(deep=True)
 
 
+def _framework_oracle(**updates: object) -> BusinessEvalOracle:
+    framework = FrameworkOracle(
+        required_tools=[
+            RequiredToolOracle(name="read_attachment"),
+            RequiredToolOracle(name="read_source"),
+            RequiredToolOracle(name="bind_claim"),
+            RequiredToolOracle(name="compute_witness"),
+            RequiredToolOracle(name="submit_check"),
+        ],
+        forbidden_tools=[],
+        max_tool_errors=0,
+        max_total_calls=8,
+        ordered_milestones=[
+            ["read_attachment"],
+            ["read_source"],
+            ["bind_claim"],
+            ["compute_witness"],
+            ["submit_check"],
+        ],
+    ).model_copy(update=updates)
+    return _oracle().model_copy(update={"framework": framework})
+
+
+def _framework_snapshot() -> EvalSnapshot:
+    snapshot = _snapshot().model_copy(deep=True)
+    # Real shape: events are canonical; compact trace repeats Manager calls.
+    snapshot.trace["tool_calls"] = [
+        {"tool": "read_attachment", "error": "", "ts": "2026-01-01T00:00:01+00:00"},
+    ]
+    snapshot.events.extend(
+        [
+            {"kind": "tool_call", "name": "read_attachment", "payload": {"tool": "read_attachment", "error": ""}},
+            {"kind": "tool_started", "name": "executor", "payload": {"tool": "read_source"}},
+            {"kind": "tool_finished", "name": "executor", "payload": {"tool": "read_source", "status": "completed"}},
+            {"kind": "tool_started", "name": "executor", "payload": {"tool": "bind_claim"}},
+            {"kind": "tool_finished", "name": "executor", "payload": {"tool": "bind_claim", "status": "completed"}},
+            {"kind": "tool_started", "name": "executor", "payload": {"tool": "list_sources"}},
+            {"kind": "tool_finished", "name": "executor", "payload": {"tool": "list_sources", "status": "completed"}},
+            {"kind": "tool_started", "name": "executor", "payload": {"tool": "functions.compute_witness"}},
+            {"kind": "tool_finished", "name": "executor", "payload": {"tool": "functions.compute_witness", "status": "completed"}},
+            {"kind": "tool_started", "name": "executor", "payload": {"tool": "submit_check"}},
+            {"kind": "tool_finished", "name": "executor", "payload": {"tool": "submit_check", "status": "completed"}},
+        ]
+    )
+    return snapshot
+
+
 def _refresh_proof_hashes(snapshot: EvalSnapshot) -> None:
     artifact = snapshot.case_state["review_artifact"]
     artifact["submitted_claim_refs"] = {
@@ -310,13 +685,306 @@ def _refresh_proof_hashes(snapshot: EvalSnapshot) -> None:
     plan_hash = ProofPlan.model_validate(artifact["plan"]).content_hash()
     evidence_hash = EvidenceIR.model_validate(artifact["evidence_ir"]).content_hash()
     artifact["plan_hash"] = plan_hash
+    artifact["proof_signature_hash"] = proof_signature_hash_for(
+        artifact["plan"]["active_requirement_ids"]
+    )
     artifact["evidence_snapshot_hash"] = evidence_hash
     artifact_model = ReviewArtifact.model_validate(artifact)
+    artifact_model = artifact_model.model_copy(
+        update={"artifact_hash": artifact_model.content_hash()}
+    )
     snapshot.case_state["review_artifact"] = artifact_model.model_dump(mode="json")
     snapshot.case_state["compiled_proof"] = compile_review_artifact(
         artifact_model,
         requirement_requiredness={"invoice_calculation_valid": True},
     ).model_dump(mode="json")
+
+
+def _rebuild_witness_check_ids(
+    artifact: dict,
+    witness_check_ids: dict[str, str],
+    witness_operands: dict[str, list[ProofTermRef]] | None = None,
+) -> None:
+    evidence_model = EvidenceIR.model_validate(artifact["evidence_ir"])
+    claims = {claim.id: claim for claim in evidence_model.claims}
+    rebuilt = {}
+    for raw in artifact["calculation_witnesses"]:
+        witness = compute_witness(
+            CalculationRequest(
+                id=raw["id"],
+                check_id=witness_check_ids.get(raw["id"], raw["check_id"]),
+                facet_ref=raw["facet_ref"],
+                operation=raw["operation"],
+                operands=(
+                    (witness_operands or {}).get(raw["id"])
+                    or [
+                        ProofTermRef.model_validate(item["ref"])
+                        for item in raw["operands"]
+                    ]
+                ),
+            ),
+            claims=claims,
+            witnesses=rebuilt,
+            policy_values=artifact["resolved_policy_terms"],
+            evidence_snapshot_hash=evidence_model.source_snapshot_hash(),
+            policy_snapshot_hash=artifact["policy_hash"],
+        )
+        rebuilt[witness.id] = witness
+    artifact["calculation_witnesses"] = [
+        item.model_dump(mode="json") for item in rebuilt.values()
+    ]
+
+
+def _oracle_with_line_sum(*, prove_equivalence: bool) -> BusinessEvalOracle:
+    payload = _oracle().model_dump(mode="json")
+    payload["facts"].append(
+        {
+            "id": "line_sum",
+            "origin": "derived",
+            "kind": "decimal",
+            "value": "155350.70",
+            "currency": "EUR",
+            "required_in": ["reasoning"],
+        }
+    )
+    if prove_equivalence:
+        payload["facts"].append(
+            {
+                "id": "line_sum_printed_difference",
+                "origin": "derived",
+                "kind": "decimal",
+                "value": "0.00",
+                "currency": "EUR",
+                "required_in": ["reasoning"],
+            }
+        )
+    for relation in payload["relations"]:
+        if relation["id"] == "subtotal_math":
+            relation["output_fact_id"] = "line_sum"
+        elif relation["id"] == "recomputed_total_math":
+            relation["input_fact_ids"] = [
+                "line_sum" if item == "printed_subtotal" else item
+                for item in relation["input_fact_ids"]
+            ]
+    if prove_equivalence:
+        subtotal_index = next(
+            index
+            for index, relation in enumerate(payload["relations"])
+            if relation["id"] == "subtotal_math"
+        )
+        payload["relations"].insert(
+            subtotal_index + 1,
+            {
+                "id": "line_sum_matches_printed_subtotal",
+                "operation": "absolute_difference",
+                "input_fact_ids": ["line_sum", "printed_subtotal"],
+                "output_fact_id": "line_sum_printed_difference",
+            },
+        )
+    for milestone in payload["milestones"]:
+        if milestone["id"] == "subtotal_aggregation":
+            milestone["fact_ids"].append("line_sum")
+            if prove_equivalence:
+                milestone["fact_ids"].append("line_sum_printed_difference")
+                milestone["relation_ids"].append("line_sum_matches_printed_subtotal")
+        elif milestone["id"] == "final_total_reconciliation":
+            milestone["fact_ids"].append("line_sum")
+    return BusinessEvalOracle.model_validate(payload)
+
+
+def _add_line_sum_equivalence_witness(snapshot: EvalSnapshot) -> None:
+    artifact = snapshot.case_state["review_artifact"]
+    evidence = EvidenceIR.model_validate(artifact["evidence_ir"])
+    claims = {claim.id: claim for claim in evidence.claims}
+    existing = {
+        item["id"]: CalculationWitness.model_validate(item)
+        for item in artifact["calculation_witnesses"]
+    }
+    witness = compute_witness(
+        CalculationRequest(
+            id="witness_line_sum_printed_difference",
+            check_id="subtotal_aggregation",
+            facet_ref="subtotal_aggregation",
+            operation="ABS_DIFF",
+            operands=[
+                ProofTermRef(kind="WITNESS", ref_id="witness_subtotal"),
+                ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+            ],
+        ),
+        claims=claims,
+        witnesses=existing,
+        policy_values=artifact["resolved_policy_terms"],
+        evidence_snapshot_hash=evidence.source_snapshot_hash(),
+        policy_snapshot_hash=artifact["policy_hash"],
+    )
+    artifact["calculation_witnesses"].append(witness.model_dump(mode="json"))
+    assessment = next(
+        item
+        for item in artifact["assessments"]
+        if item["check_id"] == "subtotal_aggregation"
+    )
+    assessment["accepted_witness_ids"].append(witness.id)
+    artifact["submitted_witness_refs"]["subtotal_aggregation"].append(witness.id)
+    _refresh_proof_hashes(snapshot)
+
+
+def _replace_subtotal_with_pairwise_sum(snapshot: EvalSnapshot) -> None:
+    artifact = snapshot.case_state["review_artifact"]
+    evidence = EvidenceIR.model_validate(artifact["evidence_ir"])
+    claims = {claim.id: claim for claim in evidence.claims}
+    witnesses = {
+        item["id"]: CalculationWitness.model_validate(item)
+        for item in artifact["calculation_witnesses"]
+        if item["check_id"] != "subtotal_aggregation"
+    }
+    chain: list[CalculationWitness] = []
+    previous_id = ""
+    for line_number in range(2, 7):
+        operands = (
+            [
+                ProofTermRef(kind="CLAIM", ref_id="claim_line_1_extension"),
+                ProofTermRef(kind="CLAIM", ref_id="claim_line_2_extension"),
+            ]
+            if line_number == 2
+            else [
+                ProofTermRef(kind="WITNESS", ref_id=previous_id),
+                ProofTermRef(
+                    kind="CLAIM",
+                    ref_id=f"claim_line_{line_number}_extension",
+                ),
+            ]
+        )
+        witness = compute_witness(
+            CalculationRequest(
+                id=f"witness_subtotal_pair_{line_number}",
+                check_id="subtotal_aggregation",
+                facet_ref="subtotal_aggregation",
+                operation="SUM",
+                operands=operands,
+            ),
+            claims=claims,
+            witnesses=witnesses,
+            policy_values=artifact["resolved_policy_terms"],
+            evidence_snapshot_hash=evidence.source_snapshot_hash(),
+            policy_snapshot_hash=artifact["policy_hash"],
+        )
+        witnesses[witness.id] = witness
+        chain.append(witness)
+        previous_id = witness.id
+    difference = compute_witness(
+        CalculationRequest(
+            id="witness_subtotal_difference",
+            check_id="subtotal_aggregation",
+            facet_ref="subtotal_aggregation",
+            operation="ABS_DIFF",
+            operands=[
+                ProofTermRef(kind="WITNESS", ref_id=previous_id),
+                ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+            ],
+        ),
+        claims=claims,
+        witnesses=witnesses,
+        policy_values=artifact["resolved_policy_terms"],
+        evidence_snapshot_hash=evidence.source_snapshot_hash(),
+        policy_snapshot_hash=artifact["policy_hash"],
+    )
+    witnesses[difference.id] = difference
+    terminal = compute_witness(
+        CalculationRequest(
+            id="witness_subtotal_tolerance",
+            check_id="subtotal_aggregation",
+            facet_ref="subtotal_aggregation",
+            operation="GREATER_THAN",
+            operands=[
+                ProofTermRef(kind="WITNESS", ref_id=difference.id),
+                ProofTermRef(
+                    kind="POLICY",
+                    ref_id="invoice_calculation_rounding_tolerance",
+                ),
+            ],
+        ),
+        claims=claims,
+        witnesses=witnesses,
+        policy_values=artifact["resolved_policy_terms"],
+        evidence_snapshot_hash=evidence.source_snapshot_hash(),
+        policy_snapshot_hash=artifact["policy_hash"],
+    )
+    artifact["calculation_witnesses"] = [
+        item
+        for item in artifact["calculation_witnesses"]
+        if item["check_id"] != "subtotal_aggregation"
+    ] + [item.model_dump(mode="json") for item in [*chain, difference, terminal]]
+    assessment = next(
+        item
+        for item in artifact["assessments"]
+        if item["check_id"] == "subtotal_aggregation"
+    )
+    assessment["accepted_witness_ids"] = [
+        item.id for item in [*chain, difference, terminal]
+    ]
+    artifact["submitted_witness_refs"]["subtotal_aggregation"] = [
+        item.id for item in [*chain, difference, terminal]
+    ]
+    _refresh_proof_hashes(snapshot)
+
+
+def _not_found_output_fixture() -> tuple[BusinessEvalOracle, EvalSnapshot]:
+    nf_path = (
+        Path(__file__).resolve().parents[2]
+        / "evals/business_v1/cases/tax_inclusive_arithmetic_supported_0053/oracle.json"
+    )
+    nf_oracle = BusinessEvalOracle.model_validate_json(
+        nf_path.read_text(encoding="utf-8")
+    )
+    payload = _oracle().model_dump(mode="json")
+    payload["requirement"] = {
+        "requirement_id": "invoice_calculation_valid",
+        "decision_status": "NOT_FOUND",
+        "projected_status": "weak",
+        "blocking_obligations": True,
+    }
+    payload["communication"] = nf_oracle.communication.model_dump(mode="json")
+    nf_component = next(
+        item
+        for item in nf_oracle.milestones
+        if item.id == "stated_component_rate_base_validation"
+    )
+    for milestone in payload["milestones"]:
+        if milestone["id"] == "stated_component_rate_base_validation":
+            milestone["missing_meaning"] = nf_component.missing_meaning.model_dump(
+                mode="json"
+            )
+        elif milestone["id"] == "final_total_reconciliation":
+            milestone["expected_status"] = "SUPPORTED"
+    oracle = BusinessEvalOracle.model_validate(payload)
+
+    snapshot = _strict_snapshot()
+    artifact = snapshot.case_state["review_artifact"]
+    final = next(
+        item
+        for item in artifact["assessments"]
+        if item["check_id"] == "final_total_reconciliation"
+    )
+    final["status"] = "SUPPORTED"
+    final["reason"] = "The typed final-total arithmetic was locally evaluated."
+    _refresh_proof_hashes(snapshot)
+    snapshot.case_state["requirements"][0]["status"] = "weak"
+    report = (
+        "# 审核报告\n"
+        "行项目与小计的局部计算已核实。VAT 税率和计算基数缺失，"
+        "因此无法完整核验发票整体计算。\n"
+        "小计 155350.70 EUR，VAT 31070.14 EUR，折扣 -3107.01 EUR，"
+        "票面总额 188813.24 EUR，重算 183313.83 EUR，差额 5499.41 EUR。"
+    )
+    for item in snapshot.reports:
+        item.text = report
+    snapshot.conversation[-1]["content"] = (
+        "行项目与小计的局部计算已核实，但 VAT 税率和计算基数缺失，"
+        "无法完整核验发票整体计算。票面总额 188813.24 EUR，"
+        "重算 183313.83 EUR，差额 5499.41 EUR。"
+        "请查看[审核报告 PDF](reports/audit.pdf)。"
+    )
+    return oracle, snapshot
 
 
 def _stage_score(result: EvalResult, stage: str) -> Decimal:
@@ -348,6 +1016,10 @@ def test_good_snapshot_scores_100_and_report_is_small_chinese_replay() -> None:
         [item.code for item in result.vetoes],
     )
     assert result.score == Decimal("100")
+    assert result.framework_enabled is False
+    assert result.framework_score == Decimal("100")
+    assert result.framework_passed is True
+    assert result.framework_checks == []
     assert not result.vetoes
     assert {
         stage: sum(item.points for item in result.checks if item.stage == stage)
@@ -430,6 +1102,24 @@ def test_plan_ids_and_order_do_not_change_score() -> None:
     artifact["plan"]["roots"]["invoice_calculation_valid"] = "z_root"
     for assessment in artifact["assessments"]:
         assessment["check_id"] = renames[assessment["check_id"]]
+    for binding in artifact["binding_proposals"]:
+        binding["check_id"] = renames[binding["check_id"]]
+    _rebuild_witness_check_ids(
+        artifact,
+        {
+            witness["id"]: renames[witness["check_id"]]
+            for witness in artifact["calculation_witnesses"]
+        },
+    )
+    for field_name in (
+        "submitted_claim_refs",
+        "submitted_binding_refs",
+        "submitted_witness_refs",
+    ):
+        artifact[field_name] = {
+            renames[check_id]: refs
+            for check_id, refs in artifact[field_name].items()
+        }
     proof = snapshot.case_state["compiled_proof"]
     for result in proof["node_results"]:
         result["node_id"] = renames[result["node_id"]]
@@ -675,9 +1365,91 @@ def test_v2_report_meaning_must_exist_in_markdown_and_pdf_separately() -> None:
     result = score_business_eval(_case(), _oracle(), snapshot)
 
     check = next(item for item in result.checks if item.id == "report.business_meaning")
-    assert check.passed is False
-    assert check.observed == {"markdown": True, "pdf": False}
+    assert check.passed is True
+    assert check.observed == {"canonical_markdown": True}
     assert result.passed is False
+
+
+def test_v26_raw_pdf_appendix_cannot_pollute_business_conclusion() -> None:
+    snapshot = _strict_snapshot()
+    pdf = next(item for item in snapshot.reports if item.kind == "pdf")
+    pdf.text += (
+        f"\n## {_RAW_PDF_APPENDIX_HEADING}\n"
+        "仅供人工核对，不构成系统结论；以正文 canonical Proof 为准。\n"
+        "OCR 标签：发票总额计算正确；总金额 13.00 EUR；未发现异常。"
+    )
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    assert result.passed is True
+    assert "USER_OUTPUT_CONTRADICTS_TRUTH" not in {
+        item.code for item in result.vetoes
+    }
+    assert next(
+        item for item in result.checks if item.id == "report.business_meaning"
+    ).passed is True
+
+
+def test_v26_raw_pdf_appendix_cannot_supply_missing_body_fact() -> None:
+    snapshot = _strict_snapshot()
+    pdf = next(item for item in snapshot.reports if item.kind == "pdf")
+    pdf.text = (
+        "审核报告正文：小计 155350.70 EUR，VAT 31070.14 EUR，"
+        "折扣 -3107.01 EUR，票面 188813.24 EUR，重算 183313.83 EUR。\n"
+        f"## {_RAW_PDF_APPENDIX_HEADING}\n"
+        "仅供人工核对，不构成系统结论；以正文 canonical Proof 为准。\n"
+        "OCR 差额 5499.41 EUR。"
+    )
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    difference = next(
+        item for item in result.checks if item.id == "report.fact.total_difference"
+    )
+    assert difference.passed is False
+    assert difference.observed == {"markdown": True, "pdf": False}
+
+
+def test_v26_wrong_conclusion_in_canonical_markdown_is_still_vetoed() -> None:
+    snapshot = _strict_snapshot()
+    markdown = next(item for item in snapshot.reports if item.kind == "markdown")
+    markdown.text += "\n结论：票面总额正确。"
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    assert "USER_OUTPUT_CONTRADICTS_TRUTH" in {
+        item.code for item in result.vetoes
+    }
+
+
+def test_v26_not_found_report_allows_scoped_local_support_and_requires_gap() -> None:
+    oracle, snapshot = _not_found_output_fixture()
+
+    result = score_business_eval(_case(), oracle, snapshot)
+
+    assert "USER_OUTPUT_CONTRADICTS_TRUTH" not in {
+        item.code for item in result.vetoes
+    }
+    missing = next(
+        item
+        for item in result.checks
+        if item.id
+        == "report.missing_meaning.stated_component_rate_base_validation"
+    )
+    assert missing.passed is True
+
+
+def test_v26_not_found_report_vetoes_unqualified_root_support() -> None:
+    oracle, snapshot = _not_found_output_fixture()
+    snapshot.conversation[-1]["content"] += " 发票内部计算正确。"
+    markdown = next(item for item in snapshot.reports if item.kind == "markdown")
+    markdown.text += "\n结论：发票内部计算正确。"
+
+    result = score_business_eval(_case(), oracle, snapshot)
+
+    assert "USER_OUTPUT_CONTRADICTS_TRUTH" in {
+        item.code for item in result.vetoes
+    }
 
 
 def test_negated_conflict_and_formal_payment_approval_are_vetoed() -> None:
@@ -707,6 +1479,17 @@ def test_v2_nonsense_plan_semantics_cannot_receive_full_understanding_score() ->
     result = score_business_eval(_case(), _oracle(), snapshot)
 
     assert _stage_score(result, "understanding") < STAGE_WEIGHTS["understanding"]
+    assert all(
+        not item.passed
+        for item in result.checks
+        if item.id.startswith("understanding.milestone_semantics.")
+    )
+    assert all(
+        item.passed
+        for item in result.checks
+        if item.id.startswith("reasoning.relation.")
+    )
+    assert _stage_score(result, "evidence") == STAGE_WEIGHTS["evidence"]
     assert _compiler_score(result) < Decimal("75")
     assert result.passed is False
 
@@ -774,6 +1557,27 @@ def test_v2_one_claim_cannot_satisfy_two_equal_valued_source_facts() -> None:
         item for item in artifact["assessments"] if item["check_id"] == "line_extensions"
     )
     line_check["claim_ids"].remove("claim_line_3_extension")
+    _rebuild_witness_check_ids(
+        artifact,
+        {},
+        witness_operands={
+            "witness_line_3_difference": [
+                ProofTermRef(kind="WITNESS", ref_id="witness_line_3"),
+                ProofTermRef(kind="CLAIM", ref_id="claim_line_3_unit_price"),
+            ],
+            "witness_subtotal": [
+                ProofTermRef(
+                    kind="WITNESS" if line_number == 3 else "CLAIM",
+                    ref_id=(
+                        "witness_line_3"
+                        if line_number == 3
+                        else f"claim_line_{line_number}_extension"
+                    ),
+                )
+                for line_number in range(1, 7)
+            ],
+        },
+    )
     _refresh_proof_hashes(snapshot)
 
     result = score_business_eval(_case(), _oracle(), snapshot)
@@ -900,7 +1704,8 @@ def test_v2_equivalent_split_line_checks_keep_full_compiler_score() -> None:
                 ),
                 "depends_on": [],
                 "requirement_refs": ["invoice_calculation_valid"],
-                "policy_refs": [],
+                "policy_refs": ["invoice_calculation_rounding_tolerance"],
+                "facet_refs": ["line_extensions"],
             }
         )
         split_assessments.append(
@@ -909,6 +1714,18 @@ def test_v2_equivalent_split_line_checks_keep_full_compiler_score() -> None:
                 "claim_ids": claim_ids,
                 "source_ids": ["source_1"],
                 "examined_source_ids": ["source_1"],
+                "accepted_binding_ids": [],
+                "accepted_witness_ids": [
+                    f"witness_line_{line_number}",
+                    f"witness_line_{line_number}_difference",
+                    f"witness_line_{line_number}_tolerance",
+                ],
+                "strong_status_links": [
+                    {
+                        "witness_id": f"witness_line_{line_number}_tolerance",
+                        "true_status": "CONTRADICTED",
+                    }
+                ],
                 "status": "SUPPORTED",
                 "reason": equations[line_number],
             }
@@ -929,6 +1746,29 @@ def test_v2_equivalent_split_line_checks_keep_full_compiler_score() -> None:
     ] + split_assessments
     artifact["submitted_claim_refs"].pop("line_extensions")
     artifact["submitted_claim_refs"].update(split_submissions)
+    artifact["submitted_witness_refs"].pop("line_extensions")
+    artifact["submitted_witness_refs"].update(
+        {
+            f"line_{line_number}_extension_check": [
+                f"witness_line_{line_number}",
+                f"witness_line_{line_number}_difference",
+                f"witness_line_{line_number}_tolerance",
+            ]
+            for line_number in range(1, 7)
+        }
+    )
+    _rebuild_witness_check_ids(
+        artifact,
+        {
+            witness_id: f"line_{line_number}_extension_check"
+            for line_number in range(1, 7)
+            for witness_id in (
+                f"witness_line_{line_number}",
+                f"witness_line_{line_number}_difference",
+                f"witness_line_{line_number}_tolerance",
+            )
+        },
+    )
     proof["node_results"] = [
         item for item in proof["node_results"] if item["node_id"] != "line_extensions"
     ] + split_results + [
@@ -974,7 +1814,430 @@ def test_v2_unrelated_equations_do_not_prove_arithmetic_relations() -> None:
     assert result.passed is False
 
 
-def test_v2_mathematically_false_difference_equation_is_not_a_witness() -> None:
+def test_v26_kernel_admitted_pairwise_sum_dag_matches_nary_oracle() -> None:
+    snapshot = _strict_snapshot()
+    _replace_subtotal_with_pairwise_sum(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    assert next(
+        item for item in result.checks if item.id == "reasoning.relation.subtotal_math"
+    ).passed is True
+    assert result.passed is True
+
+
+def test_v26_proven_zero_difference_allows_transitive_fact_substitution() -> None:
+    snapshot = _strict_snapshot()
+    _add_line_sum_equivalence_witness(snapshot)
+
+    result = score_business_eval(
+        _case(),
+        _oracle_with_line_sum(prove_equivalence=True),
+        snapshot,
+    )
+
+    assert next(
+        item
+        for item in result.checks
+        if item.id == "reasoning.relation.line_sum_matches_printed_subtotal"
+    ).passed is True
+    assert next(
+        item
+        for item in result.checks
+        if item.id == "reasoning.relation.recomputed_total_math"
+    ).passed is True
+    assert result.passed is True
+
+
+def test_v26_same_numeric_value_without_typed_equality_cannot_substitute() -> None:
+    result = score_business_eval(
+        _case(),
+        _oracle_with_line_sum(prove_equivalence=False),
+        _strict_snapshot(),
+    )
+
+    assert next(
+        item
+        for item in result.checks
+        if item.id == "reasoning.relation.recomputed_total_math"
+    ).passed is False
+    assert result.passed is False
+
+
+def test_v26_shared_final_facet_is_split_by_typed_path_then_uses_plan_logic() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "evals/business_v1/cases/invoice_subtotal_conflict_0006/oracle.json"
+    )
+    oracle = BusinessEvalOracle.model_validate_json(path.read_text(encoding="utf-8"))
+    milestones = [
+        item
+        for item in oracle.milestones
+        if item.id
+        in {
+            "printed_subtotal_total_reconciliation",
+            "line_derived_total_reconciliation",
+        }
+    ]
+    checks = {
+        "printed_path": {
+            "kind": "CHECK",
+            "statement": "printed subtotal plus adjustment does not match printed total",
+        },
+        "line_path": {
+            "kind": "CHECK",
+            "statement": "line-derived subtotal plus adjustment matches printed total",
+        },
+    }
+    initial = {item.id: set(checks) for item in milestones}
+    relation_matches = {
+        relation_id: ("printed_path", f"witness_{relation_id}")
+        for relation_id in milestones[0].relation_ids
+    } | {
+        relation_id: ("line_path", f"witness_{relation_id}")
+        for relation_id in milestones[1].relation_ids
+    }
+    refined = _refine_shared_facet_matches(
+        milestones,
+        initial,
+        relation_matches=relation_matches,
+        checks=checks,
+    )
+    nodes = {
+        **checks,
+        "root": {"kind": "ALL", "depends_on": ["printed_path", "line_path"]},
+    }
+    assessments = {
+        "printed_path": {"status": "CONTRADICTED"},
+        "line_path": {"status": "SUPPORTED"},
+    }
+
+    assert refined[milestones[0].id] == {"printed_path"}
+    assert refined[milestones[1].id] == {"line_path"}
+    assert _aggregate_milestone_status(
+        sorted(refined[milestones[0].id]),
+        assessments,
+        root_id="root",
+        nodes=nodes,
+    ) == "CONTRADICTED"
+    assert _aggregate_milestone_status(
+        sorted(refined[milestones[1].id]),
+        assessments,
+        root_id="root",
+        nodes=nodes,
+    ) == "SUPPORTED"
+
+
+def test_v26_0006_difference_above_tolerance_blocks_invalid_substitution() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "evals/business_v1/cases/invoice_subtotal_conflict_0006/oracle.json"
+    )
+    oracle = BusinessEvalOracle.model_validate_json(path.read_text(encoding="utf-8"))
+    facts_by_id = {item.id: item for item in oracle.facts}
+    claims = {
+        item.id: item
+        for item in (
+            Claim(
+                id="claim_line_1_extension",
+                subject="line 1",
+                predicate="line extension",
+                value="6404.64",
+                source_id="source",
+                quote="6404.64",
+                locator="line 1",
+                attributes={"currency": "EUR"},
+            ),
+            Claim(
+                id="claim_line_2_extension",
+                subject="line 2",
+                predicate="line extension",
+                value="9097.80",
+                source_id="source",
+                quote="9097.80",
+                locator="line 2",
+                attributes={"currency": "EUR"},
+            ),
+            Claim(
+                id="claim_printed_subtotal",
+                subject="invoice",
+                predicate="printed subtotal",
+                value="15507.44",
+                source_id="source",
+                quote="15507.44",
+                locator="subtotal",
+                attributes={"currency": "EUR"},
+            ),
+            Claim(
+                id="claim_adjustment_1",
+                subject="invoice",
+                predicate="adjustment",
+                value="-645.94",
+                source_id="source",
+                quote="-645.94",
+                locator="adjustment",
+                attributes={"currency": "EUR"},
+            ),
+        )
+    }
+    witnesses: dict[str, CalculationWitness] = {}
+
+    def make(
+        witness_id: str,
+        check_id: str,
+        facet_ref: str,
+        operation: str,
+        operands: list[ProofTermRef],
+    ) -> CalculationWitness:
+        witness = compute_witness(
+            CalculationRequest(
+                id=witness_id,
+                check_id=check_id,
+                facet_ref=facet_ref,
+                operation=operation,
+                operands=operands,
+            ),
+            claims=claims,
+            witnesses=witnesses,
+            policy_values={
+                "invoice_calculation_rounding_tolerance": {
+                    "value": "0.01",
+                    "currency": "EUR",
+                }
+            },
+            evidence_snapshot_hash="sha256:evidence",
+            policy_snapshot_hash="sha256:policy",
+        )
+        witnesses[witness.id] = witness
+        return witness
+
+    line_sum = make(
+        "witness_line_sum",
+        "subtotal",
+        "subtotal_aggregation",
+        "SUM",
+        [
+            ProofTermRef(kind="CLAIM", ref_id="claim_line_1_extension"),
+            ProofTermRef(kind="CLAIM", ref_id="claim_line_2_extension"),
+        ],
+    )
+    difference = make(
+        "witness_subtotal_difference",
+        "subtotal",
+        "subtotal_aggregation",
+        "ABS_DIFF",
+        [
+            ProofTermRef(kind="WITNESS", ref_id=line_sum.id),
+            ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+        ],
+    )
+    exceeds = make(
+        "witness_subtotal_exceeds",
+        "subtotal",
+        "subtotal_aggregation",
+        "GREATER_THAN",
+        [
+            ProofTermRef(kind="WITNESS", ref_id=difference.id),
+            ProofTermRef(
+                kind="POLICY",
+                ref_id="invoice_calculation_rounding_tolerance",
+            ),
+        ],
+    )
+    wrong_final = make(
+        "witness_wrong_line_path",
+        "line_path",
+        "final_total",
+        "SUM",
+        [
+            ProofTermRef(kind="CLAIM", ref_id="claim_printed_subtotal"),
+            ProofTermRef(kind="CLAIM", ref_id="claim_adjustment_1"),
+        ],
+    )
+    milestone_by_id = {item.id: item for item in oracle.milestones}
+    subtotal = milestone_by_id["subtotal_aggregation"]
+    line_path = milestone_by_id["line_derived_total_reconciliation"]
+    relation_ids = {
+        "line_sum_math",
+        "subtotal_difference_math",
+        "subtotal_difference_exceeds_tolerance",
+        "line_derived_final_total_math",
+    }
+    relations = [item for item in oracle.relations if item.id in relation_ids]
+    relation_owner = {
+        relation.id: (
+            line_path
+            if relation.id == "line_derived_final_total_math"
+            else subtotal
+        )
+        for relation in relations
+    }
+    matched = _match_typed_relation_witnesses(
+        relations,
+        relation_owner=relation_owner,
+        milestone_check_ids={
+            subtotal.id: {"subtotal"},
+            line_path.id: {"line_path"},
+        },
+        canonical_node_results={
+            "subtotal": {
+                "claim_ids": [
+                    "claim_line_1_extension",
+                    "claim_line_2_extension",
+                    "claim_printed_subtotal",
+                ],
+                "witness_ids": [line_sum.id, difference.id, exceeds.id],
+            },
+            "line_path": {
+                "claim_ids": ["claim_printed_subtotal", "claim_adjustment_1"],
+                "witness_ids": [wrong_final.id],
+            },
+        },
+        calculation_witnesses=[
+            item.model_dump(mode="json") for item in witnesses.values()
+        ],
+        facts_by_id=facts_by_id,
+        fact_claim_ids={
+            "line_1_extension": {"claim_line_1_extension"},
+            "line_2_extension": {"claim_line_2_extension"},
+            "printed_subtotal": {"claim_printed_subtotal"},
+            "adjustment_1": {"claim_adjustment_1"},
+        },
+    )
+
+    assert difference.result == Decimal("5.00")
+    assert exceeds.result is True
+    assert {
+        "line_sum_math",
+        "subtotal_difference_math",
+        "subtotal_difference_exceeds_tolerance",
+    }.issubset(matched)
+    assert "line_derived_final_total_math" not in matched
+
+
+def test_v26_milestone_status_respects_any_instead_of_forcing_all() -> None:
+    nodes = {
+        "left": {"kind": "CHECK"},
+        "right": {"kind": "CHECK"},
+        "root": {"kind": "ANY", "depends_on": ["left", "right"]},
+    }
+    assessments = {
+        "left": {"status": "CONTRADICTED"},
+        "right": {"status": "SUPPORTED"},
+    }
+
+    assert _aggregate_milestone_status(
+        ["left", "right"],
+        assessments,
+        root_id="root",
+        nodes=nodes,
+    ) == "SUPPORTED"
+
+
+def test_v25_unaccepted_foreign_witness_cannot_satisfy_relation() -> None:
+    snapshot = _strict_snapshot()
+    artifact = snapshot.case_state["review_artifact"]
+    original = next(
+        item
+        for item in artifact["calculation_witnesses"]
+        if item["id"] == "witness_subtotal"
+    )
+    evidence = EvidenceIR.model_validate(artifact["evidence_ir"])
+    claims = {claim.id: claim for claim in evidence.claims}
+    accepted = {
+        item["id"]: CalculationWitness.model_validate(item)
+        for item in artifact["calculation_witnesses"]
+    }
+    foreign = compute_witness(
+        CalculationRequest(
+            id="witness_foreign_subtotal",
+            check_id=original["check_id"],
+            facet_ref=original["facet_ref"],
+            operation=original["operation"],
+            operands=[
+                ProofTermRef.model_validate(item["ref"])
+                for item in original["operands"]
+            ],
+        ),
+        claims=claims,
+        witnesses=accepted,
+        policy_values=artifact["resolved_policy_terms"],
+        evidence_snapshot_hash=evidence.source_snapshot_hash(),
+        policy_snapshot_hash=artifact["policy_hash"],
+    )
+    artifact["calculation_witnesses"].append(foreign.model_dump(mode="json"))
+    subtotal = next(
+        item for item in artifact["assessments"] if item["check_id"] == "subtotal_aggregation"
+    )
+    subtotal["accepted_witness_ids"] = []
+    artifact["submitted_witness_refs"].pop("subtotal_aggregation")
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    relation = next(
+        item for item in result.checks if item.id == "reasoning.relation.subtotal_math"
+    )
+    assert relation.passed is False
+    assert "witness_foreign_subtotal" not in str(relation.observed)
+
+
+def test_v25_wrong_parent_operands_make_terminal_status_fail_closed() -> None:
+    snapshot = _strict_snapshot()
+    artifact = snapshot.case_state["review_artifact"]
+    _rebuild_witness_check_ids(
+        artifact,
+        {},
+        witness_operands={
+            "witness_line_1": [
+                ProofTermRef(kind="CLAIM", ref_id="claim_line_1_quantity"),
+                ProofTermRef(kind="CLAIM", ref_id="claim_line_1_extension"),
+            ]
+        },
+    )
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    assert next(
+        item for item in result.checks if item.id == "reasoning.milestone_status.line_extensions"
+    ).passed is False
+    assert next(
+        item for item in result.checks if item.id == "reasoning.relation.line_1_extension_math"
+    ).passed is False
+    canonical_line = next(
+        item
+        for item in snapshot.case_state["compiled_proof"]["node_results"]
+        if item["node_id"] == "line_extensions"
+    )
+    assert canonical_line["status"] == "NOT_FOUND"
+
+
+def test_v25_tampered_witness_is_excluded_by_kernel_graph() -> None:
+    snapshot = _strict_snapshot()
+    artifact = snapshot.case_state["review_artifact"]
+    witness = next(
+        item
+        for item in artifact["calculation_witnesses"]
+        if item["id"] == "witness_line_1"
+    )
+    witness["result"] = "999999.99"
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    assert next(
+        item for item in result.checks if item.id == "reasoning.relation.line_1_extension_math"
+    ).passed is False
+    canonical_line = next(
+        item
+        for item in snapshot.case_state["compiled_proof"]["node_results"]
+        if item["node_id"] == "line_extensions"
+    )
+    assert canonical_line["status"] == "NOT_FOUND"
+
+
+def test_v25_false_reason_equation_is_vetoed_but_not_used_as_canonical_witness() -> None:
     snapshot = _strict_snapshot()
     assessment = next(
         item
@@ -991,11 +2254,14 @@ def test_v2_mathematically_false_difference_equation_is_not_a_witness() -> None:
 
     assert next(
         item for item in result.checks if item.id == "reasoning.relation.total_difference_math"
+    ).passed is True
+    assert next(
+        item for item in result.checks if item.id == "reasoning.explicit_equations_valid"
     ).passed is False
-    assert _stage_score(result, "reasoning") < STAGE_WEIGHTS["reasoning"]
+    assert "INVALID_ARITHMETIC_WITNESS" in {item.code for item in result.vetoes}
 
 
-def test_v2_negated_comparison_is_not_a_greater_than_witness() -> None:
+def test_v25_negated_reason_does_not_override_kernel_accepted_greater_than_witness() -> None:
     snapshot = _strict_snapshot()
     assessment = next(
         item
@@ -1015,11 +2281,10 @@ def test_v2_negated_comparison_is_not_a_greater_than_witness() -> None:
         item
         for item in result.checks
         if item.id == "reasoning.relation.total_difference_exceeds_tolerance"
-    ).passed is False
-    assert _stage_score(result, "reasoning") < STAGE_WEIGHTS["reasoning"]
+    ).passed is True
 
 
-def test_v2_prefix_negation_is_not_a_greater_than_witness() -> None:
+def test_v25_prefix_negation_does_not_replace_typed_greater_than_result() -> None:
     for denial in (
         "It is false that 5499.41 exceeds 0.01.",
         "并不是 5499.41 超过 0.01。",
@@ -1043,7 +2308,7 @@ def test_v2_prefix_negation_is_not_a_greater_than_witness() -> None:
             item
             for item in result.checks
             if item.id == "reasoning.relation.total_difference_exceeds_tolerance"
-        ).passed is False
+        ).passed is True
 
 
 def test_v23_canonical_target_status_must_equal_oracle_and_is_score_capped() -> None:
@@ -1118,7 +2383,7 @@ def test_v23_milestone_wording_failure_is_not_mislabeled_as_ungrounded() -> None
 
     assert "UNGROUNDED_STRONG_CONCLUSION" not in {item.code for item in result.vetoes}
     assert any(
-        not item.passed and item.id.startswith("understanding.milestone.")
+        not item.passed and item.id.startswith("understanding.milestone_semantics.")
         for item in result.checks
     )
 
@@ -1127,6 +2392,7 @@ def test_v23_wrong_currency_predicate_short_quote_and_distant_locator_do_not_gro
     mutations = (
         ("value", "155350.70 CNY"),
         ("predicate", "printed total"),
+        ("predicate", "weather_temperature"),
         ("quote", "Subtotal"),
         ("locator", "locator line_1_quantity"),
     )
@@ -1195,6 +2461,212 @@ def test_v23_core_failure_caps_raw_99_and_report_explains_cap() -> None:
     assert result.raw_score == Decimal("99")
     assert result.score == result.score_cap == Decimal("89")
     assert "原始得分" in report and "失败封顶" in report and "封顶原因" in report
+
+
+def test_framework_protocol_passes_ordered_tools_with_harmless_interleaving() -> None:
+    result = score_business_eval(_case(), _framework_oracle(), _framework_snapshot())
+
+    assert result.business_passed is True
+    assert result.score == Decimal("100")
+    assert result.framework_enabled is True
+    assert result.framework_score == Decimal("100")
+    assert result.framework_passed is True
+    assert result.passed is True
+    assert all(item.passed for item in result.framework_checks)
+    assert sum((item.points for item in result.framework_checks), Decimal("0")) == Decimal("100")
+    assert result.engineering["tool_names"] == [
+        "read_attachment",
+        "read_source",
+        "bind_claim",
+        "list_sources",
+        "compute_witness",
+        "submit_check",
+    ]
+
+
+def test_framework_protocol_can_gate_report_role_tools_and_approvals() -> None:
+    snapshot = _framework_snapshot()
+    snapshot.trace["role_calls"] = [
+        {"role": "report_writer", "error": "", "ts": "2026-01-01T00:00:10+00:00"},
+    ]
+    snapshot.trace["tool_calls"].extend(
+        [
+            {"tool": "write_case_file", "error": "", "ts": "2026-01-01T00:00:11+00:00"},
+            {"tool": "render_pdf", "error": "", "ts": "2026-01-01T00:00:12+00:00"},
+        ]
+    )
+    snapshot.events.extend(
+        [
+            {"kind": "role_call", "name": "report_writer", "payload": {"role": "report_writer", "error": ""}},
+            {"kind": "tool_call", "name": "write_case_file", "payload": {"tool": "write_case_file", "error": ""}},
+            {"kind": "tool_call", "name": "render_pdf", "payload": {"tool": "render_pdf", "error": ""}},
+        ]
+    )
+    base = _framework_oracle().framework
+    assert base is not None
+    framework = base.model_copy(
+        update={
+            "required_roles": [RequiredRoleOracle(name="report_writer")],
+            "required_approved_tools": ["write_case_file", "render_pdf"],
+            "max_total_calls": 10,
+            "ordered_milestones": [
+                *base.ordered_milestones,
+                ["role:report_writer"],
+                ["tool:write_case_file"],
+                ["tool:render_pdf"],
+            ],
+        }
+    )
+    oracle = _oracle().model_copy(update={"framework": framework})
+
+    result = score_business_eval(_case(), oracle, snapshot)
+
+    assert result.framework_passed is True
+    assert result.passed is True
+    assert any(item.id == "framework.required_role.report_writer" for item in result.framework_checks)
+    assert {
+        item.id for item in result.framework_checks if item.id.startswith("framework.required_approval")
+    } == {
+        "framework.required_approval.write_case_file",
+        "framework.required_approval.render_pdf",
+    }
+
+
+def test_framework_protocol_with_attachment_requires_read_attachment_by_oracle() -> None:
+    snapshot = _framework_snapshot()
+    snapshot.events = [
+        item
+        for item in snapshot.events
+        if str((item.get("payload") or {}).get("tool") or "") != "read_attachment"
+    ]
+
+    result = score_business_eval(_case(), _framework_oracle(), snapshot)
+
+    check = next(
+        item for item in result.framework_checks if item.id == "framework.required_tool.read_attachment"
+    )
+    assert check.passed is False
+    assert result.score == Decimal("100")  # Business score is deliberately untouched.
+    assert result.business_passed is True
+    assert result.framework_passed is False
+    assert result.passed is False
+
+
+def test_framework_protocol_requires_compute_witness_by_configuration_not_domain_code() -> None:
+    snapshot = _framework_snapshot()
+    snapshot.events = [
+        item
+        for item in snapshot.events
+        if "compute_witness" not in str(item.get("payload") or {})
+    ]
+
+    result = score_business_eval(_case(), _framework_oracle(), snapshot)
+
+    check = next(
+        item for item in result.framework_checks if item.id == "framework.required_tool.compute_witness"
+    )
+    assert check.passed is False
+    assert result.business_passed is True
+    assert result.framework_passed is False
+    assert result.passed is False
+
+
+def test_framework_protocol_events_are_canonical_and_trace_duplicate_is_ignored() -> None:
+    snapshot = _framework_snapshot()
+
+    result = score_business_eval(_case(), _framework_oracle(), snapshot)
+
+    assert result.framework_passed is True
+    assert result.engineering["tool_names"].count("read_attachment") == 1
+    assert result.engineering["tool_calls"] == 6
+
+
+def test_framework_protocol_fails_closed_when_fallback_sources_have_no_shared_order() -> None:
+    snapshot = _framework_snapshot()
+    snapshot.events = []
+    snapshot.trace["tool_calls"] = [{"tool": "read_attachment", "error": ""}]
+    snapshot.trace["provider_tool_calls"] = [
+        {"tool": "read_source", "error": ""},
+        {"tool": "bind_claim", "error": ""},
+        {"tool": "compute_witness", "error": ""},
+        {"tool": "submit_check", "error": ""},
+    ]
+
+    result = score_business_eval(_case(), _framework_oracle(), snapshot)
+
+    ordered = next(
+        item for item in result.framework_checks if item.id == "framework.ordered_milestones"
+    )
+    assert ordered.passed is False
+    assert ordered.observed["orderable"] is False
+    assert all(
+        item.passed
+        for item in result.framework_checks
+        if item.id.startswith("framework.required_tool")
+    )
+
+
+def test_framework_protocol_forbidden_write_and_report_tools_fail() -> None:
+    snapshot = _framework_snapshot()
+    snapshot.events.extend(
+        [
+            {"kind": "tool_call", "ts": "2026-01-01T00:00:10+00:00", "payload": {"tool": "write_case_file"}},
+            {"kind": "tool_call", "ts": "2026-01-01T00:00:11+00:00", "payload": {"tool": "render_pdf"}},
+        ]
+    )
+    oracle = _framework_oracle(forbidden_tools=["write_case_file", "render_pdf"])
+
+    result = score_business_eval(_case(), oracle, snapshot)
+
+    assert result.business_passed is True
+    assert result.framework_passed is False
+    assert result.passed is False
+    assert {
+        item.id for item in result.framework_checks if not item.passed
+    } == {
+        "framework.forbidden_tool.write_case_file",
+        "framework.forbidden_tool.render_pdf",
+    }
+
+
+def test_framework_protocol_tool_errors_and_total_calls_have_independent_budgets() -> None:
+    snapshot = _framework_snapshot()
+    snapshot.events.extend(
+        [
+            {
+                "kind": "tool_finished",
+                "ts": "2026-01-01T00:00:10+00:00",
+                "payload": {"tool": "read_source", "status": "rejected", "hook_code": "BAD_REF"},
+            },
+            {
+                "kind": "tool_call",
+                "ts": "2026-01-01T00:00:11+00:00",
+                "payload": {"tool": "list_case_files", "error": "temporary failure"},
+            },
+        ]
+    )
+    oracle = _framework_oracle(max_tool_errors=1, max_total_calls=6)
+
+    result = score_business_eval(_case(), oracle, snapshot)
+
+    failed = {item.id for item in result.framework_checks if not item.passed}
+    assert failed == {"framework.max_tool_errors", "framework.max_total_calls"}
+    assert result.engineering["tool_error_calls"] == 2
+    assert result.framework_passed is False
+    assert result.score == Decimal("100")
+
+
+def test_framework_protocol_report_has_small_separate_summary() -> None:
+    oracle = _framework_oracle()
+    snapshot = _framework_snapshot()
+    result = score_business_eval(_case(), oracle, snapshot)
+
+    report = render_eval_report(_case(), oracle, snapshot, result)
+
+    assert "## 框架协议" in report
+    assert "不计入业务 100 分" in report
+    assert "framework.ordered_milestones" in report
+    assert len(report) < 12_000
 
 
 def test_v23_false_or_unverified_equations_are_not_witnesses() -> None:

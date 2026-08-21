@@ -15,7 +15,7 @@ from app.compiler_runtime.policy import (
     expand_active_requirements,
     policy_excerpt_for,
     policy_hash,
-    proof_is_reportable,
+    case_decision_ready,
 )
 from app.domain.invoice_requirements import (
     AP_LITE_REQUIREMENTS,
@@ -482,7 +482,7 @@ def _refresh_workflow_status(state: CaseState) -> None:
     state.weak_materials = buckets["weak_materials"]
     state.conflict_materials = buckets["conflict_materials"]
     state.satisfied_materials = buckets["satisfied_materials"]
-    if state.evidence_items and state.requirements and proof_is_reportable(state.compiled_proof):
+    if state.evidence_items and state.requirements and case_decision_ready(state):
         state.status = "ready_for_report"
     elif state.evidence_items:
         state.status = "collecting_materials"

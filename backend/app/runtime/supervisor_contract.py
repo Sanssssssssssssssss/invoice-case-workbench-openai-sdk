@@ -28,7 +28,7 @@ class CasePatchWriterInput(_SupervisorToolInput):
 
 
 class ReportWriterInput(_SupervisorToolInput):
-    report_instructions: str = Field(default="", description="Optional report-writing instructions from the user.")
+    pass
 
 
 class WriteCasePatchInput(_SupervisorToolInput):
@@ -40,7 +40,7 @@ CAPABILITY_CARDS = {
         "materials_advisor": "Generate material-gap tasks, explain rules/templates, and answer what to submit next. It may use RAG guidance internally.",
         "evidence_reviewer": "Compile active requirements into a ProofPlan, inspect evidence in a read-only tool sandbox, and verify every atomic check. Pass exact active_requirement_ids for a new scope; mode is always review.",
         "case_patch_writer": "Convert reviewer/advisor structured results into a CasePatch. It does not re-review evidence.",
-        "report_writer": "Draft Chinese Markdown report content from case_state and evidence chain. It does not write files.",
+        "report_writer": "Draft Chinese Markdown from the canonical consumer packet and the user's request. It does not write files.",
     },
     "tools": {
         "read_case_state": "Read current case state snapshot.",

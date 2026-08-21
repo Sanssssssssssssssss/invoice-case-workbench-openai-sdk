@@ -132,10 +132,12 @@ class TaskIntentOracle(StrictModel):
 
 class SemanticMilestoneOracle(StrictModel):
     id: str
+    facet_ref: str = ""
     statement_meaning: MeaningOracle
     expected_status: Literal["SUPPORTED", "CONTRADICTED", "NOT_FOUND"]
     fact_ids: list[str] = Field(min_length=1)
     relation_ids: list[str] = Field(default_factory=list)
+    missing_meaning: MeaningOracle | None = None
 
     @field_validator("id")
     @classmethod
@@ -144,6 +146,17 @@ class SemanticMilestoneOracle(StrictModel):
         if not normalized:
             raise ValueError("milestone id must not be empty")
         return normalized
+
+    @field_validator("facet_ref")
+    @classmethod
+    def normalize_facet_ref(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_missing_meaning(self) -> "SemanticMilestoneOracle":
+        if self.missing_meaning is not None and self.expected_status != "NOT_FOUND":
+            raise ValueError("missing_meaning is only valid for NOT_FOUND milestones")
+        return self
 
     @field_validator("fact_ids", "relation_ids")
     @classmethod
@@ -231,6 +244,159 @@ class CommunicationOracle(StrictModel):
     require_report_links: bool = True
 
 
+def _framework_name(value: str) -> str:
+    name = value.strip().casefold()
+    name = re.sub(r"^(?:call_tool|tool|function)\s*[:/]\s*", "", name)
+    if "__" in name:
+        name = name.rsplit("__", 1)[-1]
+    if any(separator in name for separator in (".", "/", ":")):
+        name = re.split(r"[./:]", name)[-1]
+    return re.sub(r"[^a-z0-9_]+", "_", name).strip("_")
+
+
+def _framework_milestone(value: str) -> str:
+    raw = value.strip().casefold()
+    if ":" in raw:
+        kind, name = raw.split(":", 1)
+        if kind in {"tool", "role", "approval"}:
+            return f"{kind}:{_framework_name(name)}"
+    return _framework_name(raw)
+
+
+class RequiredToolOracle(StrictModel):
+    name: str
+    min_calls: int = Field(default=1, ge=1)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = _framework_name(value)
+        if not normalized:
+            raise ValueError("required tool name must not be empty")
+        return normalized
+
+
+class RequiredRoleOracle(StrictModel):
+    name: str
+    min_calls: int = Field(default=1, ge=1)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = _framework_name(value)
+        if not normalized:
+            raise ValueError("required role name must not be empty")
+        return normalized
+
+
+class FrameworkOracle(StrictModel):
+    """Small, path-friendly protocol gate independent of business truth."""
+
+    required_tools: list[RequiredToolOracle] = Field(default_factory=list)
+    required_roles: list[RequiredRoleOracle] = Field(default_factory=list)
+    required_approved_tools: list[str] = Field(default_factory=list)
+    forbidden_tools: list[str] = Field(default_factory=list)
+    max_tool_errors: int | None = Field(default=None, ge=0)
+    max_total_calls: int | None = Field(default=None, ge=0)
+    ordered_milestones: list[list[str]] = Field(default_factory=list)
+
+    @field_validator("forbidden_tools")
+    @classmethod
+    def validate_forbidden_tools(cls, value: list[str]) -> list[str]:
+        normalized = [_framework_name(item) for item in value if item.strip()]
+        if len(normalized) != len(value) or len(set(normalized)) != len(normalized):
+            raise ValueError("forbidden_tools must be non-empty and unique")
+        return normalized
+
+    @field_validator("required_approved_tools")
+    @classmethod
+    def validate_required_approved_tools(cls, value: list[str]) -> list[str]:
+        normalized = [_framework_name(item) for item in value if item.strip()]
+        if len(normalized) != len(value) or len(set(normalized)) != len(normalized):
+            raise ValueError("required_approved_tools must be non-empty and unique")
+        return normalized
+
+    @field_validator("ordered_milestones")
+    @classmethod
+    def validate_ordered_milestones(cls, value: list[list[str]]) -> list[list[str]]:
+        normalized: list[list[str]] = []
+        for milestone in value:
+            alternatives = [_framework_milestone(item) for item in milestone if item.strip()]
+            if not alternatives or len(alternatives) != len(milestone):
+                raise ValueError("ordered milestones must contain non-empty protocol alternatives")
+            if len(set(alternatives)) != len(alternatives):
+                raise ValueError("ordered milestone alternatives must be unique")
+            normalized.append(alternatives)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_framework_gate(self) -> "FrameworkOracle":
+        required_names = [item.name for item in self.required_tools]
+        if len(set(required_names)) != len(required_names):
+            raise ValueError("required_tools must not contain duplicate names")
+        required_roles = [item.name for item in self.required_roles]
+        if len(set(required_roles)) != len(required_roles):
+            raise ValueError("required_roles must not contain duplicate names")
+        forbidden = set(self.forbidden_tools)
+        required = set(required_names)
+        approvals = set(self.required_approved_tools)
+        if required & forbidden:
+            raise ValueError(
+                f"tools cannot be both required and forbidden: {sorted(required & forbidden)}"
+            )
+        if approvals & forbidden:
+            raise ValueError(
+                f"approved tools cannot be forbidden: {sorted(approvals & forbidden)}"
+            )
+        milestone_tools: set[str] = set()
+        ordered_tool_calls = 0
+        for alternatives in self.ordered_milestones:
+            tool_alternatives = {
+                item.split(":", 1)[1] if item.startswith("tool:") else item
+                for item in alternatives
+                if not item.startswith(("role:", "approval:"))
+            }
+            milestone_tools.update(tool_alternatives)
+            if tool_alternatives and len(tool_alternatives) == len(alternatives):
+                ordered_tool_calls += 1
+            if (
+                tool_alternatives
+                and len(tool_alternatives) == len(alternatives)
+                and tool_alternatives <= forbidden
+            ):
+                raise ValueError(
+                    "ordered milestone cannot require only forbidden tools: "
+                    f"{sorted(tool_alternatives)}"
+                )
+        orphan_approvals = approvals - required - milestone_tools
+        if orphan_approvals:
+            raise ValueError(
+                "required approvals must correspond to a required or ordered tool: "
+                f"{sorted(orphan_approvals)}"
+            )
+        minimum_calls = max(
+            sum(item.min_calls for item in self.required_tools),
+            ordered_tool_calls,
+        )
+        if self.max_total_calls is not None and self.max_total_calls < minimum_calls:
+            raise ValueError(
+                f"max_total_calls={self.max_total_calls} is lower than required minimum {minimum_calls}"
+            )
+        if not any(
+            (
+                self.required_tools,
+                self.required_roles,
+                self.required_approved_tools,
+                self.forbidden_tools,
+                self.max_tool_errors is not None,
+                self.max_total_calls is not None,
+                self.ordered_milestones,
+            )
+        ):
+            raise ValueError("framework oracle must declare at least one protocol constraint")
+        return self
+
+
 class BusinessEvalOracle(StrictModel):
     schema_version: Literal["2"] = "2"
     case_id: str
@@ -243,6 +409,7 @@ class BusinessEvalOracle(StrictModel):
     epistemic_boundaries: list[EpistemicBoundaryOracle] = Field(default_factory=list)
     requirement: RequirementOracle
     communication: CommunicationOracle
+    framework: FrameworkOracle | None = None
 
     @model_validator(mode="after")
     def validate_oracle_graph(self) -> "BusinessEvalOracle":
@@ -380,6 +547,16 @@ class EvalVeto(StrictModel):
     detail: str
 
 
+class FrameworkCheck(StrictModel):
+    id: str
+    points: Decimal = Field(ge=0)
+    earned: Decimal = Field(ge=0)
+    passed: bool
+    expected: Any = None
+    observed: Any = None
+    detail: str = ""
+
+
 class EvalResult(StrictModel):
     schema_version: Literal["1"] = "1"
     case_id: str
@@ -387,14 +564,25 @@ class EvalResult(StrictModel):
     run_id: str
     scorer_version: str
     passed: bool
+    business_passed: bool | None = None
     score: Decimal = Field(ge=0, le=100)
     raw_score: Decimal | None = Field(default=None, ge=0, le=100)
     score_cap: Decimal = Field(default=Decimal("100"), ge=0, le=100)
     score_cap_reason: str = ""
     first_failed_stage: str = ""
     checks: list[ScoreCheck]
+    framework_enabled: bool = False
+    framework_score: Decimal = Field(default=Decimal("100"), ge=0, le=100)
+    framework_passed: bool = True
+    framework_checks: list[FrameworkCheck] = Field(default_factory=list)
     vetoes: list[EvalVeto] = Field(default_factory=list)
     engineering: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def fill_legacy_business_passed(self) -> "EvalResult":
+        if self.business_passed is None:
+            self.business_passed = self.passed
+        return self
 
 
 def load_case(case_dir: Path) -> BusinessEvalCase:

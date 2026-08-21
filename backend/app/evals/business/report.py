@@ -26,12 +26,15 @@ def render_eval_report(
 ) -> str:
     """Render the small, developer-facing report without hidden model reasoning."""
     status = "PASS" if result.passed else "VETO" if result.vetoes else "FAIL"
-    first_failure = _STAGE_LABELS.get(result.first_failed_stage, result.first_failed_stage) or "无"
+    first_failure = _STAGE_LABELS.get(result.first_failed_stage, result.first_failed_stage) or (
+        "框架协议" if result.framework_enabled and not result.framework_passed else "无"
+    )
     lines = [
         f"# Business Eval：{case.title}",
         "",
         f"- 结果：**{status}**",
         f"- 得分：**{_number(result.score)}/100**",
+        f"- 业务评分通过：**{'是' if result.business_passed else '否'}**",
         f"- 首个失败阶段：**{first_failure}**",
         f"- 案例：`{case.case_id}@{case.case_version}`",
         f"- 运行：`{snapshot.run_id}`；评分器：`{result.scorer_version}`",
@@ -69,6 +72,29 @@ def render_eval_report(
         lines.append(
             f"| {label} | {_number(earned)}/{_number(possible)} | {failed_core} 项失败 | {stage_status} |"
         )
+
+    lines.extend(["", "## 框架协议", ""])
+    if not result.framework_enabled:
+        lines.append("- 本 Oracle 未启用框架工具门；整体结果只由业务评分决定。")
+    else:
+        lines.extend(
+            [
+                f"- 结果：**{'PASS' if result.framework_passed else 'FAIL'}**",
+                f"- 得分：**{_number(result.framework_score)}/100**（不计入业务 100 分）",
+                "",
+                "| 检查 | 结果 | 期望 | 实际 |",
+                "|---|---|---|---|",
+            ]
+        )
+        for item in result.framework_checks:
+            lines.append(
+                "| {check} | {status} | {expected} | {observed} |".format(
+                    check=_escape(item.id),
+                    status="PASS" if item.passed else "FAIL",
+                    expected=_escape(_brief(item.expected)),
+                    observed=_escape(_brief(item.observed)),
+                )
+            )
 
     failed = [item for item in result.checks if not item.passed]
     lines.extend(["", "## 期望与实际", ""])
@@ -114,6 +140,8 @@ def render_eval_report(
         "error_events",
         "blocked_actions",
         "hook_rejections",
+        "tool_calls",
+        "tool_error_calls",
         "report_count",
         "report_bytes",
     ):
@@ -148,6 +176,11 @@ def render_eval_report(
         lines.append(f"优先检查 `{failed[0].id}`：{failed[0].detail or '核对该层输入与输出。'}")
     elif result.vetoes:
         lines.append(f"优先修复 `{result.vetoes[0].code}`，保留本次快照用于零 API 重评分。")
+    elif result.framework_enabled and not result.framework_passed:
+        failed_framework = next(item for item in result.framework_checks if not item.passed)
+        lines.append(
+            f"优先检查 `{failed_framework.id}`：{failed_framework.detail or '核对工具协议。'}"
+        )
     else:
         lines.append("当前案例通过；新增案例前保持评分器与 Oracle 不变。")
     return "\n".join(lines).rstrip() + "\n"

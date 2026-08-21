@@ -11,7 +11,14 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.evals.business.models import load_case, load_oracle, validate_case_bundle, validate_case_input
+from app.evals.business.models import (
+    FrameworkOracle,
+    RequiredToolOracle,
+    load_case,
+    load_oracle,
+    validate_case_bundle,
+    validate_case_input,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -76,10 +83,14 @@ def test_business_invoice_oracles_have_strict_three_way_distribution() -> None:
     }
     for _, oracle in bundles:
         assert all(fact.predicate_options for fact in oracle.facts if fact.origin == "source")
+        assert all(milestone.facet_ref for milestone in oracle.milestones)
         assert oracle.communication.opposite_conclusions
         if oracle.requirement.decision_status == "NOT_FOUND":
             assert oracle.requirement.projected_status == "weak"
             assert oracle.requirement.blocking_obligations is True
+            assert any(milestone.missing_meaning for milestone in oracle.milestones)
+        else:
+            assert not any(milestone.missing_meaning for milestone in oracle.milestones)
 
 
 @pytest.mark.parametrize(
@@ -93,6 +104,8 @@ def test_subtotal_conflicts_preserve_both_downstream_total_paths(case_id: str) -
     assert milestones["subtotal_aggregation"].expected_status == "CONTRADICTED"
     assert milestones["printed_subtotal_total_reconciliation"].expected_status == "CONTRADICTED"
     assert milestones["line_derived_total_reconciliation"].expected_status == "SUPPORTED"
+    assert milestones["printed_subtotal_total_reconciliation"].facet_ref == "final_total"
+    assert milestones["line_derived_total_reconciliation"].facet_ref == "final_total"
 
 
 @pytest.mark.parametrize(
@@ -240,3 +253,32 @@ def test_oracle_fact_origin_bindings_fail_closed(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError, match="derived facts cannot declare"):
         load_oracle(case_dir)
+
+
+def test_framework_oracle_rejects_required_forbidden_overlap() -> None:
+    with pytest.raises(ValidationError, match="both required and forbidden"):
+        FrameworkOracle(
+            required_tools=[RequiredToolOracle(name="functions.read_attachment")],
+            forbidden_tools=["read_attachment"],
+        )
+
+
+def test_framework_oracle_rejects_orphan_or_forbidden_approval() -> None:
+    with pytest.raises(ValidationError, match="approved tools cannot be forbidden"):
+        FrameworkOracle(
+            required_approved_tools=["write_case_file"],
+            forbidden_tools=["write_case_file"],
+        )
+    with pytest.raises(ValidationError, match="must correspond"):
+        FrameworkOracle(required_approved_tools=["render_pdf"])
+
+
+def test_framework_oracle_rejects_impossible_total_call_budget() -> None:
+    with pytest.raises(ValidationError, match="lower than required minimum"):
+        FrameworkOracle(
+            required_tools=[
+                RequiredToolOracle(name="read_source", min_calls=2),
+                RequiredToolOracle(name="submit_check", min_calls=1),
+            ],
+            max_total_calls=2,
+        )

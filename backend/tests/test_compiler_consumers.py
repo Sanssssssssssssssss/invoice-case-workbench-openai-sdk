@@ -11,7 +11,9 @@ from app.compiler_runtime import (
     ReviewArtifact,
     compile_review_artifact,
 )
-from app.context import _case_brief, _report_case_state
+from app.compiler_runtime.consumer import derive_consumer_packet
+from app.compiler_runtime.signatures import proof_signature_hash_for
+from app.context import _case_brief
 from app.evals.oracle import complete_claim_consistency_errors
 from app.guards import (
     CaseStateConsistencyError,
@@ -68,10 +70,12 @@ def _case_with_supported_runtime_proof() -> CaseState:
             )
         ],
         submitted_claim_refs={"check.invoice": ["claim.invoice_number"]},
+        proof_signature_hash=proof_signature_hash_for(plan.active_requirement_ids),
         policy_hash="sha256:policy",
         compiler_version="test",
         model="fixture",
     )
+    artifact = artifact.model_copy(update={"artifact_hash": artifact.content_hash()})
     return CaseState(
         case_id="case.compiler.consumer",
         requirements=[Requirement(id="invoice", label="Invoice", status="accepted")],
@@ -93,21 +97,29 @@ def test_context_consumes_runtime_proof_without_legacy_fields() -> None:
     case_state = _case_with_supported_runtime_proof()
 
     brief = _case_brief(case_state)
-    report_state = _report_case_state(case_state)
+    report_state = derive_consumer_packet(case_state).model_dump(mode="json")
 
     assert "invoice=SUPPORTED" in brief
-    assert report_state["compiled_proof"]["decisions"][0]["status"] == "SUPPORTED"
-    assert report_state["reportable"] is True
+    assert report_state["root_decisions"][0]["status"] == "SUPPORTED"
+    assert report_state["reportability"] == "FULL"
+    assert report_state["review_complete"] is True
+    assert report_state["decision_ready"] is True
     assert "review_artifact" not in report_state
     assert "plan" not in report_state
     assert "assessments" not in report_state
-    assert report_state["evidence_items"] == [
+    assert report_state["source_fingerprints"] == {"ev.invoice": "sha256:invoice"}
+    assert report_state["claims"] == [
         {
-            "id": "ev.invoice",
-            "type": "invoice",
-            "source": "attachment",
-            "credibility": "high",
-            "source_fingerprint": "sha256:invoice",
+            "id": "claim.invoice_number",
+            "subject": "invoice:INV-1",
+            "predicate": "invoice_number",
+            "value": "INV-1",
+            "source_id": "ev.invoice",
+            "quote": "Invoice INV-1",
+            "locator": "line 1",
+            "confidence": "high",
+            "currency": "",
+            "unit": "",
         }
     ]
 
@@ -126,6 +138,9 @@ def test_report_guard_requires_each_canonical_contradiction_and_rejects_no_confl
     )
     case_state.review_artifact = case_state.review_artifact.model_copy(
         update={"assessments": [assessment]}
+    )
+    case_state.review_artifact = case_state.review_artifact.model_copy(
+        update={"artifact_hash": case_state.review_artifact.content_hash()}
     )
     case_state.compiled_proof = compile_review_artifact(case_state.review_artifact)
 

@@ -43,6 +43,8 @@ ENGINEERING_TOTAL_KEYS = (
     "error_events",
     "blocked_actions",
     "hook_rejections",
+    "tool_calls",
+    "tool_error_calls",
     "report_count",
     "report_bytes",
 )
@@ -183,6 +185,9 @@ def summarize_business_results(
         "communication": 0,
         "runtime_completed": 0,
     }
+    framework_scores: list[Decimal] = []
+    framework_enabled_runs = 0
+    framework_passed_runs = 0
 
     for paths in case_runs:
         snapshot = EvalSnapshot.model_validate_json(paths.snapshot.read_text(encoding="utf-8"))
@@ -196,6 +201,11 @@ def summarize_business_results(
         scorer_versions.add(result.scorer_version)
         failed = [item for item in result.checks if not item.passed]
         failed_core = [item for item in failed if item.core]
+        failed_framework = [item for item in result.framework_checks if not item.passed]
+        if result.framework_enabled:
+            framework_enabled_runs += 1
+            framework_passed_runs += int(result.framework_passed)
+            framework_scores.append(result.framework_score)
         target_truth = next(
             (item.passed for item in result.checks if item.id == "proof.target_decision_truth"),
             False,
@@ -254,6 +264,16 @@ def summarize_business_results(
                     case_id=case.case_id,
                     detail=check.detail,
                 )
+            for check in failed_framework:
+                _add_repair_group(
+                    repair_groups,
+                    kind="framework",
+                    item_id=check.id,
+                    stage="framework",
+                    core=True,
+                    case_id=case.case_id,
+                    detail=check.detail,
+                )
         rows.append(
             {
                 "case_id": case.case_id,
@@ -262,7 +282,12 @@ def summarize_business_results(
                 "suite": case.suite,
                 "run_id": result.run_id,
                 "passed": result.passed,
+                "business_passed": result.business_passed,
                 "score": float(result.score),
+                "framework_enabled": result.framework_enabled,
+                "framework_passed": result.framework_passed,
+                "framework_score": float(result.framework_score),
+                "failed_framework_check_ids": [item.id for item in failed_framework],
                 "first_failed_stage": result.first_failed_stage,
                 "failed_check_ids": [item.id for item in failed],
                 "failed_core_check_ids": [item.id for item in failed_core],
@@ -304,6 +329,12 @@ def summarize_business_results(
         },
         "score_mean": _decimal_mean(scores),
         "score_min": float(min(scores)),
+        "framework": {
+            "enabled_runs": framework_enabled_runs,
+            "passed_runs": framework_passed_runs,
+            "pass_rate": _ratio(framework_passed_runs, framework_enabled_runs),
+            "score_mean": _decimal_mean(framework_scores) if framework_scores else 100.0,
+        },
         "core_checks": {
             "passed": sum(1 for item in core_checks if item.passed),
             "total": len(core_checks),
@@ -327,6 +358,7 @@ def summarize_business_results(
 def render_business_benchmark(summary: Mapping[str, Any]) -> str:
     status = "PASS" if summary["strict_pass"] else "FAIL"
     core = summary["core_checks"]
+    framework = summary.get("framework") or {}
     lines = [
         "# Business Benchmark 报告",
         "",
@@ -334,6 +366,11 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
         f"- 案例：**{summary['case_count']}**；运行：**{summary['run_count']}**；通过：**{summary['passed_runs']}**",
         f"- 平均分：**{summary['score_mean']:.2f}**；最低分：**{summary['score_min']:.2f}**",
         f"- 核心检查：**{core['passed']}/{core['total']}**（{core['pass_rate']:.1%}）",
+        (
+            f"- 框架协议：**{framework.get('passed_runs', 0)}/"
+            f"{framework.get('enabled_runs', 0)}**；"
+            f"启用案例平均 **{framework.get('score_mean', 100):.2f}/100**（不计入业务分）"
+        ),
         (
             f"- 目标三态命中：**{summary['outcomes']['target_truth']['passed']}/"
             f"{summary['outcomes']['target_truth']['total']}**；"
@@ -367,21 +404,27 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             "",
             "## 案例结果",
             "",
-            "| 案例 | 套件 | 结果 | 得分 | 首个失败阶段 | Veto | Calls | Tokens | 耗时 ms |",
-            "|---|---|---|---:|---|---|---:|---:|---:|",
+            "| 案例 | 套件 | 结果 | 业务分 | 框架 | 首个失败阶段 | Veto | Calls | Tokens | 耗时 ms |",
+            "|---|---|---|---:|---|---|---|---:|---:|---:|",
         ]
     )
     for row in summary["case_runs"]:
         metrics = row["engineering"]
         lines.append(
             (
-                "| {case} | {suite} | {status} | {score:.2f} | {stage} | {veto} | "
+                "| {case} | {suite} | {status} | {score:.2f} | {framework} | {stage} | {veto} | "
                 "{calls} | {tokens} | {duration} |"
             ).format(
                 case=_escape(row["case_id"]),
                 suite=_escape(row["suite"]),
                 status="PASS" if row["passed"] else "FAIL",
                 score=row["score"],
+                framework=(
+                    f"{'PASS' if row['framework_passed'] else 'FAIL'} "
+                    f"{row['framework_score']:.2f}"
+                    if row["framework_enabled"]
+                    else "未启用"
+                ),
                 stage=STAGE_LABELS.get(row["first_failed_stage"], row["first_failed_stage"]) or "-",
                 veto=_escape(", ".join(row["veto_codes"]) or "-"),
                 calls=metrics.get("provider_calls", 0),

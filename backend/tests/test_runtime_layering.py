@@ -65,6 +65,86 @@ def _state(tmp_path, *, message: str = "测试") -> tuple[CaseStore, ContextMana
     return store, context, harness, state
 
 
+def _canonical_report_case(status: str, *, missing_fact: str = "") -> SimpleNamespace:
+    check_id = "check.report"
+    requirement_id = "req.report"
+    node = SimpleNamespace(
+        id=check_id,
+        kind="CHECK",
+        depends_on=[],
+        facet_refs=[],
+    )
+    claim_ids = ["claim.report"] if status != "NOT_FOUND" else []
+    source_ids = ["ev.report"] if status != "NOT_FOUND" else []
+    result = SimpleNamespace(
+        node_id=check_id,
+        kind="CHECK",
+        status=status,
+        reason="canonical report leaf",
+        claim_ids=claim_ids,
+        binding_ids=[],
+        witness_ids=[],
+        source_ids=source_ids,
+    )
+    obligation = SimpleNamespace(
+        id="obligation.report",
+        requirement_id=requirement_id,
+        check_id=check_id,
+        missing_fact=missing_fact,
+        blocking=True,
+        candidate_actions=["read_source"],
+    )
+    decision = SimpleNamespace(
+        requirement_id=requirement_id,
+        root_node_id=check_id,
+        status=status,
+        supporting_check_ids=[check_id] if status == "SUPPORTED" else [],
+        contradicting_check_ids=[check_id] if status == "CONTRADICTED" else [],
+        unresolved_check_ids=[check_id] if status == "NOT_FOUND" else [],
+        obligation_ids=["obligation.report"] if status == "NOT_FOUND" else [],
+        stop_reason="fixture",
+    )
+    claim = SimpleNamespace(
+        id="claim.report",
+        subject="report",
+        predicate="status",
+        value=status,
+        source_id="ev.report",
+        quote="canonical report leaf",
+        locator="fixture:1",
+        confidence="high",
+        attributes={},
+    )
+    artifact = SimpleNamespace(
+        plan=SimpleNamespace(nodes=[node]),
+        plan_hash="sha256:plan",
+        evidence_ir=SimpleNamespace(
+            claims=[claim] if claim_ids else [],
+            source_fingerprints={"ev.report": "sha256:evidence"} if source_ids else {},
+        ),
+        evidence_snapshot_hash="sha256:evidence",
+        policy_hash="sha256:policy",
+        execution_status="COMPLETED",
+        compiler_version="fixture",
+        prompt_versions={},
+        artifact_hash="",
+        binding_proposals=[],
+        calculation_witnesses=[],
+    )
+    proof = SimpleNamespace(
+        decisions=[decision],
+        node_results=[result],
+        obligations=[obligation] if status == "NOT_FOUND" else [],
+        diagnostics=[],
+    )
+    return SimpleNamespace(
+        case_id="case_policy",
+        requirements=[SimpleNamespace(id=requirement_id, required=True)],
+        review_artifact=artifact,
+        compiled_proof=proof,
+    )
+
+
 def test_runtime_uses_one_sorted_tool_catalog_for_context_and_sdk_tools(tmp_path) -> None:
     runner = TurnRunner(store=CaseStore(tmp_path / "cases"), llm=LlmClient(Settings(llm_api_key="test")))
 
@@ -590,9 +670,7 @@ def test_policy_gate_enforces_report_writer_file_and_pdf_sequence(tmp_path, monk
     monkeypatch.setattr(
         store,
         "load",
-        lambda _case_id: SimpleNamespace(
-            compiled_proof=SimpleNamespace(decisions=[object()], obligations=[])
-        ),
+        lambda _case_id: _canonical_report_case("CONTRADICTED"),
     )
     gate = PolicyGate(store=store, context=context)
     request = AgentTurnRequest(case_id=state.case_id, message="生成最终报告")
@@ -640,12 +718,7 @@ def test_policy_gate_uses_canonical_blocking_obligations_for_reportability(tmp_p
     monkeypatch.setattr(
         store,
         "load",
-        lambda _case_id: SimpleNamespace(
-            compiled_proof=SimpleNamespace(
-                decisions=[SimpleNamespace(status="CONTRADICTED")],
-                obligations=[],
-            )
-        ),
+        lambda _case_id: _canonical_report_case("CONTRADICTED"),
     )
     assert gate.check(
         request=request,
@@ -657,11 +730,9 @@ def test_policy_gate_uses_canonical_blocking_obligations_for_reportability(tmp_p
     monkeypatch.setattr(
         store,
         "load",
-        lambda _case_id: SimpleNamespace(
-            compiled_proof=SimpleNamespace(
-                decisions=[SimpleNamespace(status="NOT_FOUND")],
-                obligations=[SimpleNamespace(blocking=True, missing_fact="template baseline")],
-            )
+        lambda _case_id: _canonical_report_case(
+            "NOT_FOUND",
+            missing_fact="template baseline",
         ),
     )
     blocked = gate.check(
