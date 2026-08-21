@@ -4,12 +4,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+from agents.exceptions import ModelBehaviorError
+
 from app.agents.capabilities import ROLE_CAPABILITIES, role_prompt_version
 from app.agents.registry import RoleRegistry
 from app.context import ContextManager
 from app.harness import HarnessRuntime
 from app.llm import LlmClient
 from app.state.case_store import CaseStore
+from app.state.schemas import ReportWriterResult
 
 
 class _DummyGeneration:
@@ -66,6 +70,20 @@ def test_role_agents_use_manifest_prompt_versions() -> None:
         assert registry.prompt(role)
         assert registry.prompt_version(role) == role_prompt_version(role)
         assert registry.trace_metadata(role)["prompt_version"] == role_prompt_version(role)
+
+
+def test_report_writer_role_accepts_unclosed_json_fence_but_rejects_invalid_json() -> None:
+    schema = RoleRegistry(LlmClient()).agent("report_writer").output_type
+    fenced = "```json\n" + json.dumps(
+        {"markdown": "# 审核报告\n\n发现总额差异。", "title": "审核报告"},
+        ensure_ascii=False,
+    )
+
+    parsed = schema.validate_json(fenced)
+
+    assert parsed == ReportWriterResult(markdown="# 审核报告\n\n发现总额差异。", title="审核报告")
+    with pytest.raises(ModelBehaviorError):
+        schema.validate_json('```json\n{"markdown":')
 
 
 def test_role_agent_tools_raise_errors_to_runtime_recovery() -> None:

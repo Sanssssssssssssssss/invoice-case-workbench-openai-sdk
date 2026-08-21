@@ -18,8 +18,11 @@ _SHARED_CLIENTS: dict[tuple[str, str, float], AsyncOpenAI] = {}
 class FencedJsonOutputSchema(AgentOutputSchema):
     def validate_json(self, json_str: str) -> Any:
         lines = json_str.strip().splitlines()
-        if len(lines) >= 3 and lines[0].strip().lower() in {"```", "```json"} and lines[-1].strip() == "```":
-            json_str = "\n".join(lines[1:-1]).strip()
+        if lines and lines[0].strip().lower() in {"```", "```json"}:
+            lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            json_str = "\n".join(lines).strip()
         return super().validate_json(json_str)
 
 
