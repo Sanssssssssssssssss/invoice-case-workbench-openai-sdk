@@ -6,6 +6,8 @@ backend/.env
 backend/storage/
 __pycache__/
 .pytest_cache/
+.pytest_cache*/
+.tmp_pytest_cache*/
 .pytest_tmp_*/
 .pytest_tmp_*.xml
 # Disposable local test workspaces (pytest --basetemp and validation probes).

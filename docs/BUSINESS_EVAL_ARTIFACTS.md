@@ -24,10 +24,12 @@ The following directories are local, reproducible test workspaces and must never
 
 - `.bt/` and `backend/.bt/`
 - `.pytest-*/` at the repository root or under `backend/`
+- `.pytest_cache*/` and `.tmp_pytest_cache*/`
 - `.rpv*/`
 - `backend/.ttr*/`
 
 Delete them only after tests have stopped. Resolve every target first and confirm it is inside the repository. Never delete tracked paths, `output/business_benchmarks/`, or a directory selected only by a broad recursive wildcard.
+If a legacy cache has broken ACLs, record and ignore it rather than changing permissions or forcing deletion during routine cleanup.
 
 ## Legacy evidence
 
