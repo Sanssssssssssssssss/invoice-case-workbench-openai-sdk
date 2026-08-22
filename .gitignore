@@ -8,6 +8,11 @@ __pycache__/
 .pytest_cache/
 .pytest_tmp_*/
 .pytest_tmp_*.xml
+# Disposable local test workspaces (pytest --basetemp and validation probes).
+.bt/
+.pytest-*/
+.rpv*/
+backend/.ttr*/
 .test-tmp/
 .tmp/
 .tmp_tau_inspect*/
@@ -21,6 +26,7 @@ backend/storage/checkpoints/
 workspace/cases/
 /workspace/
 /output/
+/o/
 /.cache/
 /.pnpm-store/
 /.playwright-cli/
