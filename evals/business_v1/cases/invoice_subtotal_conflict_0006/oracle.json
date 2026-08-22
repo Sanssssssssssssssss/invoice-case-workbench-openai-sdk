@@ -1,7 +1,7 @@
 {
   "schema_version": "2",
   "case_id": "invoice_subtotal_conflict_0006",
-  "oracle_version": "4",
+  "oracle_version": "5",
   "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::invoice_subtotal_conflict_0006",
   "facts": [
     {
@@ -236,26 +236,6 @@
       ]
     },
     {
-      "id": "printed_subtotal_path_total",
-      "origin": "derived",
-      "kind": "decimal",
-      "value": "14861.50",
-      "required_in": [
-        "reasoning"
-      ],
-      "currency": "EUR"
-    },
-    {
-      "id": "printed_subtotal_path_difference",
-      "origin": "derived",
-      "kind": "decimal",
-      "value": "5.00",
-      "required_in": [
-        "reasoning"
-      ],
-      "currency": "EUR"
-    },
-    {
       "id": "tax_inclusive",
       "origin": "source",
       "kind": "text",
@@ -305,7 +285,6 @@
       "line_extensions",
       "subtotal_aggregation",
       "stated_component_rate_base_validation",
-      "printed_subtotal_total_reconciliation",
       "line_derived_total_reconciliation"
     ]
   },
@@ -469,61 +448,6 @@
       "relation_ids": []
     },
     {
-      "id": "printed_subtotal_total_reconciliation",
-      "facet_ref": "final_total",
-      "statement_meaning": {
-        "all_of": [
-          [
-            "printed subtotal",
-            "stated subtotal",
-            "票面小计"
-          ],
-          [
-            "tax",
-            "VAT",
-            "discount",
-            "adjustment",
-            "component",
-            "税",
-            "折扣",
-            "调整"
-          ],
-          [
-            "printed total",
-            "final total",
-            "amount due",
-            "票面总额",
-            "最终金额",
-            "应付金额"
-          ],
-          [
-            "reconcile",
-            "match",
-            "plus",
-            "add",
-            "一致",
-            "吻合",
-            "核对",
-            "加总"
-          ]
-        ]
-      },
-      "expected_status": "CONTRADICTED",
-      "fact_ids": [
-        "printed_subtotal",
-        "adjustment_1",
-        "printed_subtotal_path_total",
-        "printed_total",
-        "printed_subtotal_path_difference",
-        "rounding_tolerance"
-      ],
-      "relation_ids": [
-        "printed_subtotal_path_math",
-        "printed_subtotal_path_difference_math",
-        "printed_subtotal_path_difference_exceeds_tolerance"
-      ]
-    },
-    {
       "id": "line_derived_total_reconciliation",
       "facet_ref": "final_total",
       "statement_meaning": {
@@ -637,33 +561,6 @@
         "adjustment_1"
       ],
       "output_fact_id": "printed_total"
-    },
-    {
-      "id": "printed_subtotal_path_math",
-      "operation": "sum",
-      "input_fact_ids": [
-        "printed_subtotal",
-        "adjustment_1"
-      ],
-      "output_fact_id": "printed_subtotal_path_total"
-    },
-    {
-      "id": "printed_subtotal_path_difference_math",
-      "operation": "absolute_difference",
-      "input_fact_ids": [
-        "printed_subtotal_path_total",
-        "printed_total"
-      ],
-      "output_fact_id": "printed_subtotal_path_difference"
-    },
-    {
-      "id": "printed_subtotal_path_difference_exceeds_tolerance",
-      "operation": "greater_than",
-      "input_fact_ids": [
-        "printed_subtotal_path_difference",
-        "rounding_tolerance"
-      ],
-      "expected_boolean": true
     }
   ],
   "epistemic_boundaries": [

@@ -129,7 +129,16 @@
       "facets": [
         {"id": "line_extensions", "minimum_proof_terms": ["WITNESS"]},
         {"id": "subtotal_aggregation", "minimum_proof_terms": ["WITNESS"]},
-        {"id": "stated_components", "minimum_proof_terms": ["BINDING", "WITNESS"]},
+        {
+          "id": "stated_components",
+          "minimum_proof_terms": ["BINDING", "WITNESS"],
+          "semantic_contract": "Verify each source-stated tax, discount, charge, or other adjustment as an applied calculation component. The component amount and sign/role must be grounded in the source. When a rate-based calculation is claimed, both the rate and its applicable base relationship must be grounded; numerical coincidence cannot establish the base. If the applicable base cannot be established, preserve the component-validity outcome as NOT_FOUND.",
+          "required_semantic_roles": [
+            "COMPONENT_OBSERVATION",
+            "COMPONENT_APPLICABILITY",
+            "COMPONENT_RECONCILIATION"
+          ]
+        },
         {"id": "final_total", "minimum_proof_terms": ["WITNESS"]}
       ]
     },

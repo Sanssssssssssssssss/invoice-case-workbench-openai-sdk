@@ -282,7 +282,11 @@ class RoleRegistry:
             model=model,
             model_settings=ModelSettings(
                 temperature=temperature_for_thinking(model, self.llm.settings.llm_temperature, selected_thinking_type),
-                extra_body=model_extra_body_for_thinking(model, selected_thinking_type),
+                extra_body=model_extra_body_for_thinking(
+                    model,
+                    selected_thinking_type,
+                    self.llm.settings.llm_base_url,
+                ),
                 **prompt_cache_model_settings_kwargs(self.llm.settings, prompt_partition),
             ),
             output_type=FencedJsonOutputSchema(capability.output_model, strict_json_schema=False),

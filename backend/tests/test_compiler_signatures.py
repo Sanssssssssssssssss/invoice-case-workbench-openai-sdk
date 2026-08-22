@@ -32,7 +32,23 @@ def _signature() -> ProofSignature:
         facets=[
             ProofFacet(id="line_extensions", minimum_proof_terms=["WITNESS"]),
             ProofFacet(id="subtotal_aggregation", minimum_proof_terms=["WITNESS"]),
-            ProofFacet(id="stated_components", minimum_proof_terms=["BINDING", "WITNESS"]),
+            ProofFacet(
+                id="stated_components",
+                minimum_proof_terms=["BINDING", "WITNESS"],
+                semantic_contract=(
+                    "Verify each source-stated tax, discount, charge, or other adjustment as "
+                    "an applied calculation component. The component amount and sign/role must "
+                    "be grounded in the source. When a rate-based calculation is claimed, both "
+                    "the rate and its applicable base relationship must be grounded; numerical "
+                    "coincidence cannot establish the base. If the applicable base cannot be "
+                    "established, preserve the component-validity outcome as NOT_FOUND."
+                ),
+                required_semantic_roles=[
+                    "COMPONENT_OBSERVATION",
+                    "COMPONENT_APPLICABILITY",
+                    "COMPONENT_RECONCILIATION",
+                ],
+            ),
             ProofFacet(id="final_total", minimum_proof_terms=["WITNESS"]),
         ],
     )
@@ -51,6 +67,7 @@ def _plan() -> ProofPlan:
                 kind="CHECK",
                 statement="Each stated line extension is internally consistent.",
                 requirement_refs=[REQUIREMENT_ID],
+                policy_refs=[POLICY_REF],
                 facet_refs=["line_extensions"],
             ),
             ProofNode(
@@ -58,6 +75,7 @@ def _plan() -> ProofPlan:
                 kind="CHECK",
                 statement="The line extensions aggregate to the stated subtotal.",
                 requirement_refs=[REQUIREMENT_ID],
+                policy_refs=[POLICY_REF],
                 facet_refs=["subtotal_aggregation"],
             ),
             ProofNode(
@@ -65,7 +83,13 @@ def _plan() -> ProofPlan:
                 kind="CHECK",
                 statement="Each stated component has a supported basis and arithmetic.",
                 requirement_refs=[REQUIREMENT_ID],
+                policy_refs=[POLICY_REF],
                 facet_refs=["stated_components"],
+                semantic_role_refs=[
+                    "COMPONENT_OBSERVATION",
+                    "COMPONENT_APPLICABILITY",
+                    "COMPONENT_RECONCILIATION",
+                ],
             ),
             ProofNode(
                 id="check.final",
@@ -130,7 +154,18 @@ def test_pack_exposes_the_minimal_invoice_calculation_signature() -> None:
         "required_policy_refs",
         "facets",
     }
-    assert all(set(facet.model_dump()) == {"id", "minimum_proof_terms"} for facet in signature.facets)
+    assert all(
+        set(facet.model_dump())
+        == {"id", "minimum_proof_terms", "semantic_contract", "required_semantic_roles"}
+        for facet in signature.facets
+    )
+    components = next(facet for facet in signature.facets if facet.id == "stated_components")
+    assert components.required_semantic_roles == [
+        "COMPONENT_OBSERVATION",
+        "COMPONENT_APPLICABILITY",
+        "COMPONENT_RECONCILIATION",
+    ]
+    assert "numerical coincidence cannot establish the base" in components.semantic_contract
 
 
 def test_pack_exposes_a_tiny_template_baseline_signature() -> None:
@@ -163,6 +198,50 @@ def test_signature_schema_rejects_business_rule_dsl_fields() -> None:
         ProofSignature.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    "missing_role",
+    [
+        "COMPONENT_OBSERVATION",
+        "COMPONENT_APPLICABILITY",
+        "COMPONENT_RECONCILIATION",
+    ],
+)
+def test_component_amount_presence_cannot_bypass_required_semantic_roles(
+    missing_role: str,
+) -> None:
+    plan = _plan()
+    component = next(node for node in plan.nodes if node.id == "check.components")
+    component.semantic_role_refs.remove(missing_role)
+
+    with pytest.raises(ValueError, match=missing_role):
+        PlanConformanceGate([_signature()]).validate(plan)
+
+
+def test_component_semantic_roles_allow_multiple_atomic_component_checks() -> None:
+    plan = _plan()
+    root = next(node for node in plan.nodes if node.id == "root.calculation")
+    for suffix in ("tax", "discount"):
+        node_id = f"check.components.{suffix}"
+        plan.nodes.append(
+            ProofNode(
+                id=node_id,
+                kind="CHECK",
+                statement=f"The stated {suffix} component is independently verified.",
+                requirement_refs=[REQUIREMENT_ID],
+                policy_refs=[POLICY_REF],
+                facet_refs=["stated_components"],
+                semantic_role_refs=[
+                    "COMPONENT_OBSERVATION",
+                    "COMPONENT_APPLICABILITY",
+                    "COMPONENT_RECONCILIATION",
+                ],
+            )
+        )
+        root.depends_on.append(node_id)
+
+    PlanConformanceGate([_signature()]).validate(ProofPlan.model_validate(plan.model_dump()))
+
+
 def test_signature_hash_is_order_independent_and_tracks_the_empty_set() -> None:
     active = proof_signature_hash_for(["invoice", REQUIREMENT_ID])
 
@@ -185,10 +264,17 @@ def test_requirement_pack_rejects_business_rule_dsl_fields_in_signatures(tmp_pat
     ("mutate", "message"),
     [
         (
-            lambda plan: setattr(
-                next(node for node in plan.nodes if node.id == "check.components"),
-                "facet_refs",
-                [],
+            lambda plan: (
+                setattr(
+                    next(node for node in plan.nodes if node.id == "check.components"),
+                    "facet_refs",
+                    [],
+                ),
+                setattr(
+                    next(node for node in plan.nodes if node.id == "check.components"),
+                    "semantic_role_refs",
+                    [],
+                ),
             ),
             "stated_components",
         ),
@@ -213,7 +299,7 @@ def test_requirement_pack_rejects_business_rule_dsl_fields_in_signatures(tmp_pat
                 "kind",
                 "ANY",
             ),
-            "ALL_REQUIRED",
+            "ALL_REQUIRED|can bypass semantic role",
         ),
         (
             lambda plan: (
@@ -254,6 +340,7 @@ def test_conformance_allows_a_facet_to_expand_into_multiple_checks() -> None:
                 kind="CHECK",
                 statement=f"Line group {suffix} is internally consistent.",
                 requirement_refs=[REQUIREMENT_ID],
+                policy_refs=[POLICY_REF],
                 facet_refs=["line_extensions"],
             )
         )
@@ -267,13 +354,20 @@ def test_conformance_allows_one_check_to_cover_multiple_facets() -> None:
     plan = _plan()
     shared = next(node for node in plan.nodes if node.id == "check.components")
     shared.facet_refs.append("final_total")
-    shared.policy_refs.append(POLICY_REF)
     plan.nodes = [node for node in plan.nodes if node.id != "check.final"]
     root = next(node for node in plan.nodes if node.id == "root.calculation")
     root.depends_on.remove("check.final")
     plan = ProofPlan.model_validate(plan.model_dump())
 
     PlanConformanceGate([_signature()]).validate(plan)
+
+
+def test_conformance_rejects_witness_facet_without_its_required_policy() -> None:
+    plan = _plan()
+    next(node for node in plan.nodes if node.id == "check.subtotal").policy_refs = []
+
+    with pytest.raises(ValueError, match="subtotal_aggregation.*required policy refs"):
+        PlanConformanceGate([_signature()]).validate(plan)
 
 
 def test_conformance_allows_the_compiler_to_add_facets_beyond_the_signature() -> None:

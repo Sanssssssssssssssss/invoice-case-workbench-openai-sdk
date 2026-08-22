@@ -1,7 +1,7 @@
 {
   "schema_version": "2",
   "case_id": "tax_inclusive_arithmetic_supported_0053",
-  "oracle_version": "4",
+  "oracle_version": "5",
   "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::tax_inclusive_arithmetic_supported_0053",
   "facts": [
     {
@@ -215,7 +215,7 @@
       "id": "adjustment_1_rate_factor",
       "origin": "source",
       "kind": "decimal",
-      "value": "0.025",
+      "value": "-0.025",
       "required_in": [
         "evidence",
         "reasoning"

@@ -1,30 +1,30 @@
 {
   "planner": {
-    "stable_prefix_hash": "461c8ff7b074f82bc5d7900df8a07bb5befc5ee4d94a47f7c057c5e2c09fa03f",
-    "tool_catalog_hash": "36fdbee659947bc94ac6eca02ff62cb3931266d63db2ed8fccffea2ca8a67811",
+    "stable_prefix_hash": "f7db637a59f91880e9a0ef3e7a05530dd391bc73234d68890662c09a08dfef48",
+    "tool_catalog_hash": "d5009338145611d7c1315bc2cab4ff079f3ec64290384b438ad12e41cbe2fcce",
     "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
     "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
-    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:planner:supervisor_planner_v2.4_native_tools:461c8ff7b074f82bc5d7900d"
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:planner:supervisor_planner_v2.6_native_tools:f7db637a59f91880e9a0ef3e"
   },
   "materials_advisor": {
-    "stable_prefix_hash": "e03eafdd1c6019d8c879ae4800d3a8ae47b31f246a87783d01b3aa86c7939669",
+    "stable_prefix_hash": "f6b79e6e01cb5e40ad2bb2c34ed46fa0fa0a0af27189430bca3922ea3e46c894",
     "tool_catalog_hash": "282fe52c728d6d59ea379ae6089ea976c0cf8e63590d7f445c65d01842405623",
     "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
     "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
-    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:materials_advisor:materials_advisor_v4.5+global_policy_v1.2+task_skill_v1.2+rag_guidance_context+supervisor_task+optional_quality_split:e03eafdd1c6019d8c879ae48"
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:materials_advisor:materials_advisor_v4.5+global_policy_v1.2+task_skill_v1.2+rag_guidance_context+supervisor_task+optional_quality_split:f6b79e6e01cb5e40ad2bb2c3"
   },
   "case_patch_writer": {
-    "stable_prefix_hash": "70881a198c6332db4baa9da045e311b7b4a576d1b94208266e98fdb9df05314a",
+    "stable_prefix_hash": "ac018da654bfe992578d8443c2d45d1b794fd1fbfc2a5d0646ac47cafe53262d",
     "tool_catalog_hash": "282fe52c728d6d59ea379ae6089ea976c0cf8e63590d7f445c65d01842405623",
     "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
     "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
-    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:case_patch_writer:case_patch_writer_v4.8+global_policy_v1.2:70881a198c6332db4baa9da0"
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:case_patch_writer:case_patch_writer_v4.8+global_policy_v1.2:ac018da654bfe992578d8443"
   },
   "report_writer": {
-    "stable_prefix_hash": "d9f26e3fca324718e24cd901e274a8a3292cc73ee7bbb14ab7294b78f91e398e",
+    "stable_prefix_hash": "1d6055608f367a8b1b00f193c1ad18378c98357c1fbc0d8d8cae64495f670957",
     "tool_catalog_hash": "282fe52c728d6d59ea379ae6089ea976c0cf8e63590d7f445c65d01842405623",
     "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
     "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
-    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:report_writer:report_writer_v7+global_policy_v1.2+canonical_consumer_v1+pdf_skill_v4:d9f26e3fca324718e24cd901"
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:report_writer:report_writer_v7+global_policy_v1.2+canonical_consumer_v1+pdf_skill_v4:1d6055608f367a8b1b00f193"
   }
 }

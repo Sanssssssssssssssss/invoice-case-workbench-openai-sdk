@@ -221,6 +221,90 @@ class EvidenceSandbox:
         finally:
             self._focused_write_check_ids = previous
 
+    def discard_proof_material(
+        self,
+        *,
+        claim_ids: Iterable[str] = (),
+        binding_ids: Iterable[str] = (),
+        witness_ids: Iterable[str] = (),
+    ) -> None:
+        """Discard proof terms already proven unreachable from every submission."""
+
+        discarded_claim_ids = set(claim_ids)
+        discarded_binding_ids = set(binding_ids)
+        discarded_witness_ids = set(witness_ids)
+        retained_bindings = [
+            item for item in self._binding_proposals if item.id not in discarded_binding_ids
+        ]
+        retained_witnesses = [
+            item for item in self._witnesses if item.id not in discarded_witness_ids
+        ]
+
+        referenced_claim_ids = {
+            claim_id for submission in self._submissions for claim_id in submission.claim_ids
+        }
+        referenced_binding_ids = {
+            binding_id for submission in self._submissions for binding_id in submission.binding_ids
+        }
+        referenced_witness_ids = {
+            witness_id for submission in self._submissions for witness_id in submission.witness_ids
+        }
+        for binding in retained_bindings:
+            referenced_claim_ids.update(
+                ref.ref_id for ref in binding.term_refs if ref.kind == "CLAIM"
+            )
+            referenced_witness_ids.update(
+                ref.ref_id for ref in binding.term_refs if ref.kind == "WITNESS"
+            )
+        for witness in retained_witnesses:
+            referenced_claim_ids.update(
+                operand.ref.ref_id
+                for operand in witness.operands
+                if operand.ref.kind == "CLAIM"
+            )
+            referenced_witness_ids.update(
+                operand.ref.ref_id
+                for operand in witness.operands
+                if operand.ref.kind == "WITNESS"
+            )
+        if (
+            discarded_claim_ids.intersection(referenced_claim_ids)
+            or discarded_binding_ids.intersection(referenced_binding_ids)
+            or discarded_witness_ids.intersection(referenced_witness_ids)
+        ):
+            raise ValueError("cannot discard proof material referenced by a retained term or submission")
+
+        self._claims = [item for item in self._claims if item.id not in discarded_claim_ids]
+        self._claim_by_id = {item.id: item for item in self._claims}
+        self._claim_by_fingerprint = {}
+        for claim in self._claims:
+            fingerprint = self._fingerprint_claim(
+                subject=claim.subject,
+                predicate=claim.predicate,
+                value=claim.value,
+                source_id=claim.source_id,
+                quote=claim.quote,
+                locator=claim.locator,
+                attributes=claim.attributes,
+            )
+            self._claim_by_fingerprint.setdefault(fingerprint, claim)
+
+        self._binding_proposals = retained_bindings
+        self._binding_by_id = {item.id: item for item in retained_bindings}
+        self._witnesses = retained_witnesses
+        self._witness_by_id = {item.id: item for item in retained_witnesses}
+        self._resolved_document_currencies = {}
+        for witness in retained_witnesses:
+            for operand in witness.operands:
+                raw_policy = self._policy_values.get(operand.ref.ref_id)
+                if (
+                    operand.ref.kind == "POLICY"
+                    and isinstance(raw_policy, Mapping)
+                    and raw_policy.get("unit") == "document_currency"
+                    and operand.currency
+                ):
+                    self._resolved_document_currencies[operand.ref.ref_id] = operand.currency
+
     def list_sources(self) -> dict[str, Any]:
         sources = [
             {

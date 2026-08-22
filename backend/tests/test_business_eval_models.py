@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.evals.business.models import (
+    EvalResult,
     FrameworkOracle,
+    OutcomeKind,
     RequiredToolOracle,
     load_case,
     load_oracle,
@@ -30,6 +32,15 @@ REFERENCE_CASE = (
     / "invoice_arithmetic_conflict_001"
 )
 ALL_CASES_ROOT = REPO_ROOT / "evals" / "business_v1" / "cases"
+
+
+def test_outcome_kind_separates_business_gap_from_incomplete_execution() -> None:
+    adapter = TypeAdapter(OutcomeKind)
+
+    assert adapter.validate_python("BUSINESS_EVIDENCE_GAP") == "BUSINESS_EVIDENCE_GAP"
+    assert adapter.validate_python("EXECUTION_INCOMPLETE") == "EXECUTION_INCOMPLETE"
+    with pytest.raises(ValidationError):
+        adapter.validate_python("NOT_FOUND")
 
 
 def _copy_case(tmp_path: Path) -> Path:
@@ -97,15 +108,26 @@ def test_business_invoice_oracles_have_strict_three_way_distribution() -> None:
     "case_id",
     ["invoice_subtotal_conflict_0006", "mixed_vat_subtotal_conflict_0044"],
 )
-def test_subtotal_conflicts_preserve_both_downstream_total_paths(case_id: str) -> None:
+def test_subtotal_conflicts_require_independent_final_reconstruction_only(case_id: str) -> None:
     oracle = load_oracle(ALL_CASES_ROOT / case_id)
     milestones = {milestone.id: milestone for milestone in oracle.milestones}
+    fact_ids = {fact.id for fact in oracle.facts}
+    relation_ids = {relation.id for relation in oracle.relations}
 
+    assert oracle.oracle_version == "5"
     assert milestones["subtotal_aggregation"].expected_status == "CONTRADICTED"
-    assert milestones["printed_subtotal_total_reconciliation"].expected_status == "CONTRADICTED"
     assert milestones["line_derived_total_reconciliation"].expected_status == "SUPPORTED"
-    assert milestones["printed_subtotal_total_reconciliation"].facet_ref == "final_total"
     assert milestones["line_derived_total_reconciliation"].facet_ref == "final_total"
+    assert "printed_subtotal_total_reconciliation" not in milestones
+    assert not {
+        "printed_subtotal_path_total",
+        "printed_subtotal_path_difference",
+    } & fact_ids
+    assert not {
+        "printed_subtotal_path_math",
+        "printed_subtotal_path_difference_math",
+        "printed_subtotal_path_difference_exceeds_tolerance",
+    } & relation_ids
 
 
 @pytest.mark.parametrize(
@@ -132,6 +154,42 @@ def test_stated_component_rate_base_boundary_is_explicit(
     )
 
     assert milestone.expected_status == expected_component_status
+
+
+def test_0053_adjustment_rate_preserves_source_sign() -> None:
+    oracle = load_oracle(ALL_CASES_ROOT / "tax_inclusive_arithmetic_supported_0053")
+    rate = next(fact for fact in oracle.facts if fact.id == "adjustment_1_rate_factor")
+
+    assert oracle.oracle_version == "5"
+    assert rate.value == "-0.025"
+    version_five = {
+        "invoice_subtotal_conflict_0006",
+        "mixed_vat_subtotal_conflict_0044",
+        "tax_inclusive_arithmetic_supported_0053",
+    }
+    assert {
+        path.name: load_oracle(path).oracle_version
+        for path in ALL_CASES_ROOT.iterdir()
+        if path.is_dir()
+    } == {
+        path.name: "5" if path.name in version_five else "4"
+        for path in ALL_CASES_ROOT.iterdir()
+        if path.is_dir()
+    }
+
+
+def test_legacy_eval_result_defaults_unknown_oracle_version() -> None:
+    result = EvalResult(
+        case_id="legacy",
+        case_version="1",
+        run_id="run_legacy",
+        scorer_version="legacy_scorer",
+        passed=True,
+        score=100,
+        checks=[],
+    )
+
+    assert result.oracle_version == ""
 
 
 def test_case_and_oracle_ids_must_match(tmp_path: Path) -> None:

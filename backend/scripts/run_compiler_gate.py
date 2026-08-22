@@ -38,7 +38,7 @@ def main() -> int:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=("connect", "plan", "execute", "hooks", "verify", "e2e"),
+        choices=("connect", "plan", "hooks", "verify", "e2e"),
     )
     parser.add_argument("--case-id", default="")
     parser.add_argument(
@@ -106,40 +106,6 @@ def main() -> int:
                 extraction_summary=[],
             )
             output = {"plan": plan.model_dump(mode="json")}
-        elif args.stage == "execute":
-            plan = runtime.compile_task(
-                active_requirement_ids=active_ids,
-                policy_excerpt=policy,
-                source_catalog=[
-                    {
-                        "source_id": item.record.source_id,
-                        "title": item.record.title,
-                        "kind": item.record.kind,
-                        "characters": len(item.record.content),
-                    }
-                    for item in prepared
-                ],
-            )
-            summary, sandbox = runtime.execute_plan(
-                plan=plan,
-                prepared_sources=prepared,
-                policy_excerpt=policy,
-            )
-            check_ids = {node.id for node in plan.nodes if node.kind == "CHECK"}
-            submitted_ids = {item.check_id for item in sandbox.submissions}
-            if submitted_ids != check_ids:
-                raise RuntimeError(
-                    f"Executor did not submit every CHECK: missing={sorted(check_ids - submitted_ids)}"
-                )
-            if not sandbox.read_source_ids or not sandbox.evidence_ir.claims:
-                raise RuntimeError("Executor did not read a source and bind at least one grounded Claim")
-            output = {
-                "plan": plan.model_dump(mode="json"),
-                "executor_summary": summary.model_dump(mode="json"),
-                "evidence_ir": sandbox.evidence_ir.model_dump(mode="json"),
-                "read_source_ids": list(sandbox.read_source_ids),
-                "submitted_check_ids": sorted(submitted_ids),
-            }
         else:
             result = runtime.run(
                 active_requirement_ids=active_ids,

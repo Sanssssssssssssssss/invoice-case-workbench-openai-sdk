@@ -12,6 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 NodeKind = Literal["CHECK", "ALL", "ANY"]
 AssessmentStatus = Literal["SUPPORTED", "CONTRADICTED", "NOT_FOUND"]
 ExecutionStatus = Literal["COMPLETED", "PARTIAL", "FAILED"]
+SemanticRole = Literal[
+    "COMPONENT_OBSERVATION",
+    "COMPONENT_APPLICABILITY",
+    "COMPONENT_RECONCILIATION",
+]
 BusinessGapCode = Literal[
     "SOURCE_MISSING",
     "SOURCE_AMBIGUOUS",
@@ -49,16 +54,25 @@ class ProofNode(_CompilerModel):
     kind: NodeKind
     statement: str = ""
     depends_on: list[str] = Field(default_factory=list)
+    upstream_check_ids: list[str] = Field(default_factory=list)
     requirement_refs: list[str] = Field(default_factory=list)
     policy_refs: list[str] = Field(default_factory=list)
     facet_refs: list[str] = Field(default_factory=list)
+    semantic_role_refs: list[SemanticRole] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
     def validate_id(cls, value: str) -> str:
         return _require_text(value, field_name="node id")
 
-    @field_validator("depends_on", "requirement_refs", "policy_refs", "facet_refs")
+    @field_validator(
+        "depends_on",
+        "upstream_check_ids",
+        "requirement_refs",
+        "policy_refs",
+        "facet_refs",
+        "semantic_role_refs",
+    )
     @classmethod
     def validate_references(cls, value: list[str], info: Any) -> list[str]:
         return _unique_strings(value, field_name=info.field_name)
@@ -70,16 +84,18 @@ class ProofNode(_CompilerModel):
             if not self.statement:
                 raise ValueError(f"CHECK node {self.id!r} requires a statement")
             if self.depends_on:
-                raise ValueError(f"CHECK node {self.id!r} cannot have dependencies")
+                raise ValueError(f"CHECK node {self.id!r} cannot have status dependencies")
             if not self.requirement_refs:
                 raise ValueError(f"CHECK node {self.id!r} requires at least one requirement ref")
             return self
 
         if self.statement:
             raise ValueError(f"{self.kind} node {self.id!r} cannot contain a check statement")
-        if self.requirement_refs or self.policy_refs or self.facet_refs:
+        if self.upstream_check_ids:
+            raise ValueError(f"{self.kind} node {self.id!r} cannot consume upstream CHECK outputs")
+        if self.requirement_refs or self.policy_refs or self.facet_refs or self.semantic_role_refs:
             raise ValueError(
-                f"{self.kind} node {self.id!r} cannot contain requirement, policy, or facet refs"
+                f"{self.kind} node {self.id!r} cannot contain requirement, policy, facet, or semantic role refs"
             )
         if not self.depends_on:
             raise ValueError(f"{self.kind} node {self.id!r} requires at least one dependency")
@@ -133,8 +149,39 @@ class ProofPlan(_CompilerModel):
         unknown_dependencies = sorted({item for node in self.nodes for item in node.depends_on if item not in nodes})
         if unknown_dependencies:
             raise ValueError(f"ProofPlan contains unknown dependencies: {unknown_dependencies}")
+        unknown_upstream_checks = sorted(
+            {
+                upstream_id
+                for node in self.nodes
+                for upstream_id in node.upstream_check_ids
+                if upstream_id not in nodes
+            }
+        )
+        if unknown_upstream_checks:
+            raise ValueError(
+                f"ProofPlan references unknown upstream CHECKs: {unknown_upstream_checks}"
+            )
+        invalid_upstream_checks = sorted(
+            (node.id, upstream_id)
+            for node in self.nodes
+            if node.kind == "CHECK"
+            for upstream_id in node.upstream_check_ids
+            if nodes[upstream_id].kind != "CHECK"
+        )
+        if invalid_upstream_checks:
+            raise ValueError(
+                "upstream_check_ids must reference CHECK nodes: "
+                f"{invalid_upstream_checks}"
+            )
         try:
-            tuple(TopologicalSorter({node.id: set(node.depends_on) for node in self.nodes}).static_order())
+            tuple(
+                TopologicalSorter(
+                    {
+                        node.id: set(node.depends_on) | set(node.upstream_check_ids)
+                        for node in self.nodes
+                    }
+                ).static_order()
+            )
         except CycleError as exc:
             raise ValueError("ProofPlan must be acyclic") from exc
 
@@ -205,9 +252,11 @@ class ProofPlan(_CompilerModel):
         payload["nodes"] = sorted(payload["nodes"], key=lambda item: item["id"])
         for node in payload["nodes"]:
             node["depends_on"] = sorted(node["depends_on"])
+            node["upstream_check_ids"] = sorted(node["upstream_check_ids"])
             node["requirement_refs"] = sorted(node["requirement_refs"])
             node["policy_refs"] = sorted(node["policy_refs"])
             node["facet_refs"] = sorted(node["facet_refs"])
+            node["semantic_role_refs"] = sorted(node["semantic_role_refs"])
         return _stable_hash(payload)
 
 

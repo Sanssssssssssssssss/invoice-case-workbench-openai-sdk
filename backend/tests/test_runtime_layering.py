@@ -265,6 +265,50 @@ def test_policy_gate_accepts_catalog_requirement_id_without_routing_it(tmp_path)
     assert decision.input["active_requirement_ids"] == ["invoice", "invoice_calculation_valid"]
 
 
+def test_policy_gate_keeps_arithmetic_only_scope_narrow(tmp_path) -> None:
+    store, context, _harness, state = _state(tmp_path)
+    decision = SupervisorDecision(
+        action="delegate_agent",
+        target="evidence_reviewer",
+        input={"mode": "review", "active_requirement_ids": ["invoice_calculation_valid"]},
+        reason="review",
+    )
+    check = PolicyGate(store=store, context=context).check(
+        request=AgentTurnRequest(case_id=state.case_id, message="review invoice arithmetic"),
+        state=state,
+        decision=decision,
+        planner_context={
+            "attachments": [],
+            "requirement_catalog": {
+                "profiles": {
+                    "invoice_only": [
+                        "invoice",
+                        "invoice_number",
+                        "invoice_calculation_valid",
+                        "template_match",
+                    ]
+                }
+            },
+        },
+    )
+
+    assert check.allowed
+    assert decision.input["active_requirement_ids"] == ["invoice_calculation_valid"]
+
+
+def test_evidence_reviewer_tool_contract_requires_exact_arithmetic_scope() -> None:
+    description, input_model = {
+        name: (tool_description, model)
+        for name, tool_description, model in sorted_specialist_tool_specs()
+    }["evidence_reviewer"]
+    scope_description = input_model.model_json_schema()["properties"]["active_requirement_ids"]["description"]
+
+    for contract in (description, scope_description):
+        assert 'MUST contain EXACTLY ["invoice_calculation_valid"]' in contract
+        assert "report" in contract.lower()
+        assert "Runtime expands declared premises" in contract
+
+
 def test_policy_gate_rejects_invoice_scope_without_mandatory_calculation(tmp_path) -> None:
     store, context, _harness, state = _state(tmp_path)
     check = PolicyGate(store=store, context=context).check(

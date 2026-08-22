@@ -19,7 +19,7 @@ class EvidenceReviewerInput(_SupervisorToolInput):
     mode: Literal["review"] = Field(default="review", description="Run the Evidence Compiler review loop.")
     active_requirement_ids: list[RequirementId] = Field(
         default_factory=list,
-        description="Actual Requirement ids selected from profile value lists; profile map keys are grouping labels and are invalid here. Invoice review always includes invoice_calculation_valid. Omit when the case already defines its scope.",
+        description="Smallest sufficient subset of actual Requirement ids for the explicit goal, selected from profile value lists. Profiles are candidate bundles, not atomic scopes; profile map keys are invalid here. For a goal limited to line-item arithmetic, subtotal, stated tax/discount/components, and final amount reconciliation, this list MUST contain EXACTLY [\"invoice_calculation_valid\"]; report generation adds no scope, and Runtime expands declared premises. Other invoice reviews always include invoice_calculation_valid, but that rule does not activate the rest of an invoice profile. Omit only when the current request accepts the case's existing scope; pass ids when it narrows or replaces that scope.",
     )
 
 
@@ -38,7 +38,7 @@ class WriteCasePatchInput(_SupervisorToolInput):
 CAPABILITY_CARDS = {
     "specialists": {
         "materials_advisor": "Generate material-gap tasks, explain rules/templates, and answer what to submit next. It may use RAG guidance internally.",
-        "evidence_reviewer": "Compile active requirements into a ProofPlan, inspect evidence in a read-only tool sandbox, and verify every atomic check. Pass exact active_requirement_ids for a new scope; mode is always review.",
+        "evidence_reviewer": "Compile active requirements into a ProofPlan, inspect evidence in a read-only tool sandbox, and verify every atomic check. Pass the smallest sufficient active_requirement_ids subset for a new, narrowed, or replaced scope; profile lists are candidate bundles, not atomic scopes. For a goal limited to line-item arithmetic, subtotal, stated tax/discount/components, and final amount reconciliation, active_requirement_ids MUST contain EXACTLY [\"invoice_calculation_valid\"]; a requested report adds no scope, and Runtime expands declared premises. Mode is always review.",
         "case_patch_writer": "Convert reviewer/advisor structured results into a CasePatch. It does not re-review evidence.",
         "report_writer": "Draft Chinese Markdown from the canonical consumer packet and the user's request. It does not write files.",
     },

@@ -43,4 +43,5 @@ class CaseManagerAgentFactory:
         return model_extra_body_for_thinking(
             self.settings.llm_model,
             manager_tool_loop_thinking_type(self.settings.llm_model, self.settings.llm_thinking_type),
+            self.settings.llm_base_url,
         )

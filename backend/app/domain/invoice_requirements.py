@@ -20,9 +20,15 @@ _SIGNATURE_FIELDS = {
     "required_policy_refs",
     "facets",
 }
-_FACET_FIELDS = {"id", "minimum_proof_terms"}
+_FACET_REQUIRED_FIELDS = {"id", "minimum_proof_terms"}
+_FACET_FIELDS = _FACET_REQUIRED_FIELDS | {"semantic_contract", "required_semantic_roles"}
 _ROOT_COMPOSITIONS = {"ALL_REQUIRED", "ANY_SUFFICIENT"}
 _PROOF_TERMS = {"CLAIM", "BINDING", "WITNESS"}
+_SEMANTIC_ROLES = {
+    "COMPONENT_OBSERVATION",
+    "COMPONENT_APPLICABILITY",
+    "COMPONENT_RECONCILIATION",
+}
 
 
 def load_requirement_pack(path: Path = POLICY_PATH) -> dict[str, Any]:
@@ -94,16 +100,26 @@ def load_requirement_pack(path: Path = POLICY_PATH) -> dict[str, Any]:
             raise ValueError(f"Invalid proof signature facets: {signature_id}")
         facet_ids: list[str] = []
         for facet in facets:
-            if not isinstance(facet, dict) or set(facet) != _FACET_FIELDS:
+            if (
+                not isinstance(facet, dict)
+                or not _FACET_REQUIRED_FIELDS.issubset(facet)
+                or set(facet) - _FACET_FIELDS
+            ):
                 raise ValueError(f"Invalid proof signature facet fields: {signature_id}")
             facet_id = str(facet.get("id") or "").strip()
             terms = facet.get("minimum_proof_terms")
+            semantic_contract = str(facet.get("semantic_contract") or "").strip()
+            semantic_roles = facet.get("required_semantic_roles") or []
             if (
                 not facet_id
                 or not isinstance(terms, list)
                 or not terms
                 or any(str(term) not in _PROOF_TERMS for term in terms)
                 or len({str(term) for term in terms}) != len(terms)
+                or not isinstance(semantic_roles, list)
+                or any(str(role) not in _SEMANTIC_ROLES for role in semantic_roles)
+                or len({str(role) for role in semantic_roles}) != len(semantic_roles)
+                or (semantic_roles and not semantic_contract)
             ):
                 raise ValueError(f"Invalid proof signature facet: {signature_id}")
             facet_ids.append(facet_id)

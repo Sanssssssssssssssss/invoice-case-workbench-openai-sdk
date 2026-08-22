@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,18 +11,21 @@ from math import ceil
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from app.state.persistence import atomic_write_text
+
 from .models import EvalResult, EvalSnapshot, load_case, validate_case_input
 from .runner import (
     DEFAULT_CASES_ROOT,
-    REPO_ROOT,
+    DEFAULT_EVAL_ARTIFACT_ROOT,
     BusinessEvalPaths,
     RuntimeFactory,
     run_business_eval,
+    score_revision_id,
     score_snapshot,
 )
 
 
-DEFAULT_BENCHMARK_ROOT = REPO_ROOT / "output" / "business_benchmarks"
+DEFAULT_BENCHMARK_ROOT = DEFAULT_EVAL_ARTIFACT_ROOT / "benchmarks"
 STAGE_ORDER = ("understanding", "evidence", "reasoning", "proof", "report", "communication")
 STAGE_LABELS = {
     "understanding": "任务理解",
@@ -133,6 +138,7 @@ def rescore_business_benchmark(
     snapshot_paths = sorted(snapshot_root.rglob("snapshot.json")) if snapshot_root.is_dir() else []
     if not snapshot_paths:
         raise ValueError(f"no snapshot.json found under {snapshot_root}")
+    run_dir = _new_run_dir(output_dir)
     case_dirs: dict[str, Path] = {}
     case_runs: list[BusinessEvalPaths] = []
     for snapshot_path in snapshot_paths:
@@ -141,8 +147,6 @@ def rescore_business_benchmark(
         validate_case_input(case_dir)
         case_dirs[snapshot.case_id] = case_dir
         case_runs.append(score_snapshot(snapshot_path, case_dir=case_dir))
-    run_dir = output_dir.resolve() if output_dir else snapshot_root
-    run_dir.mkdir(parents=True, exist_ok=True)
     return write_business_benchmark(run_dir, case_runs, case_dirs=case_dirs)
 
 
@@ -152,15 +156,17 @@ def write_business_benchmark(
     *,
     case_dirs: Mapping[str, Path],
 ) -> BusinessBenchmarkPaths:
-    runs = tuple(case_runs)
-    summary = summarize_business_results(runs, case_dirs=case_dirs, run_dir=run_dir)
     summary_path = run_dir / "benchmark.json"
     report_path = run_dir / "benchmark_report.md"
-    summary_path.write_text(
+    if summary_path.exists() or report_path.exists():
+        raise FileExistsError(f"benchmark artifacts already exist: {run_dir}")
+    runs = tuple(case_runs)
+    summary = summarize_business_results(runs, case_dirs=case_dirs, run_dir=run_dir)
+    atomic_write_text(
+        summary_path,
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
     )
-    report_path.write_text(render_business_benchmark(summary), encoding="utf-8")
+    atomic_write_text(report_path, render_business_benchmark(summary))
     return BusinessBenchmarkPaths(run_dir, summary_path, report_path, runs)
 
 
@@ -180,6 +186,7 @@ def summarize_business_results(
     first_failure_counts: Counter[str] = Counter()
     repair_groups: dict[tuple[str, str, str, bool], dict[str, Any]] = {}
     scorer_versions: set[str] = set()
+    oracle_versions: set[str] = set()
     outcome_counts = {
         "target_truth": 0,
         "report": 0,
@@ -189,17 +196,30 @@ def summarize_business_results(
     framework_scores: list[Decimal] = []
     framework_enabled_runs = 0
     framework_passed_runs = 0
+    seen_runs: set[tuple[str, str]] = set()
 
     for paths in case_runs:
         snapshot = EvalSnapshot.model_validate_json(paths.snapshot.read_text(encoding="utf-8"))
         result = EvalResult.model_validate_json(paths.score.read_text(encoding="utf-8"))
         if (snapshot.case_id, snapshot.run_id) != (result.case_id, result.run_id):
             raise ValueError(f"snapshot and score identity mismatch: {paths.run_dir}")
+        run_identity = (snapshot.case_id, snapshot.run_id)
+        if run_identity in seen_runs:
+            raise ValueError(f"duplicate business eval run: {run_identity}")
+        seen_runs.add(run_identity)
         case_dir = case_dirs.get(result.case_id)
         if case_dir is None:
             raise ValueError(f"missing case directory for {result.case_id}")
         case = load_case(case_dir)
+        revision = _validated_revision(
+            paths,
+            snapshot=snapshot,
+            result=result,
+            case_dir=case_dir,
+            benchmark_root=run_dir,
+        )
         scorer_versions.add(result.scorer_version)
+        oracle_versions.add(result.oracle_version)
         failed = [item for item in result.checks if not item.passed]
         failed_core = [item for item in failed if item.core]
         failed_framework = [item for item in result.framework_checks if not item.passed]
@@ -283,6 +303,7 @@ def summarize_business_results(
                 "title": case.title,
                 "suite": case.suite,
                 "run_id": result.run_id,
+                "oracle_version": result.oracle_version,
                 "passed": result.passed,
                 "business_passed": result.business_passed,
                 "score": float(result.score),
@@ -297,6 +318,7 @@ def summarize_business_results(
                 "stages": per_stage,
                 "engineering": result.engineering,
                 "efficiency": efficiency,
+                **revision,
                 "snapshot_path": _display_path(run_dir, paths.snapshot),
                 "score_path": _display_path(run_dir, paths.score),
                 "eval_report_path": _display_path(run_dir, paths.report),
@@ -360,6 +382,7 @@ def summarize_business_results(
         "engineering_totals": engineering,
         **efficiency_summary,
         "scorer_versions": sorted(scorer_versions),
+        "oracle_versions": sorted(oracle_versions),
         "repair_queue_source_suites": sorted(DEV_SUITES),
         "repair_queue": _sorted_repair_queue(repair_groups),
         "case_runs": rows,
@@ -494,7 +517,8 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
     )
     for role, values in summary["engineering_by_role"].items():
         lines.append(
-            f"| {_escape(role)} | {values['provider_calls']} | {values['model_role_calls']} | "
+            f"| {_escape(role)} | {_metric_text(values['provider_calls'])} | "
+            f"{values['model_role_calls']} | "
             f"{_metric_text(values['input_tokens'])} | {_metric_text(values['output_tokens'])} | "
             f"{_metric_text(values['reasoning_tokens'])} | {_metric_text(values['cached_tokens'])} | "
             f"{_metric_text(values['total_tokens'])} | "
@@ -504,8 +528,9 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
     lines.extend(["", "## 单案例记录", ""])
     for row in summary["case_runs"]:
         lines.append(
-            f"- `{row['case_id']}`：score=`{row['score_path']}`；报告=`{row['eval_report_path']}`；"
-            f"snapshot=`{row['snapshot_path']}`"
+            f"- `{row['case_id']}`：revision=`{row['revision_id']}`；"
+            f"manifest=`{row['revision_manifest_path']}`；score=`{row['score_path']}`；"
+            f"报告=`{row['eval_report_path']}`；snapshot=`{row['snapshot_path']}`"
         )
     return "\n".join(lines).rstrip() + "\n"
 
@@ -675,17 +700,22 @@ def _role_metrics(provider_rows: list[Mapping[str, Any]], model_rows: list[Mappi
                 item[target].append(value)
     result = {}
     for role, item in sorted(grouped.items()):
+        # A logical/model row does not prove that provider telemetry for the
+        # same role was observed.  Preserve that gap as unknown, even when
+        # other roles in this run do have provider events.
+        provider_calls = item["provider_calls"] or None
         tokens = {
             key: (
                 item[key]
-                if item["provider_calls"] > 0
-                and item["_coverage"][key] == item["provider_calls"]
+                if provider_calls is not None
+                and provider_calls > 0
+                and item["_coverage"][key] == provider_calls
                 else None
             )
             for _, key in token_pairs
         }
         result[role] = {
-            "provider_calls": item["provider_calls"],
+            "provider_calls": provider_calls,
             "model_role_calls": item["model_role_calls"],
             **tokens,
             "latency_p50_ms": _pctl(item["_latency"], 0.50),
@@ -693,7 +723,7 @@ def _role_metrics(provider_rows: list[Mapping[str, Any]], model_rows: list[Mappi
             "ttft_p50_ms": _pctl(item["_ttft"], 0.50),
             "ttft_p95_ms": _pctl(item["_ttft"], 0.95),
             "coverage": {
-                key: _coverage(item["_coverage"][key], item["provider_calls"])
+                key: _coverage(item["_coverage"][key], provider_calls)
                 for _, key in token_pairs
             }
             | {
@@ -760,20 +790,25 @@ def _aggregate_roles(rows: list[dict[str, Any]]) -> dict[str, Any]:
             item = grouped.setdefault(
                 role,
                 {
-                    "provider_calls": 0,
+                    "provider_calls": [],
                     "model_role_calls": 0,
                     **{key: [] for key in token_keys},
                 },
             )
             item.setdefault("_latency", []).extend(values["_latency_samples_ms"])
             item.setdefault("_ttft", []).extend(values["_ttft_samples_ms"])
-            for key in ("provider_calls", "model_role_calls"):
-                item[key] += values[key]
+            item["provider_calls"].append(values["provider_calls"])
+            item["model_role_calls"] += values["model_role_calls"]
             for key in token_keys:
                 item[key].append(values[key])
     return {
         role: {
-            "provider_calls": values["provider_calls"],
+            "provider_calls": (
+                sum(values["provider_calls"])
+                if values["provider_calls"]
+                and all(item is not None for item in values["provider_calls"])
+                else None
+            ),
             "model_role_calls": values["model_role_calls"],
             **{
                 key: sum(values[key]) if all(item is not None for item in values[key]) else None
@@ -801,7 +836,7 @@ def _dist(values: list[float | int], total: int, unit: str) -> dict[str, Any]:
     }
 
 
-def _coverage(observed: int, total: int) -> dict[str, int]:
+def _coverage(observed: int, total: int | None) -> dict[str, int | None]:
     return {"observed": observed, "total": total}
 
 
@@ -902,6 +937,127 @@ def _display_path(root: Path, path: Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return str(path.resolve())
+
+
+def _validated_revision(
+    paths: BusinessEvalPaths,
+    *,
+    snapshot: EvalSnapshot,
+    result: EvalResult,
+    case_dir: Path,
+    benchmark_root: Path,
+) -> dict[str, str]:
+    """Validate and pin the exact immutable scoring revision used by a row."""
+
+    revision_path = getattr(paths, "revision", None)
+    if not isinstance(revision_path, Path) or not revision_path.is_file():
+        raise ValueError(f"scored run is missing revision.json: {paths.run_dir}")
+    try:
+        raw = json.loads(revision_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid scoring revision manifest: {revision_path}") from exc
+    manifest = _required_mapping(raw, "revision")
+    revision_id = _required_text(manifest, "revision_id", "revision")
+    if not re.fullmatch(r"score_[0-9a-f]{20}", revision_id):
+        raise ValueError("revision_id must be a content-addressed score revision")
+    if score_revision_id(manifest) != revision_id:
+        raise ValueError("revision_id does not match scoring inputs")
+    if revision_path.parent.name != revision_id:
+        raise ValueError("revision_id does not match revision directory")
+
+    execution = _required_mapping(manifest.get("execution"), "revision.execution")
+    if _required_text(execution, "run_id", "revision.execution") != snapshot.run_id:
+        raise ValueError("revision run_id does not match snapshot")
+    snapshot_sha256 = _sha256_file(paths.snapshot)
+    if _required_text(execution, "snapshot_sha256", "revision.execution") != snapshot_sha256:
+        raise ValueError("revision snapshot_sha256 mismatch")
+    run_manifest_sha256 = str(execution.get("run_manifest_sha256") or "")
+    if run_manifest_sha256:
+        run_manifest_path = paths.snapshot.parent / "run_manifest.json"
+        if run_manifest_sha256 != _sha256_file(run_manifest_path):
+            raise ValueError("revision run_manifest_sha256 mismatch")
+
+    inputs = _required_mapping(manifest.get("inputs"), "revision.inputs")
+    for name, path in (("case_sha256", case_dir / "case.json"), ("oracle_sha256", case_dir / "oracle.json")):
+        if _required_text(inputs, name, "revision.inputs") != _sha256_file(path):
+            raise ValueError(f"revision {name} mismatch")
+
+    scoring = _required_mapping(manifest.get("scoring"), "revision.scoring")
+    if _required_text(scoring, "scorer_version", "revision.scoring") != result.scorer_version:
+        raise ValueError("revision scorer version does not match score")
+    if str(scoring.get("oracle_version") or "") != result.oracle_version:
+        raise ValueError("revision oracle version does not match score")
+    code = _required_mapping(scoring.get("code"), "revision.scoring.code")
+    if not re.fullmatch(
+        r"[0-9a-f]{64}",
+        _required_text(code, "fingerprint", "revision.scoring.code"),
+    ):
+        raise ValueError("revision scoring code fingerprint must be sha256")
+
+    artifacts = _required_mapping(manifest.get("artifacts"), "revision.artifacts")
+    artifact_hashes: dict[str, str] = {}
+    for name, expected_path in (("score", paths.score), ("report", paths.report)):
+        artifact = _required_mapping(artifacts.get(name), f"revision.artifacts.{name}")
+        recorded_path = _required_text(artifact, "path", f"revision.artifacts.{name}")
+        resolved_path = _resolve_revision_artifact(revision_path, recorded_path)
+        if not _is_within(resolved_path, revision_path.parent):
+            raise ValueError(f"revision {name} path must stay within revision directory")
+        if resolved_path != expected_path.resolve():
+            raise ValueError(f"revision {name} path does not match scored run")
+        digest = _sha256_file(expected_path)
+        if _required_text(artifact, "sha256", f"revision.artifacts.{name}") != digest:
+            raise ValueError(f"revision {name} sha256 mismatch")
+        artifact_hashes[name] = digest
+
+    if (snapshot.case_id, snapshot.case_version, snapshot.run_id) != (
+        result.case_id,
+        result.case_version,
+        result.run_id,
+    ):
+        raise ValueError("revision snapshot and score identity mismatch")
+    return {
+        "revision_id": revision_id,
+        "revision_manifest_path": _display_path(benchmark_root, revision_path),
+        "revision_manifest_sha256": _sha256_file(revision_path),
+        "run_manifest_sha256": run_manifest_sha256,
+        "snapshot_sha256": snapshot_sha256,
+        "score_sha256": artifact_hashes["score"],
+        "report_sha256": artifact_hashes["report"],
+    }
+
+
+def _required_mapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    return value
+
+
+def _required_text(value: Mapping[str, Any], key: str, label: str) -> str:
+    text = str(value.get(key) or "").strip()
+    if not text:
+        raise ValueError(f"{label}.{key} must not be empty")
+    return text
+
+
+def _sha256_file(path: Path) -> str:
+    if not path.is_file():
+        raise ValueError(f"revision artifact does not exist: {path}")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _resolve_revision_artifact(revision_path: Path, recorded_path: str) -> Path:
+    candidate = Path(recorded_path)
+    if not candidate.is_absolute():
+        candidate = revision_path.parent / candidate
+    return candidate.resolve()
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _reject_duplicate_ids(case_ids: Iterable[str]) -> None:

@@ -66,7 +66,7 @@ from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
 
 ROLE_TARGETS = {"materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"}
-MANAGER_PROMPT_VERSION = "supervisor_planner_v2.4_native_tools"
+MANAGER_PROMPT_VERSION = "supervisor_planner_v2.6_native_tools"
 _SAFE_FINAL_ANSWER_STOP = (
     "本轮最终回复未通过安全校验，因此未提供业务结论。请查看当前案件状态和运行记录。"
 )
@@ -1736,6 +1736,7 @@ class TurnRunner:
         )
         prepared_sources = prepare_sources(source_inputs)
         extraction_summary = _compiler_extraction_summary(admitted_attachments)
+        task_objective = state.user_message_for_planner or request.message
         source_admission = {
             "attachment_count": len(attachment_items),
             "admitted_attachment_count": len(admitted_attachments),
@@ -1755,6 +1756,7 @@ class TurnRunner:
                 caused_by_event_id=state.last_action_event_id,
             )
         role_input = {
+            "task_objective": task_objective,
             "active_requirement_ids": selected,
             "source_catalog": [
                 {
@@ -1783,12 +1785,19 @@ class TurnRunner:
             budget=context_budget(state),
             raw_leak_checks=["expected_golden_labels"],
             compact_triggered=state.session_compacted,
-            metadata={"role_capability": capability},
+            metadata={
+                "role_capability": capability,
+                "task_objective": task_objective,
+            },
         )
         with self.observability.span(
             "agent.evidence_compiler_runtime",
             input=safe_role_input(role, role_input),
-            metadata={"role_capability": capability, "step_count": state.step_count},
+            metadata={
+                "role_capability": capability,
+                "step_count": state.step_count,
+                "task_objective": task_objective,
+            },
             as_type="agent",
         ) as span:
             try:
@@ -1799,6 +1808,7 @@ class TurnRunner:
                     progress_sink=self._compiler_progress_sink(state),
                 )
                 compiled = runtime.run(
+                    task_objective=task_objective,
                     active_requirement_ids=selected,
                     prepared_sources=prepared_sources,
                     extraction_summary=extraction_summary,

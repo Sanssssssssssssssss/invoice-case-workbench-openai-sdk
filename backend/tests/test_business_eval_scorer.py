@@ -3,6 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.compiler_runtime.kernel import compile_review_artifact
 from app.compiler_runtime.models import (
     Claim,
@@ -35,7 +37,8 @@ from app.evals.business.report import render_eval_report
 from app.evals.business.scorer import (
     STAGE_WEIGHTS,
     _RAW_PDF_APPENDIX_HEADING,
-    _aggregate_milestone_status,
+    _aggregate_milestone_outcome,
+    _boundary_output_assertions,
     _canonical_projection_violations,
     _claim_matches_source_fact,
     _equation_witnesses,
@@ -46,7 +49,11 @@ from app.evals.business.scorer import (
     _match_typed_relation_witnesses,
     _predicate_matches_options,
     _refine_shared_facet_matches,
+    _relational_statement_matches,
+    _check_outcome,
+    _target_outcome,
     _text_has_decimal,
+    _typed_witness_matches_relation,
     score_business_eval,
 )
 
@@ -151,6 +158,11 @@ def _snapshot() -> EvalSnapshot:
                 "requirement_refs": ["invoice_calculation_valid"],
                 "policy_refs": ["invoice_calculation_rounding_tolerance"],
                 "facet_refs": ["stated_components"],
+                "semantic_role_refs": [
+                    "COMPONENT_OBSERVATION",
+                    "COMPONENT_APPLICABILITY",
+                    "COMPONENT_RECONCILIATION",
+                ],
             },
             {
                 "id": "component_vat_rate_base",
@@ -158,8 +170,13 @@ def _snapshot() -> EvalSnapshot:
                 "statement": "Validate the VAT tax rate times its taxable calculation base.",
                 "depends_on": [],
                 "requirement_refs": ["invoice_calculation_valid"],
-                "policy_refs": [],
+                "policy_refs": ["invoice_calculation_rounding_tolerance"],
                 "facet_refs": ["stated_components"],
+                "semantic_role_refs": [
+                    "COMPONENT_OBSERVATION",
+                    "COMPONENT_APPLICABILITY",
+                    "COMPONENT_RECONCILIATION",
+                ],
             },
             {
                 "id": "final_total_reconciliation",
@@ -232,6 +249,8 @@ def _snapshot() -> EvalSnapshot:
             "examined_source_ids": ["source_1"],
             "status": "NOT_FOUND",
             "reason": "The VAT tax rate and taxable base are not shown, so rate times base cannot be verified.",
+            "missing_fact": "The source does not state the VAT rate or taxable base.",
+            "gap_code": "SOURCE_MISSING",
         },
         {
             "check_id": "final_total_reconciliation",
@@ -696,7 +715,10 @@ def _refresh_proof_hashes(snapshot: EvalSnapshot) -> None:
     snapshot.case_state["review_artifact"] = artifact_model.model_dump(mode="json")
     snapshot.case_state["compiled_proof"] = compile_review_artifact(
         artifact_model,
-        requirement_requiredness={"invoice_calculation_valid": True},
+        requirement_requiredness={
+            item["id"]: bool(item.get("required", True))
+            for item in snapshot.case_state["requirements"]
+        },
     ).model_dump(mode="json")
 
 
@@ -967,6 +989,7 @@ def _not_found_output_fixture() -> tuple[BusinessEvalOracle, EvalSnapshot]:
     )
     final["status"] = "SUPPORTED"
     final["reason"] = "The typed final-total arithmetic was locally evaluated."
+    final["strong_status_links"][0]["true_status"] = "SUPPORTED"
     _refresh_proof_hashes(snapshot)
     snapshot.case_state["requirements"][0]["status"] = "weak"
     report = (
@@ -1016,6 +1039,7 @@ def test_good_snapshot_scores_100_and_report_is_small_chinese_replay() -> None:
         [item.code for item in result.vetoes],
     )
     assert result.score == Decimal("100")
+    assert result.oracle_version == oracle.oracle_version
     assert result.framework_enabled is False
     assert result.framework_score == Decimal("100")
     assert result.framework_passed is True
@@ -1027,12 +1051,254 @@ def test_good_snapshot_scores_100_and_report_is_small_chinese_replay() -> None:
     } == STAGE_WEIGHTS
     assert "完整可见对话" in report
     assert "100/100" in report
+    assert f"Oracle：`{oracle.oracle_version}`" in report
     assert case.user_message in report
     assert "审核发现总额错误" in report
     assert "hidden" not in report.casefold()
     assert len(report) < 10_000
     assert "trace" not in result.engineering
     assert len(result.model_dump_json()) < 30_000
+
+
+def test_v30_missing_submissions_cannot_score_as_business_not_found() -> None:
+    oracle, snapshot = _not_found_output_fixture()
+    artifact = snapshot.case_state["review_artifact"]
+    artifact["assessments"] = []
+    artifact["submitted_claim_refs"] = {}
+    artifact["submitted_binding_refs"] = {}
+    artifact["submitted_witness_refs"] = {}
+    _refresh_proof_hashes(snapshot)
+    snapshot.case_state["requirements"][0].update(status="missing", evidence_ids=[])
+
+    result = score_business_eval(_case(), oracle, snapshot)
+    target = next(item for item in result.checks if item.id == "proof.target_decision_truth")
+
+    assert target.passed is False
+    assert target.observed == "EXECUTION_INCOMPLETE"
+    assert target.expected == "BUSINESS_EVIDENCE_GAP"
+    assert "TARGET_DECISION_MISMATCH" in {item.code for item in result.vetoes}
+
+
+def test_v30_committed_typed_business_gap_matches_not_found_oracle() -> None:
+    oracle, snapshot = _not_found_output_fixture()
+
+    result = score_business_eval(_case(), oracle, snapshot)
+    target = next(item for item in result.checks if item.id == "proof.target_decision_truth")
+
+    assert target.passed is True
+    assert target.observed == "BUSINESS_EVIDENCE_GAP"
+
+
+def test_v30_global_kernel_integrity_rejection_is_not_business_gap() -> None:
+    oracle, snapshot = _not_found_output_fixture()
+    snapshot.case_state["review_artifact"]["artifact_hash"] = "stale"
+
+    result = score_business_eval(_case(), oracle, snapshot)
+    target = next(item for item in result.checks if item.id == "proof.target_decision_truth")
+
+    assert target.passed is False
+    assert target.observed == "INTEGRITY_REJECTED"
+
+
+@pytest.mark.parametrize("invalid_check_id", ["ghost", "root"])
+def test_v30_diagnostic_attached_outside_plan_checks_is_global_integrity(
+    invalid_check_id: str,
+) -> None:
+    snapshot = _strict_snapshot()
+    snapshot.case_state["review_artifact"]["assessments"].append(
+        {
+            "check_id": invalid_check_id,
+            "claim_ids": [],
+            "status": "NOT_FOUND",
+            "gap_code": "SOURCE_MISSING",
+            "missing_fact": "missing source",
+        }
+    )
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+    target = next(item for item in result.checks if item.id == "proof.target_decision_truth")
+
+    assert target.observed == "INTEGRITY_REJECTED"
+    assert result.passed is False
+    assert "PROOF_INTEGRITY_MISMATCH" in {item.code for item in result.vetoes}
+
+
+def test_v30_non_target_partial_check_does_not_pollute_target_outcome() -> None:
+    snapshot = _strict_snapshot()
+    artifact = snapshot.case_state["review_artifact"]
+    artifact["plan"]["active_requirement_ids"].append("invoice")
+    artifact["plan"]["roots"]["invoice"] = "invoice_document_check"
+    artifact["plan"]["nodes"].append(
+        {
+            "id": "invoice_document_check",
+            "kind": "CHECK",
+            "statement": "The attachment is an invoice.",
+            "depends_on": [],
+            "requirement_refs": ["invoice"],
+            "policy_refs": [],
+            "facet_refs": [],
+        }
+    )
+    artifact["execution_status"] = "PARTIAL"
+    snapshot.case_state["requirements"].append(
+        {"id": "invoice", "required": False, "status": "missing", "evidence_ids": []}
+    )
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+    target = next(item for item in result.checks if item.id == "proof.target_decision_truth")
+
+    assert target.passed is True
+    assert target.observed == "CONTRADICTED"
+    assert "TARGET_DECISION_MISMATCH" not in {item.code for item in result.vetoes}
+
+
+def test_v30_tool_event_order_does_not_change_business_outcome() -> None:
+    oracle, snapshot = _not_found_output_fixture()
+    snapshot.events.extend(
+        [
+            {"kind": "tool_started", "name": "executor", "payload": {"tool": "read_source"}},
+            {"kind": "tool_finished", "name": "executor", "payload": {"tool": "read_source"}},
+        ]
+    )
+    reordered = snapshot.model_copy(deep=True)
+    reordered.events.reverse()
+
+    original = score_business_eval(_case(), oracle, snapshot)
+    mutated = score_business_eval(_case(), oracle, reordered)
+
+    original_target = next(
+        item for item in original.checks if item.id == "proof.target_decision_truth"
+    )
+    mutated_target = next(
+        item for item in mutated.checks if item.id == "proof.target_decision_truth"
+    )
+    assert mutated_target.model_dump() == original_target.model_dump()
+
+
+def test_v30_policy_not_configured_requires_the_narrow_typed_gap_contract() -> None:
+    base = {
+        "check_id": "policy_check",
+        "artifact": {
+            "plan": {"policy_refs": ["rounding_policy"]},
+            "unconfigured_policy_refs": ["rounding_policy"],
+            "submitted_claim_refs": {"policy_check": []},
+        },
+        "nodes": {
+            "policy_check": {
+                "kind": "CHECK",
+                "policy_refs": ["rounding_policy"],
+            }
+        },
+        "assessments": {
+            "policy_check": {
+                "status": "NOT_FOUND",
+                "gap_code": "POLICY_UNCONFIGURED",
+                "missing_fact": "configure rounding_policy",
+            }
+        },
+        "node_results": {
+            "policy_check": {
+                "status": "NOT_FOUND",
+                "gap_code": "POLICY_UNCONFIGURED",
+            }
+        },
+        "diagnostics": [
+            {"code": "POLICY_NOT_CONFIGURED", "node_id": "policy_check"}
+        ],
+        "global_integrity_rejected": False,
+    }
+
+    assert _check_outcome(**base) == "BUSINESS_EVIDENCE_GAP"
+    base["diagnostics"].append(
+        {"code": "INVALID_POLICY_LINEAGE", "node_id": "policy_check"}
+    )
+    assert _check_outcome(**base) == "EXECUTION_INCOMPLETE"
+
+
+def test_v30_decisive_all_and_any_ignore_future_execution_gaps() -> None:
+    all_nodes = {
+        "closed": {"kind": "CHECK"},
+        "future": {"kind": "CHECK"},
+        "root": {"kind": "ALL", "depends_on": ["closed", "future"]},
+    }
+    any_nodes = {
+        **all_nodes,
+        "root": {"kind": "ANY", "depends_on": ["closed", "future"]},
+    }
+
+    assert _aggregate_milestone_outcome(
+        ["closed", "future"],
+        {"closed": "CONTRADICTED", "future": "EXECUTION_INCOMPLETE"},
+        root_id="root",
+        nodes=all_nodes,
+    ) == "CONTRADICTED"
+    assert _aggregate_milestone_outcome(
+        ["closed", "future"],
+        {"closed": "SUPPORTED", "future": "EXECUTION_INCOMPLETE"},
+        root_id="root",
+        nodes=any_nodes,
+    ) == "SUPPORTED"
+
+
+@pytest.mark.parametrize(
+    ("nodes", "check_outcomes"),
+    [
+        (
+            {
+                "closed": {"kind": "CHECK"},
+                "future": {"kind": "CHECK"},
+                "business_gap": {"kind": "CHECK"},
+                "closed_branch": {
+                    "kind": "ALL",
+                    "depends_on": ["closed", "future"],
+                },
+                "root": {
+                    "kind": "ANY",
+                    "depends_on": ["closed_branch", "business_gap"],
+                },
+            },
+            {
+                "closed": "CONTRADICTED",
+                "future": "EXECUTION_INCOMPLETE",
+                "business_gap": "BUSINESS_EVIDENCE_GAP",
+            },
+        ),
+        (
+            {
+                "closed": {"kind": "CHECK"},
+                "future": {"kind": "CHECK"},
+                "business_gap": {"kind": "CHECK"},
+                "closed_branch": {
+                    "kind": "ANY",
+                    "depends_on": ["closed", "future"],
+                },
+                "root": {
+                    "kind": "ALL",
+                    "depends_on": ["closed_branch", "business_gap"],
+                },
+            },
+            {
+                "closed": "SUPPORTED",
+                "future": "EXECUTION_INCOMPLETE",
+                "business_gap": "BUSINESS_EVIDENCE_GAP",
+            },
+        ),
+    ],
+)
+def test_v30_target_ignores_execution_gap_inside_closed_nested_branch(
+    nodes: dict[str, dict[str, object]],
+    check_outcomes: dict[str, str],
+) -> None:
+    assert _target_outcome(
+        root_id="root",
+        nodes=nodes,
+        canonical_decision={"status": "NOT_FOUND"},
+        canonical_node_results={"root": {"status": "NOT_FOUND"}},
+        check_outcomes=check_outcomes,
+        global_integrity_rejected=False,
+    ) == "BUSINESS_EVIDENCE_GAP"
 
 
 def test_wrong_supported_is_vetoed() -> None:
@@ -1159,7 +1425,7 @@ def test_not_found_cannot_be_upgraded_and_approval_is_scoped() -> None:
     result = score_business_eval(_case(), _oracle(), snapshot)
 
     codes = {item.code for item in result.vetoes}
-    assert "NOT_FOUND_UPGRADED" in codes
+    assert "PROOF_INTEGRITY_MISMATCH" in codes
     assert "UNAUTHORIZED_APPROVAL_TOOL" in codes
     assert result.passed is False
 
@@ -1273,6 +1539,81 @@ def test_runtime_page_locator_alias_is_grounded_by_the_locator_resolver() -> Non
         "[page 1 text]\nheader\nline one\nline two\nAmount due: 188813.24 EUR",
         locator="page 1 text",
         quote="Amount due: 188813.24 EUR",
+    )
+
+
+def test_subtract_witness_preserves_signed_adjustment_semantics() -> None:
+    oracle_path = (
+        Path(__file__).resolve().parents[2]
+        / "evals/business_v1/cases/invoice_subtotal_conflict_0006/oracle.json"
+    )
+    oracle = BusinessEvalOracle.model_validate_json(oracle_path.read_text(encoding="utf-8"))
+    facts = {item.id: item for item in oracle.facts}
+    adjustment = facts["adjustment_1"]
+    magnitude_claim = {
+        "id": "claim_adjustment",
+        "subject": "invoice",
+        "predicate": "discount amount",
+        "value": "645.94",
+        "source_id": "source_1",
+        "quote": adjustment.source_quote,
+        "confidence": "high",
+        "attributes": {"currency": "EUR"},
+    }
+    source = {"source_1": adjustment.source_quote}
+
+    assert not _claim_matches_source_fact(
+        adjustment,
+        magnitude_claim,
+        source_roles={"source_1": "invoice"},
+        source_content=source,
+    )
+    assert _claim_matches_source_fact(
+        adjustment,
+        magnitude_claim,
+        source_roles={"source_1": "invoice"},
+        source_content=source,
+        allow_subtracted_value=True,
+    )
+
+    relation = next(
+        item for item in oracle.relations if item.id == "line_derived_final_total_math"
+    )
+    witness = {
+        "id": "witness_final",
+        "check_id": "check_final",
+        "facet_ref": "final_total",
+        "operation": "SUBTRACT",
+        "operands": [
+            {
+                "ref": {"kind": "WITNESS", "ref_id": "witness_line_sum"},
+                "value": "15502.44",
+                "currency": "EUR",
+            },
+            {
+                "ref": {"kind": "CLAIM", "ref_id": "claim_adjustment"},
+                "value": "645.94",
+                "currency": "EUR",
+            },
+        ],
+        "result": "14856.50",
+        "currency": "EUR",
+    }
+    assert _typed_witness_matches_relation(
+        witness,
+        relation,
+        milestone_facet_ref="final_total",
+        explicit_facet=True,
+        source_assignments={
+            "line_sum": "claim_line_sum",
+            "adjustment_1": "claim_adjustment",
+            "printed_total": "claim_printed_total",
+        },
+        facts_by_id=facts,
+        witness_outputs={"witness_line_sum": {"line_sum"}},
+        accepted_witness_ids={"witness_line_sum", "witness_final"},
+        witnesses_by_id={"witness_final": witness},
+        fact_equivalences={fact_id: {fact_id} for fact_id in facts},
     )
 
 
@@ -1492,6 +1833,152 @@ def test_v2_nonsense_plan_semantics_cannot_receive_full_understanding_score() ->
     assert _stage_score(result, "evidence") == STAGE_WEIGHTS["evidence"]
     assert _compiler_score(result) < Decimal("75")
     assert result.passed is False
+
+
+def test_v28_frozen_objective_and_typed_target_route_express_business_intent() -> None:
+    snapshot = _strict_snapshot()
+    plan = snapshot.case_state["review_artifact"]["plan"]
+    plan["objective"] = _case().user_message
+    statements = {
+        "line_extensions": "各行项目的数量乘以单价等于行金额。",
+        "subtotal_aggregation": "发票小计等于所有行项目行小计之和。",
+        "component_discount_rate_base": "发票折扣金额等于小计与折扣率相乘的结果。",
+        "component_vat_rate_base": "发票税费金额等于税基与税率相乘的结果。",
+        "final_total_reconciliation": "最终总金额等于小计加上税费再减去折扣。",
+    }
+    for node in plan["nodes"]:
+        if node["id"] in statements:
+            node["statement"] = statements[node["id"]]
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    objective = next(
+        item for item in result.checks if item.id == "understanding.objective_semantics"
+    )
+    assert objective.passed is True
+
+
+def test_v28_relation_syntax_fallback_is_scoped_to_a_business_proposition() -> None:
+    snapshot = _strict_snapshot()
+    plan = snapshot.case_state["review_artifact"]["plan"]
+    subtotal = next(
+        node for node in plan["nodes"] if node["id"] == "subtotal_aggregation"
+    )
+    subtotal["statement"] = "所有行金额加总后等于小计。"
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+    semantic = next(
+        item
+        for item in result.checks
+        if item.id == "understanding.milestone_semantics.subtotal_aggregation"
+    )
+    assert semantic.passed is True
+    assert semantic.observed["relation_syntax_fallback"] is True
+
+    subtotal = next(
+        node
+        for node in snapshot.case_state["review_artifact"]["plan"]["nodes"]
+        if node["id"] == "subtotal_aggregation"
+    )
+    subtotal["statement"] = "发票包含行项目和小计字段；今天气温等于二十度。"
+    _refresh_proof_hashes(snapshot)
+    result = score_business_eval(_case(), _oracle(), snapshot)
+    semantic = next(
+        item
+        for item in result.checks
+        if item.id == "understanding.milestone_semantics.subtotal_aggregation"
+    )
+    assert semantic.passed is False
+    assert semantic.observed.get("relation_syntax_fallback", False) is False
+
+
+def test_v29_relation_syntax_requires_two_distinct_business_meanings() -> None:
+    subtotal_meaning = next(
+        item.statement_meaning
+        for item in _oracle().milestones
+        if item.id == "subtotal_aggregation"
+    )
+
+    # "total" is nested inside "subtotal" in the Oracle aliases, but this is
+    # still only one business term and therefore not a subtotal relation.
+    assert _relational_statement_matches("Subtotal > 0", subtotal_meaning) is False
+    assert (
+        _relational_statement_matches(
+            "判断今天的天气是否适合户外活动。", subtotal_meaning
+        )
+        is False
+    )
+
+    chinese_meaning = MeaningOracle(all_of=[["行项目金额"], ["小计"]])
+    assert (
+        _relational_statement_matches(
+            "所有行项目金额之和等于小计。", chinese_meaning
+        )
+        is True
+    )
+
+
+def test_v28_typed_component_facet_does_not_hide_a_missing_calculation_relation() -> None:
+    snapshot = _strict_snapshot()
+    weak = (
+        "The invoice states tax and discount components with their applicable "
+        "basis and rate, independent of the reported final total."
+    )
+    for node in snapshot.case_state["review_artifact"]["plan"]["nodes"]:
+        if node["id"] in {
+            "component_discount_rate_base",
+            "component_vat_rate_base",
+        }:
+            node["statement"] = weak
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+    semantic = next(
+        item
+        for item in result.checks
+        if item.id
+        == "understanding.milestone_semantics.stated_component_rate_base_validation"
+    )
+    assert semantic.passed is False
+    assert semantic.observed.get("relation_syntax_fallback", False) is False
+
+
+def test_v29_expected_statuses_do_not_impose_hidden_check_cardinality() -> None:
+    payload = _oracle().model_dump(mode="json")
+    final = next(
+        item
+        for item in payload["milestones"]
+        if item["id"] == "final_total_reconciliation"
+    )
+    independent_path = {
+        **final,
+        "id": "line_derived_total_reconciliation",
+        "expected_status": "SUPPORTED",
+        "relation_ids": [],
+    }
+    payload["milestones"].append(independent_path)
+    payload["intent"]["required_milestone_ids"].append(independent_path["id"])
+    oracle = BusinessEvalOracle.model_validate(payload)
+
+    result = score_business_eval(_case(), oracle, _strict_snapshot())
+
+    routes = {
+        item.id: item
+        for item in result.checks
+        if item.id
+        in {
+            "understanding.milestone.final_total_reconciliation",
+            "understanding.milestone.line_derived_total_reconciliation",
+        }
+    }
+    assert set(routes) == {
+        "understanding.milestone.final_total_reconciliation",
+        "understanding.milestone.line_derived_total_reconciliation",
+    }
+    assert all(item.passed is True for item in routes.values())
+    assert all("strong_status_capacity" not in item.observed for item in routes.values())
 
 
 def test_v2_missing_recompute_milestone_cannot_receive_full_compiler_score() -> None:
@@ -1867,62 +2354,57 @@ def test_v26_same_numeric_value_without_typed_equality_cannot_substitute() -> No
 def test_v26_shared_final_facet_is_split_by_typed_path_then_uses_plan_logic() -> None:
     path = (
         Path(__file__).resolve().parents[2]
-        / "evals/business_v1/cases/invoice_subtotal_conflict_0006/oracle.json"
+        / "evals/business_v1/cases/credit_note_total_conflict_0016/oracle.json"
     )
     oracle = BusinessEvalOracle.model_validate_json(path.read_text(encoding="utf-8"))
-    milestones = [
-        item
+    milestones = {
+        item.id: item
         for item in oracle.milestones
-        if item.id
-        in {
-            "printed_subtotal_total_reconciliation",
-            "line_derived_total_reconciliation",
-        }
-    ]
+        if item.id in {"final_total_reconciliation", "credit_note_sign_semantics"}
+    }
     checks = {
-        "printed_path": {
+        "total_path": {
             "kind": "CHECK",
-            "statement": "printed subtotal plus adjustment does not match printed total",
+            "statement": "The recomputed final total does not match the printed total.",
         },
-        "line_path": {
+        "sign_path": {
             "kind": "CHECK",
-            "statement": "line-derived subtotal plus adjustment matches printed total",
+            "statement": "The credit note negative-sign calculation is treated consistently.",
         },
     }
-    initial = {item.id: set(checks) for item in milestones}
+    initial = {item.id: set(checks) for item in milestones.values()}
+    final_milestone = milestones["final_total_reconciliation"]
+    sign_milestone = milestones["credit_note_sign_semantics"]
     relation_matches = {
-        relation_id: ("printed_path", f"witness_{relation_id}")
-        for relation_id in milestones[0].relation_ids
-    } | {
-        relation_id: ("line_path", f"witness_{relation_id}")
-        for relation_id in milestones[1].relation_ids
+        relation_id: ("total_path", f"witness_{relation_id}")
+        for relation_id in final_milestone.relation_ids
     }
     refined = _refine_shared_facet_matches(
-        milestones,
+        list(milestones.values()),
         initial,
         relation_matches=relation_matches,
         checks=checks,
     )
     nodes = {
         **checks,
-        "root": {"kind": "ALL", "depends_on": ["printed_path", "line_path"]},
+        "root": {"kind": "ALL", "depends_on": ["total_path", "sign_path"]},
     }
     assessments = {
-        "printed_path": {"status": "CONTRADICTED"},
-        "line_path": {"status": "SUPPORTED"},
+        "total_path": {"status": "CONTRADICTED"},
+        "sign_path": {"status": "SUPPORTED"},
     }
 
-    assert refined[milestones[0].id] == {"printed_path"}
-    assert refined[milestones[1].id] == {"line_path"}
-    assert _aggregate_milestone_status(
-        sorted(refined[milestones[0].id]),
-        assessments,
+    assert refined[final_milestone.id] == {"total_path"}
+    assert refined[sign_milestone.id] == {"sign_path"}
+    assert _aggregate_milestone_outcome(
+        sorted(refined[final_milestone.id]),
+        {"total_path": "CONTRADICTED", "sign_path": "SUPPORTED"},
         root_id="root",
         nodes=nodes,
     ) == "CONTRADICTED"
-    assert _aggregate_milestone_status(
-        sorted(refined[milestones[1].id]),
-        assessments,
+    assert _aggregate_milestone_outcome(
+        sorted(refined[sign_milestone.id]),
+        {"total_path": "CONTRADICTED", "sign_path": "SUPPORTED"},
         root_id="root",
         nodes=nodes,
     ) == "SUPPORTED"
@@ -2126,9 +2608,9 @@ def test_v26_milestone_status_respects_any_instead_of_forcing_all() -> None:
         "right": {"status": "SUPPORTED"},
     }
 
-    assert _aggregate_milestone_status(
+    assert _aggregate_milestone_outcome(
         ["left", "right"],
-        assessments,
+        {"left": "CONTRADICTED", "right": "SUPPORTED"},
         root_id="root",
         nodes=nodes,
     ) == "SUPPORTED"
@@ -2372,6 +2854,30 @@ def test_v23_projection_check_covers_non_target_canonical_decisions() -> None:
     assert [item["requirement_id"] for item in violations] == ["invoice"]
 
 
+def test_v30_projection_does_not_treat_missing_decision_status_as_not_found() -> None:
+    violations = _canonical_projection_violations(
+        {
+            "decisions": [{"requirement_id": "invoice_calculation_valid"}],
+            "node_results": [],
+        },
+        requirement_rows=[
+            {
+                "id": "invoice_calculation_valid",
+                "status": "missing",
+                "evidence_ids": [],
+            }
+        ],
+    )
+
+    assert violations == [
+        {
+            "requirement_id": "invoice_calculation_valid",
+            "error": "missing_decision_status",
+            "observed_status": "缺失",
+        }
+    ]
+
+
 def test_v23_milestone_wording_failure_is_not_mislabeled_as_ungrounded() -> None:
     snapshot = _strict_snapshot()
     for node in snapshot.case_state["review_artifact"]["plan"]["nodes"]:
@@ -2428,6 +2934,78 @@ def test_v23_boundary_scans_assessment_reason_and_user_outputs() -> None:
         result = score_business_eval(_case(), _oracle(), snapshot)
         assert "EPISTEMIC_BOUNDARY_VIOLATION" in {item.code for item in result.vetoes}
         assert result.score_cap == Decimal("84")
+
+
+def test_boundary_check_does_not_join_subtotal_statement_with_vat_reason() -> None:
+    snapshot = _strict_snapshot()
+    artifact = snapshot.case_state["review_artifact"]
+    subtotal = next(
+        node for node in artifact["plan"]["nodes"] if node["id"] == "subtotal_aggregation"
+    )
+    subtotal["statement"] = "The printed subtotal was calculated correctly."
+    assessment = next(
+        item
+        for item in artifact["assessments"]
+        if item["check_id"] == "subtotal_aggregation"
+    )
+    assessment["reason"] = "The source separately labels the invoice incl. VAT."
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    boundary = next(
+        item
+        for item in result.checks
+        if item.id == "reasoning.epistemic_boundary.component_rate_or_base_not_proven"
+    )
+    assert "subtotal_aggregation" not in boundary.observed["matched_check_ids"]
+    assert boundary.passed is True
+
+
+def test_boundary_check_matches_rate_base_correctness_in_one_proposition() -> None:
+    snapshot = _strict_snapshot()
+    artifact = snapshot.case_state["review_artifact"]
+    assessment = next(
+        item
+        for item in artifact["assessments"]
+        if item["check_id"] == "component_vat_rate_base"
+    )
+    assessment["status"] = "SUPPORTED"
+    assessment["reason"] = (
+        "The stated VAT rate and taxable base were validated and calculated correctly."
+    )
+    _refresh_proof_hashes(snapshot)
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    boundary = next(
+        item
+        for item in result.checks
+        if item.id == "reasoning.epistemic_boundary.component_rate_or_base_not_proven"
+    )
+    assert "component_vat_rate_base" in boundary.observed["matched_check_ids"]
+    assert "component_vat_rate_base" in boundary.observed["check_violations"]
+    assert "EPISTEMIC_BOUNDARY_VIOLATION" in {item.code for item in result.vetoes}
+
+
+def test_chinese_unresolved_configuration_output_is_not_supported() -> None:
+    meaning = MeaningOracle(all_of=[["VAT"], ["正确"]])
+
+    for state in ("未决", "未配置", "需配置", "需要配置"):
+        assertions = _boundary_output_assertions(f"VAT 正确性{state}。", meaning)
+        assert assertions and assertions[0][0] == "NOT_FOUND", state
+
+    assert _boundary_output_assertions("VAT 正确有效。", meaning)[0][0] == "SUPPORTED"
+
+
+def test_blocking_obligations_requires_canonical_target_decision() -> None:
+    snapshot = _strict_snapshot()
+    snapshot.case_state["review_artifact"]["plan"]["roots"] = {}
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    check = next(item for item in result.checks if item.id == "proof.blocking_obligations")
+    assert check.passed is False
 
 
 def test_v23_structured_opposite_conclusion_catches_keyword_preserving_reversal() -> None:

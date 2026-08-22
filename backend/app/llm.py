@@ -245,7 +245,11 @@ class LlmClient:
                     model=selected_model,
                     model_settings=ModelSettings(
                         temperature=temperature_for_thinking(selected_model, self.settings.llm_temperature, thinking_type),
-                        extra_body=_model_extra_body(selected_model, thinking_type),
+                        extra_body=_model_extra_body(
+                            selected_model,
+                            thinking_type,
+                            self.settings.llm_base_url,
+                        ),
                         **prompt_cache_model_settings_kwargs(self.settings, packet),
                     ),
                     output_type=FencedJsonOutputSchema(model_type, strict_json_schema=False),
@@ -372,8 +376,12 @@ def _elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000, 2)
 
 
-def _model_extra_body(model_name: str, thinking_type: str | None) -> dict[str, Any] | None:
-    return model_extra_body_for_thinking(model_name, thinking_type)
+def _model_extra_body(
+    model_name: str,
+    thinking_type: str | None,
+    base_url: str = "",
+) -> dict[str, Any] | None:
+    return model_extra_body_for_thinking(model_name, thinking_type, base_url)
 
 
 def _model_dump(value: Any) -> dict[str, Any]:

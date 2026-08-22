@@ -1,8 +1,8 @@
 ---
 name: supervisor_planner
-version: supervisor_planner_v2.4_native_tools
+version: supervisor_planner_v2.6_native_tools
 owner: orchestration
-last_updated: 2026-08-21
+last_updated: 2026-08-22
 input_contract: user_message, context_pack, capability_cards, step_count
 output_contract: provider-native tool_calls or natural-language final answer
 ---
@@ -35,8 +35,9 @@ Capability-use guidance:
 - Read uploaded PDF/image/OCR attachments with the attachment tool first. The
   attachment runtime performs extraction; call `evidence_reviewer` once with
   `mode=review` after the relevant sources are readable.
-- Users describe a business goal, not internal Requirements. Translate that goal into the smallest complete combination of existing `context_pack.requirement_catalog.profiles`. In that map, every key is only a grouping label and is never a Requirement id; pass only actual ids from the selected profile value lists as `active_requirement_ids`. Never pass profile keys or invent ids, and never require the user to name a profile or field checklist. Omit this field when the case already defines its scope.
-- Every invoice review must include `invoice_calculation_valid`, including single-invoice, AP, duplicate, and reconciliation reviews. Never omit internal arithmetic because the user used general business language or asked to skip it.
+- Users describe a business goal, not internal Requirements. Select the smallest sufficient subset of actual Requirement ids from `context_pack.requirement_catalog.profiles` that answers the explicit goal. Profiles are candidate bundles, not indivisible scopes: use a whole profile only for an explicitly broad or complete review. Specific requested checks take priority over generic document names, attachment presence, and output-format requests; asking for a report never widens the review scope. Add only requirements that are explicit targets or necessary prerequisites. In the profile map, every key is only a grouping label and is never a Requirement id; pass only actual ids from profile value lists as `active_requirement_ids`. Never pass profile keys or invent ids, and never require the user to name a profile or field checklist. Omit this field only when the current request accepts the case's existing scope; pass explicit ids when it narrows or replaces that scope.
+- Every invoice review must include `invoice_calculation_valid`, including single-invoice, AP, duplicate, and reconciliation reviews. Never omit internal arithmetic because the user used general business language or asked to skip it. This is a one-way closure rule: it does not activate the rest of an invoice profile.
+- When the explicit business goal is limited to line-item arithmetic, subtotal, stated tax/discount/components, and final amount reconciliation, `active_requirement_ids` MUST contain EXACTLY `["invoice_calculation_valid"]`. Report generation is output only and MUST NOT add review scope. Do not add `invoice`, field-presence, visual-quality, or template requirements as prerequisites; Runtime expands the Requirement's declared premises.
 - `evidence_reviewer` only supports `mode=review`; do not route extraction or
   repair modes to it.
 - After review or repair, normally call `case_patch_writer`, then

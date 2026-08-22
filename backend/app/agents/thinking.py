@@ -14,11 +14,8 @@ def manager_tool_loop_thinking_type(model_name: str, configured: str | None) -> 
 
 
 def role_thinking_type(role: str, payload: dict[str, Any] | None, configured: str | None) -> str:
-    _ = payload
-    normalized_role = str(role or "").lower()
-    if normalized_role == "planner":
-        return _normalized_thinking_type(configured)
-    return "disabled"
+    _ = (role, payload)
+    return _normalized_thinking_type(configured)
 
 
 def temperature_for_thinking(model_name: str, default: float, thinking_type: str | None) -> float:
@@ -30,12 +27,18 @@ def temperature_for_thinking(model_name: str, default: float, thinking_type: str
     return default
 
 
-def model_extra_body_for_thinking(model_name: str, thinking_type: str | None) -> dict[str, Any] | None:
+def model_extra_body_for_thinking(
+    model_name: str,
+    thinking_type: str | None,
+    base_url: str = "",
+) -> dict[str, Any] | None:
     model = str(model_name or "").lower()
     if model == "kimi-k2.5":
         return {"thinking": {"type": _normalized_thinking_type(thinking_type)}}
     if model.startswith("deepseek-v4-"):
         mode = _normalized_thinking_type(thinking_type)
+        if "developer.amd.com.cn/radeon/api" in str(base_url or "").strip().lower():
+            return {"chat_template_kwargs": {"thinking": mode not in {"disabled", "none"}}}
         effort = "none" if mode in {"disabled", "none"} else mode if mode in {"low", "high", "max"} else "high"
         return {"reasoning": {"effort": effort}}
     return None

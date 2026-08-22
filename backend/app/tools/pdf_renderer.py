@@ -522,7 +522,7 @@ def _inline_text(text: str) -> str:
     for old, new in replacements.items():
         clean = clean.replace(old, new)
     clean = clean.replace("✓ ", "").replace("✓", "是")
-    clean = clean.replace("✗", "否").replace("×", "否")
+    clean = clean.replace("✗", "否")
     clean = re.sub(r"`([^`]+)`", r"\1", clean)
     return html.escape(clean)
 

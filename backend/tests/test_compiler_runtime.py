@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from agents.exceptions import ModelBehaviorError, UserError
+from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, UserError
 from pydantic import ValidationError
 
 from app.compiler_runtime.kernel import compile_review_artifact
@@ -21,8 +22,8 @@ from app.compiler_runtime.models import (
     ProofPlan,
     StrongStatusLink,
 )
-from app.compiler_runtime.policy import requirement_context
 from app.compiler_runtime.runtime import (
+    CHECK_FRONTIER_ATTEMPT_CAP,
     EXECUTOR_MAX_TURNS,
     PROMPT_VERSIONS,
     EvidenceCompilerRuntime,
@@ -32,16 +33,16 @@ from app.compiler_runtime.runtime import (
     _completion_hook,
     _configured_policy_values,
     _derived_execution_status,
+    _frontier_kernel_failures,
     attachment_source_admission,
     expand_active_requirements,
     policy_excerpt_for,
+    requirement_context,
     prepare_sources,
     _planning_extraction_summary,
     _planning_source_catalog,
     _review_result,
-    _retryable_checks,
     _sandbox_tools,
-    _sandbox_proof_material_hash,
 )
 from app.compiler_runtime.sandbox import EvidenceSandbox
 from app.compiler_runtime.signatures import proof_signature_for
@@ -119,7 +120,7 @@ def test_verifier_prompt_exact_hash_matches_versioned_fixture() -> None:
     assert actual == fixture["verifier.md"]
 
 
-def test_task_compiler_prompt_forbids_check_to_check_edges() -> None:
+def test_task_compiler_separates_status_composition_from_check_dataflow() -> None:
     prompt = (
         Path(__file__).parents[1]
         / "app"
@@ -128,8 +129,10 @@ def test_task_compiler_prompt_forbids_check_to_check_edges() -> None:
         / "task_compiler.md"
     ).read_text(encoding="utf-8")
 
-    assert "depends_on` must be exactly `[]`" in prompt
-    assert "never create a CHECK-to-CHECK edge" in prompt
+    assert "upstream_check_ids" in prompt
+    assert "proof dataflow only" in prompt
+    assert "ALL/ANY depends_on responsible for Requirement status composition" in prompt
+    assert "empty depends_on" in prompt
     assert "Include `version: \"1\"`" in prompt
     assert "Every root must directly establish the supplied Requirement `proof_target` in the same polarity" in prompt
     assert "Every CHECK must reference at least one active Requirement" in prompt
@@ -157,6 +160,8 @@ def test_task_compiler_arithmetic_facets_use_independent_upstream_premises() -> 
     assert "basis or applicability is absent" in prompt
     assert "separately answerable gap that can remain NOT_FOUND" in prompt
     assert "Reconstruct a final aggregate from independently established upstream values" in prompt
+    assert "name the upstream aggregate as independently derived or recomputed" in prompt
+    assert "an unqualified label such as \"subtotal\" is ambiguous" in prompt
 
 
 def test_task_compiler_arithmetic_facets_forbid_circular_aggregate_proof() -> None:
@@ -172,9 +177,85 @@ def test_task_compiler_arithmetic_facets_forbid_circular_aggregate_proof() -> No
     assert "circular proof and duplicate attribution" in prompt
     assert "compare it with the reported aggregate only at terminal reconciliation" in prompt
     assert "Do not feed a possibly wrong reported aggregate back into upstream component checks" in prompt
-    assert "VAT" not in prompt
+    assert " VAT " not in prompt
     assert "subtotal plus or minus" not in prompt
     assert "four separate CHECKs" not in prompt
+
+
+def test_task_compiler_preserves_plan_freedom_and_local_policy_lineage() -> None:
+    prompt = (
+        Path(__file__).parents[1]
+        / "app"
+        / "compiler_runtime"
+        / "prompts"
+        / "task_compiler.md"
+    ).read_text(encoding="utf-8")
+
+    assert "The number, wording, sharing, and ALL/ANY arrangement of CHECKs remain your decision" in prompt
+    assert "fixed number of CHECKs" in prompt
+    assert "Every CHECK whose boundary actually depends on a Policy value" in prompt
+    assert "every CHECK carrying that facet must declare the required policy_refs" in prompt
+    assert "A sibling CHECK's policy_refs never cover that dependency" in prompt
+
+
+def test_stated_component_semantic_roles_prevent_amount_presence_shortcuts() -> None:
+    prompt_root = Path(__file__).parents[1] / "app" / "compiler_runtime" / "prompts"
+    compiler = (prompt_root / "task_compiler.md").read_text(encoding="utf-8")
+    executor = (prompt_root / "executor.md").read_text(encoding="utf-8")
+    verifier = (prompt_root / "verifier.md").read_text(encoding="utf-8")
+
+    assert "must declare all of those roles in semantic_role_refs" in compiler
+    assert "Mere component-amount presence covers only COMPONENT_OBSERVATION" in compiler
+    assert "The number of CHECKs remains free" in compiler
+    assert "If a declared role cannot be grounded, submit that exact gap" in executor
+    assert "never substitute a weaker role such as amount presence" in executor
+    assert "Independently verify every semantic_role_ref" in verifier
+    assert "COMPONENT_OBSERVATION alone cannot satisfy COMPONENT_APPLICABILITY" in verifier
+
+
+def test_executor_prompt_requires_incremental_grounded_check_submissions() -> None:
+    prompt = (
+        Path(__file__).parents[1]
+        / "app"
+        / "compiler_runtime"
+        / "prompts"
+        / "executor.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Work CHECK-by-CHECK" in prompt
+    assert "Before the first accepted submit_check" in prompt
+    assert "call submit_check immediately before moving to another CHECK" in prompt
+    assert "immediately submit it with any already-grounded refs and an exact gap" in prompt
+    assert "shortest contiguous exact source quote" in prompt
+    assert "Never omit characters from within it" in prompt
+    assert "A Claim or quote never substitutes for a required BINDING proof term" in prompt
+    assert "Send any decimal value as a JSON string" in prompt
+    assert "a Binding's own `relation` or `reason` cannot prove it" in prompt
+    assert "immediately submit its validity CHECK" in prompt
+    assert "never multiply the rate by a guessed aggregate" in prompt
+
+
+def test_rate_base_binding_requires_grounded_applicability_and_unambiguous_scope() -> None:
+    prompt_root = Path(__file__).parents[1] / "app" / "compiler_runtime" / "prompts"
+    executor = (prompt_root / "executor.md").read_text(encoding="utf-8")
+    verifier = (prompt_root / "verifier.md").read_text(encoding="utf-8")
+
+    for prompt in (executor, verifier):
+        assert "Co-location" in prompt or "co-location" in prompt
+        assert "adjacency" in prompt
+        assert "common business convention" in prompt
+        assert "algebraic" in prompt
+        assert '"on the subtotal"' in prompt
+        assert "explicit applicability statement" in prompt
+        assert "exactly one unambiguous candidate base" in prompt
+        assert "rate-labeled component amount" in prompt
+        assert "Multiple plausible bases" in prompt
+        assert "tax-inclusive semantic ambiguity" in prompt
+        assert "contractual discount or adjustment whose base is not named" in prompt
+    assert "component-inclusion relationship" in executor
+    assert "Binding proposal cannot prove its own relation" in verifier
+    assert "Keep component inclusion separate from rate/base validity" in verifier
+    assert "NOT_FOUND with BINDING_MISSING" in verifier
 
 
 def test_verifier_requires_a_grounded_comparison_baseline() -> None:
@@ -258,11 +339,11 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "A ProofSignature is a type constraint, not a plan template" in compiler
     assert "The number, wording, sharing, and ALL/ANY arrangement of CHECKs remain your decision" in compiler
     assert "never reduce calculation validity to field presence" in compiler.lower()
-    assert PROMPT_VERSIONS["task_compiler"] == "typed_task_compiler_v10"
+    assert PROMPT_VERSIONS["task_compiler"] == "typed_task_compiler_v15"
     assert "Claims are append-only and existing Claim content is immutable" in executor
     assert "later unrelated Claims are allowed" in executor
-    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v8"
-    assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v13"
+    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v13"
+    assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v17"
     assert "never bind a cross-Claim semantic relationship" in executor
     assert "only check_id, a facet_ref declared on that CHECK, an operation, and typed refs" in executor
     assert "For every declared facet whose minimum proof kinds include WITNESS" in executor
@@ -279,7 +360,10 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "A replayable multiplication with an unsupported business base remains NOT_FOUND" in verifier
 
 
-def test_invoice_arithmetic_plan_contract_keeps_recomputations_atomic() -> None:
+def test_invoice_arithmetic_plan_contract_keeps_recomputations_atomic(
+    tmp_path,
+    monkeypatch,
+) -> None:
     check_ids = [
         "check.line_extensions",
         "check.subtotal",
@@ -300,15 +384,40 @@ def test_invoice_arithmetic_plan_contract_keeps_recomputations_atomic() -> None:
                     "kind": "CHECK",
                     "statement": statement,
                     "requirement_refs": ["invoice_calculation_valid"],
-                    "policy_refs": ["invoice_calculation_rounding_tolerance"],
+                    "policy_refs": (
+                        ["invoice_calculation_rounding_tolerance"]
+                        if facet_id == "final_total"
+                        else []
+                    ),
+                    "facet_refs": [facet_id],
+                    "semantic_role_refs": (
+                        [
+                            "COMPONENT_OBSERVATION",
+                            "COMPONENT_APPLICABILITY",
+                            "COMPONENT_RECONCILIATION",
+                        ]
+                        if facet_id == "stated_components"
+                        else []
+                    ),
+                    "upstream_check_ids": (
+                        ["check.subtotal", "check.adjustments"]
+                        if check_id == "check.final_total"
+                        else []
+                    ),
                 }
-                for check_id, statement in zip(
+                for check_id, statement, facet_id in zip(
                     check_ids,
                     (
                         "Applicable line extensions equal quantity times unit price.",
                         "Printed line totals sum to the printed subtotal.",
                         "Printed taxes, discounts, and charges reconcile to their stated bases.",
                         "The printed final total reconciles to subtotal plus or minus adjustments.",
+                    ),
+                    (
+                        "line_extensions",
+                        "subtotal_aggregation",
+                        "stated_components",
+                        "final_total",
                     ),
                     strict=True,
                 )
@@ -317,9 +426,30 @@ def test_invoice_arithmetic_plan_contract_keeps_recomputations_atomic() -> None:
         }
     )
 
-    nodes = {node.id: node for node in plan.nodes}
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    monkeypatch.setattr(runtime, "_run_phase", lambda **_kwargs: plan)
+    normalized = runtime.compile_task(
+        active_requirement_ids=["invoice_calculation_valid"],
+        policy_excerpt=policy_excerpt_for(["invoice_calculation_valid"]),
+        source_catalog=[],
+    )
+
+    nodes = {node.id: node for node in normalized.nodes}
     assert nodes[plan.roots["invoice_calculation_valid"]].depends_on == check_ids
     assert all(nodes[check_id].kind == "CHECK" and not nodes[check_id].depends_on for check_id in check_ids)
+    assert nodes["check.final_total"].upstream_check_ids == [
+        "check.subtotal",
+        "check.adjustments",
+    ]
+    assert nodes["check.adjustments"].semantic_role_refs == [
+        "COMPONENT_OBSERVATION",
+        "COMPONENT_APPLICABILITY",
+        "COMPONENT_RECONCILIATION",
+    ]
+    assert all(
+        nodes[check_id].policy_refs == ["invoice_calculation_rounding_tolerance"]
+        for check_id in check_ids
+    )
 
 
 def test_task_compiler_rejects_missing_signature_facet_before_executor(
@@ -369,6 +499,38 @@ def test_task_compiler_rejects_missing_signature_facet_before_executor(
         "required_policy_refs",
         "facets",
     }
+    assert [item["id"] for item in captured["active_requirements"]] == [
+        "invoice_calculation_valid"
+    ]
+    assert captured["required_output"]["active_requirement_ids"] == [
+        "invoice_calculation_valid"
+    ]
+
+
+def test_task_compiler_normalizes_and_freezes_objective_after_planning(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    objective = "Review only the requested reconciliation paths, exactly."
+    supplied_objective = f"  {objective}\n"
+    rewritten_plan = _plan().model_copy(update={"objective": "Rewritten objective."})
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    captured: dict[str, object] = {}
+
+    def rewritten_phase(**kwargs):
+        captured.update(kwargs["payload"])
+        return rewritten_plan
+
+    monkeypatch.setattr(runtime, "_run_phase", rewritten_phase)
+    compiled = runtime.compile_task(
+        task_objective=supplied_objective,
+        active_requirement_ids=["vendor_identity"],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        source_catalog=[],
+    )
+
+    assert captured["required_output"]["objective"] == objective
+    assert compiled.objective == objective
 
 
 def test_compute_witness_tool_schema_accepts_refs_but_no_raw_values_or_results() -> None:
@@ -403,10 +565,13 @@ def test_executor_payload_exposes_ordered_boolean_operation_protocol(
 
     monkeypatch.setattr(runtime, "_run_phase", fake_phase)
 
+    sandbox = EvidenceSandbox(sources=[], allowed_check_ids=["check.vendor"])
     runtime.execute_plan(
         plan=_plan(),
         prepared_sources=[],
         policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        sandbox=sandbox,
+        focus_check_id="check.vendor",
     )
 
     assert captured["calculation_operation_protocol"] == {
@@ -594,81 +759,667 @@ def _two_check_plan() -> ProofPlan:
     )
 
 
-def test_executor_user_error_after_valid_submission_continues_as_partial(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
-    plan = _two_check_plan()
-    phase_calls: list[str] = []
-    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
+class _FrontierScriptRuntime(EvidenceCompilerRuntime):
+    def __init__(
+        self,
+        llm: LlmClient,
+        *,
+        plan: ProofPlan,
+        assessments: dict[str, CheckAssessment],
+        verifier_failures: dict[str, int] | None = None,
+    ) -> None:
+        super().__init__(llm)
+        self.plan = plan
+        self.assessments = assessments
+        self.verifier_failures = dict(verifier_failures or {})
+        self.execute_calls: list[str] = []
+        self.verify_calls: list[str] = []
+        self.prior_submissions: dict[str, list[str]] = {}
+        self.upstream_frontiers: dict[str, list[dict]] = {}
 
-    def fake_phase(**kwargs):
-        phase_calls.append(kwargs["name"])
-        if kwargs["name"] == "executor":
-            submit = next(tool for tool in kwargs["tools"] if tool.name == "submit_check")
-            result = json.loads(
-                asyncio.run(
-                    submit.on_invoke_tool(
-                        None,
-                        json.dumps(
-                            {
-                                "check_id": "check.one",
-                                "note": "valid work admitted before the SDK error",
-                            }
-                        ),
-                    )
-                )
-            )
-            assert result["ok"] is True
-            raise UserError("invalid structured tool call after valid work")
-        return VerificationBatch(
-            assessments=[
-                CheckAssessment(
-                    check_id=check_id,
-                    examined_source_ids=[],
-                    missing_fact="a source-grounded fact",
-                    gap_code="SOURCE_MISSING",
-                    status="NOT_FOUND",
-                )
-                for check_id in ("check.one", "check.two")
-            ]
+    def compile_task(self, **_kwargs):
+        return self.plan
+
+    def execute_plan(
+        self,
+        *,
+        plan,
+        prepared_sources,
+        policy_excerpt,
+        sandbox,
+        focus_check_id,
+        upstream_frontier_results=(),
+        hook_feedback=(),
+    ):
+        del plan, prepared_sources, policy_excerpt, hook_feedback
+        self.execute_calls.append(focus_check_id)
+        self.upstream_frontiers[focus_check_id] = list(upstream_frontier_results)
+        self.prior_submissions[focus_check_id] = [
+            item.check_id for item in sandbox.submissions
+        ]
+        candidate = copy.deepcopy(sandbox)
+        candidate.submit_check(
+            check_id=focus_check_id,
+            note=f"note-only submission for {focus_check_id}",
         )
+        return ExecutorSummary(summary="single-CHECK candidate"), candidate
 
-    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+    def verify(
+        self,
+        *,
+        plan,
+        sandbox,
+        policy_excerpt,
+        focus_check_id,
+        upstream_frontier_results=(),
+        repair_feedback=(),
+    ):
+        del plan, sandbox, policy_excerpt, upstream_frontier_results, repair_feedback
+        self.verify_calls.append(focus_check_id)
+        remaining = self.verifier_failures.get(focus_check_id, 0)
+        if remaining:
+            self.verifier_failures[focus_check_id] = remaining - 1
+            raise ModelBehaviorError(f"scripted verifier failure for {focus_check_id}")
+        return [self.assessments[focus_check_id]]
+
+
+def _not_found_assessment(
+    check_id: str,
+    *,
+    gap_code: str = "SOURCE_MISSING",
+) -> CheckAssessment:
+    return CheckAssessment(
+        check_id=check_id,
+        status="NOT_FOUND",
+        examined_source_ids=[],
+        missing_fact=f"specific missing premise for {check_id}",
+        gap_code=gap_code,
+    )
+
+
+def test_runtime_commits_each_check_as_a_single_frontier_in_plan_order(tmp_path) -> None:
+    plan = _two_check_plan()
+    runtime = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments={
+            "check.one": _not_found_assessment("check.one"),
+            "check.two": _not_found_assessment("check.two"),
+        },
+    )
 
     result = runtime.run(
         active_requirement_ids=["vendor_identity"],
         prepared_sources=[],
         policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-        requirement_requiredness={"vendor_identity": False},
     )
 
-    assert phase_calls == ["executor", "fine_verifier"]
+    assert runtime.execute_calls == ["check.one", "check.two"]
+    assert runtime.verify_calls == ["check.one", "check.two"]
+    assert runtime.prior_submissions == {
+        "check.one": [],
+        "check.two": ["check.one"],
+    }
+    assert runtime.upstream_frontiers == {"check.one": [], "check.two": []}
+    assert [item.check_id for item in result.artifact.assessments] == [
+        "check.one",
+        "check.two",
+    ]
+    assert result.artifact.execution_status == "COMPLETED"
+    assert result.retry_count == 0
+
+
+def test_runtime_orders_declared_upstream_check_and_hands_off_only_its_committed_result(
+    tmp_path,
+) -> None:
+    base = _two_check_plan()
+    nodes = {node.id: node for node in base.nodes}
+    dependent = nodes["check.two"].model_copy(
+        update={"upstream_check_ids": ["check.one"]}
+    )
+    plan = base.model_copy(
+        update={
+            "nodes": [dependent, nodes["check.one"], nodes["root.all"]],
+        }
+    )
+    runtime = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments={
+            "check.one": _not_found_assessment("check.one"),
+            "check.two": _not_found_assessment("check.two"),
+        },
+    )
+
+    runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+    )
+
+    assert runtime.execute_calls == ["check.one", "check.two"]
+    assert runtime.upstream_frontiers["check.one"] == []
+    assert runtime.upstream_frontiers["check.two"] == [
+        {
+            "check_id": "check.one",
+            "direct_dependency": True,
+            "statement": "The first source check is complete.",
+            "facet_refs": [],
+            "semantic_role_refs": [],
+            "committed": True,
+            "status": "NOT_FOUND",
+            "accepted_terms": {
+                "claim_ids": [],
+                "claims": [],
+                "binding_ids": [],
+                "bindings": [],
+                "witness_ids": [],
+                "witnesses": [],
+            },
+        }
+    ]
+
+
+def test_frontier_ignores_future_missing_but_rejects_global_integrity() -> None:
+    plan = _two_check_plan()
+    policy = policy_excerpt_for(["vendor_identity"])
+    sandbox = EvidenceSandbox(
+        sources=[],
+        allowed_check_ids=["check.one", "check.two"],
+    )
+    sandbox.submit_check(check_id="check.one", note="specific source gap")
+    assessment = _not_found_assessment("check.one")
+    artifact = _artifact(
+        plan=plan,
+        evidence_ir=sandbox.evidence_ir,
+        assessments=[assessment],
+        submitted_claim_refs={"check.one": []},
+        policy_excerpt=policy,
+        model="fixture",
+        sandbox=sandbox,
+        execution_status="PARTIAL",
+    )
+    candidate_proof = compile_review_artifact(artifact)
+
+    assert any(
+        item.node_id == "check.two"
+        and item.code in {"MISSING_CHECK_SUBMISSION", "MISSING_ASSESSMENT"}
+        for item in candidate_proof.diagnostics
+    )
+    assert _frontier_kernel_failures(
+        check_id="check.one",
+        committed_assessments=[],
+        committed_proof=CompiledProof(),
+        focused_assessment=assessment,
+        candidate_proof=candidate_proof,
+    ) == []
+
+    global_failure = CompilationDiagnostic(
+        code="ARTIFACT_INTEGRITY_FAILURE",
+        message="artifact-global integrity failed",
+    )
+    rejected = candidate_proof.model_copy(
+        update={"diagnostics": [*candidate_proof.diagnostics, global_failure]}
+    )
+    failures = _frontier_kernel_failures(
+        check_id="check.one",
+        committed_assessments=[],
+        committed_proof=CompiledProof(),
+        focused_assessment=assessment,
+        candidate_proof=rejected,
+    )
+
+    assert [item["diagnostic_code"] for item in failures] == [
+        "ARTIFACT_INTEGRITY_FAILURE"
+    ]
+
+
+def test_runtime_commits_note_only_policy_not_found_and_continues(tmp_path) -> None:
+    plan = ProofPlan(
+        plan_id="policy-hole-frontiers",
+        objective="Review policy-dependent and evidence-dependent duplicate checks.",
+        active_requirement_ids=["no_active_duplicate"],
+        policy_refs=["duplicate_search_window"],
+        roots={"no_active_duplicate": "root.all"},
+        nodes=[
+            ProofNode(
+                id="check.window",
+                kind="CHECK",
+                statement="The duplicate search window is configured.",
+                requirement_refs=["no_active_duplicate"],
+                policy_refs=["duplicate_search_window"],
+            ),
+            ProofNode(
+                id="check.records",
+                kind="CHECK",
+                statement="The searched records contain no active duplicate.",
+                requirement_refs=["no_active_duplicate"],
+            ),
+            ProofNode(
+                id="root.all",
+                kind="ALL",
+                depends_on=["check.window", "check.records"],
+            ),
+        ],
+    )
+    runtime = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments={
+            "check.window": _not_found_assessment(
+                "check.window",
+                gap_code="POLICY_UNCONFIGURED",
+            ),
+            "check.records": _not_found_assessment("check.records"),
+        },
+    )
+
+    result = runtime.run(
+        active_requirement_ids=["no_active_duplicate"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["no_active_duplicate"]),
+    )
+
+    assert runtime.execute_calls == ["check.window", "check.records"]
+    assert runtime.verify_calls == ["check.window", "check.records"]
+    assert [item.check_id for item in result.artifact.assessments] == [
+        "check.window",
+        "check.records",
+    ]
+    assert result.artifact.submitted_claim_refs == {
+        "check.window": [],
+        "check.records": [],
+    }
+    assert result.artifact.unconfigured_policy_refs == ["duplicate_search_window"]
+    assert any(
+        item.code == "POLICY_NOT_CONFIGURED" and item.node_id == "check.window"
+        for item in result.proof.diagnostics
+    )
+    assert result.artifact.execution_status == "COMPLETED"
+
+
+def test_runtime_rolls_back_only_failed_check_and_continues(tmp_path) -> None:
+    plan = _two_check_plan()
+    runtime = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments={
+            "check.one": _not_found_assessment("check.one"),
+            "check.two": _not_found_assessment("check.two"),
+        },
+        verifier_failures={"check.one": CHECK_FRONTIER_ATTEMPT_CAP},
+    )
+
+    result = runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+    )
+
+    assert runtime.execute_calls == ["check.one", "check.two"]
+    assert runtime.verify_calls == ["check.one", "check.one", "check.two"]
+    assert [item.check_id for item in result.artifact.assessments] == ["check.two"]
+    assert result.artifact.submitted_claim_refs == {"check.two": []}
     assert result.artifact.execution_status == "PARTIAL"
-    assert result.artifact.submitted_claim_refs == {"check.one": []}
-    assert result.proof.decision_for("vendor_identity").status == "NOT_FOUND"
+    assert result.retry_count == 1
 
 
-def test_executor_user_error_before_first_submission_is_reraised(
+def test_frontier_duplicate_submission_does_not_create_a_candidate(tmp_path) -> None:
+    runtime = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=_plan(),
+        assessments={
+            "check.vendor": CheckAssessment(
+                check_id="check.vendor",
+                status="SUPPORTED",
+                examined_source_ids=[],
+            )
+        },
+    )
+
+    result = runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+    )
+
+    assert runtime.execute_calls == ["check.vendor", "check.vendor"]
+    assert runtime.verify_calls == ["check.vendor"]
+    assert result.artifact.assessments == []
+    assert result.artifact.submitted_claim_refs == {}
+    assert result.artifact.execution_status == "FAILED"
+    assert result.retry_count == 1
+
+
+def test_frontier_second_diagnostic_exhausts_cap_without_third_call(
     tmp_path,
     monkeypatch,
 ) -> None:
     runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    execute_calls: list[str] = []
+    verify_calls: list[str] = []
+    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: _plan())
+
+    def fake_execute(**kwargs):
+        check_id = kwargs["focus_check_id"]
+        execute_calls.append(check_id)
+        candidate = copy.deepcopy(kwargs["sandbox"])
+        candidate.submit_check(
+            check_id=check_id,
+            note=f"distinct attempt {len(execute_calls)}",
+        )
+        return ExecutorSummary(completed_check_ids=[check_id]), candidate
+
+    def fake_verify(**kwargs):
+        check_id = kwargs["focus_check_id"]
+        verify_calls.append(check_id)
+        return [
+            CheckAssessment(
+                check_id=check_id,
+                status="SUPPORTED" if len(verify_calls) == 1 else "CONTRADICTED",
+                examined_source_ids=[],
+            )
+        ]
+
+    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
+    monkeypatch.setattr(runtime, "verify", fake_verify)
+
+    result = runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+    )
+
+    assert CHECK_FRONTIER_ATTEMPT_CAP == 2
+    assert execute_calls == ["check.vendor", "check.vendor"]
+    assert verify_calls == ["check.vendor", "check.vendor"]
+    assert result.artifact.assessments == []
+    assert result.retry_count == 1
+
+
+def test_later_frontier_can_resubmit_frozen_claim_lineage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    plan = _two_check_plan()
+    prepared = _sources()
+    source = prepared[0].record
+    execute_calls: list[str] = []
+    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
+
+    def fake_execute(**kwargs):
+        check_id = kwargs["focus_check_id"]
+        execute_calls.append(check_id)
+        candidate = copy.deepcopy(kwargs["sandbox"])
+        candidate.read_source(source.source_id)
+        if not candidate.evidence_ir.claims:
+            claim = candidate.bind_claim(
+                subject="vendor:V-100",
+                predicate="status",
+                value="ACTIVE",
+                source_id=source.source_id,
+                quote="Vendor V-100 is ACTIVE.",
+                locator="line 1",
+            )["claim"]
+            claim_id = claim["id"]
+        else:
+            claim_id = candidate.evidence_ir.claims[0].id
+        submitted = candidate.submit_check(
+            check_id=check_id,
+            claim_ids=[claim_id],
+        )
+        assert submitted["ok"] is True
+        return ExecutorSummary(completed_check_ids=[check_id]), candidate
+
+    def fake_verify(**kwargs):
+        claim = kwargs["sandbox"].evidence_ir.claims[0]
+        return [
+            CheckAssessment(
+                check_id=kwargs["focus_check_id"],
+                status="SUPPORTED",
+                claim_ids=[claim.id],
+                source_ids=[claim.source_id],
+                examined_source_ids=[claim.source_id],
+            )
+        ]
+
+    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
+    monkeypatch.setattr(runtime, "verify", fake_verify)
+
+    result = runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=prepared,
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+    )
+
+    claim_id = result.artifact.evidence_ir.claims[0].id
+    assert execute_calls == ["check.one", "check.two"]
+    assert len(result.artifact.evidence_ir.claims) == 1
+    assert result.artifact.submitted_claim_refs == {
+        "check.one": [claim_id],
+        "check.two": [claim_id],
+    }
+    assert result.artifact.execution_status == "COMPLETED"
+
+
+def test_executor_user_error_after_valid_submission_returns_private_candidate(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    plan = _plan()
+    frozen = EvidenceSandbox(sources=[], allowed_check_ids=["check.vendor"])
+
+    def fake_phase(**kwargs):
+        submit = next(tool for tool in kwargs["tools"] if tool.name == "submit_check")
+        result = json.loads(
+            asyncio.run(
+                submit.on_invoke_tool(
+                    None,
+                    json.dumps(
+                        {
+                            "check_id": "check.vendor",
+                            "note": "valid work admitted before the SDK error",
+                        }
+                    ),
+                )
+            )
+        )
+        assert result["ok"] is True
+        raise UserError("invalid structured tool call after valid work")
+
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+
+    summary, candidate = runtime.execute_plan(
+        plan=plan,
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        sandbox=frozen,
+        focus_check_id="check.vendor",
+    )
+
+    assert summary.execution_status == "PARTIAL"
+    assert summary.completed_check_ids == ["check.vendor"]
+    assert candidate is not frozen
+    assert [item.check_id for item in candidate.submissions] == ["check.vendor"]
+    assert frozen.submissions == ()
+
+
+@pytest.mark.parametrize("failure_type", [UserError, ModelBehaviorError])
+def test_executor_protocol_error_before_first_submission_is_reraised(
+    tmp_path,
+    monkeypatch,
+    failure_type,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
     sandbox = EvidenceSandbox(sources=[], allowed_check_ids=["check.vendor"])
-    failure = UserError("executor failed before submitting work")
+    failure = failure_type("executor failed before submitting work")
     monkeypatch.setattr(runtime, "_run_phase", lambda **_kwargs: (_ for _ in ()).throw(failure))
 
-    with pytest.raises(UserError) as caught:
+    with pytest.raises(failure_type) as caught:
         runtime.execute_plan(
             plan=_plan(),
             prepared_sources=[],
             policy_excerpt=policy_excerpt_for(["vendor_identity"]),
             sandbox=sandbox,
+            focus_check_id="check.vendor",
         )
 
     assert caught.value is failure
     assert not sandbox.submissions
+
+
+def test_executor_max_turns_without_submission_returns_uncommittable_candidate(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    frozen = EvidenceSandbox(sources=[], allowed_check_ids=["check.vendor"])
+    failure = MaxTurnsExceeded("executor exhausted turns before submitting work")
+    monkeypatch.setattr(
+        runtime,
+        "_run_phase",
+        lambda **_kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    summary, candidate = runtime.execute_plan(
+        plan=_plan(),
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        sandbox=frozen,
+        focus_check_id="check.vendor",
+    )
+
+    assert summary.execution_status == "PARTIAL"
+    assert summary.completed_check_ids == []
+    assert summary.unresolved_check_ids == ["check.vendor"]
+    assert candidate is not frozen
+    assert candidate.submissions == ()
+    assert frozen.submissions == ()
+
+
+def test_executor_max_turns_after_valid_submission_preserves_partial_work(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+
+    def fake_phase(**kwargs):
+        submit = next(tool for tool in kwargs["tools"] if tool.name == "submit_check")
+        result = json.loads(
+            asyncio.run(
+                submit.on_invoke_tool(
+                    None,
+                    json.dumps(
+                        {
+                            "check_id": "check.one",
+                            "note": "valid work admitted before the turn budget was exhausted",
+                        }
+                    ),
+                )
+            )
+        )
+        assert result["ok"] is True
+        raise MaxTurnsExceeded("Max turns exceeded after one valid submission")
+
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+
+    frozen = EvidenceSandbox(
+        sources=[],
+        allowed_check_ids=["check.one", "check.two"],
+    )
+    summary, sandbox = runtime.execute_plan(
+        plan=_two_check_plan(),
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        sandbox=frozen,
+        focus_check_id="check.one",
+    )
+
+    assert summary.execution_status == "COMPLETED"
+    assert summary.completed_check_ids == ["check.one"]
+    assert summary.unresolved_check_ids == []
+    assert [submission.check_id for submission in sandbox.submissions] == ["check.one"]
+
+
+def test_focused_executor_preserves_submitted_check_and_discards_unowned_tail(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    plan = _two_check_plan()
+    prepared = _sources()
+    source = prepared[0].record
+    frozen = EvidenceSandbox(
+        sources=[source],
+        allowed_check_ids=["check.one", "check.two"],
+    )
+    frozen.read_source(source.source_id)
+    tool_results: dict[str, dict] = {}
+
+    def invoke(tools, name: str, payload: dict) -> dict:
+        tool = next(item for item in tools if item.name == name)
+        return json.loads(asyncio.run(tool.on_invoke_tool(None, json.dumps(payload))))
+
+    def fake_phase(**kwargs):
+        tools = kwargs["tools"]
+        common = {
+            "subject": "vendor:V-100",
+            "value": "ACTIVE",
+            "source_id": source.source_id,
+            "quote": "Vendor V-100 is ACTIVE.",
+            "locator": "line 1",
+        }
+        tool_results["owned"] = invoke(
+            tools,
+            "bind_claim",
+            {**common, "predicate": "status"},
+        )
+        tool_results["submit"] = invoke(
+            tools,
+            "submit_check",
+            {
+                "check_id": "check.one",
+                "claim_ids": [tool_results["owned"]["claim"]["id"]],
+            },
+        )
+        tool_results["orphan"] = invoke(
+            tools,
+            "bind_claim",
+            {**common, "predicate": "future_status"},
+        )
+        raise MaxTurnsExceeded("Max turns exceeded with an unsubmitted focused tail")
+
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+
+    summary, result = runtime.execute_plan(
+        plan=plan,
+        prepared_sources=prepared,
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        sandbox=frozen,
+        focus_check_id="check.one",
+    )
+
+    assert tool_results["submit"]["ok"] is True
+    assert result is not frozen
+    assert [item.check_id for item in result.submissions] == ["check.one"]
+    assert [item.id for item in result.evidence_ir.claims] == [
+        tool_results["owned"]["claim"]["id"]
+    ]
+    assert summary.completed_check_ids == ["check.one"]
+    assert summary.unresolved_check_ids == []
+
+    rebound = result.bind_claim(
+        subject="vendor:V-100",
+        predicate="future_status",
+        value="ACTIVE",
+        source_id=source.source_id,
+        quote="Vendor V-100 is ACTIVE.",
+        locator="line 1",
+    )
+    assert rebound["ok"] is True
+    assert rebound["created"] is True
 
 
 def test_submit_check_extra_field_is_not_admitted_or_counted_as_success() -> None:
@@ -712,7 +1463,7 @@ def test_submit_check_extra_field_is_not_admitted_or_counted_as_success() -> Non
     assert events == successful_events
 
 
-def test_executor_does_not_recover_model_behavior_error_after_submission(
+def test_executor_model_behavior_error_after_submission_returns_private_candidate(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -732,16 +1483,18 @@ def test_executor_does_not_recover_model_behavior_error_after_submission(
 
     monkeypatch.setattr(runtime, "_run_phase", fake_phase)
 
-    with pytest.raises(ModelBehaviorError) as caught:
-        runtime.execute_plan(
-            plan=_plan(),
-            prepared_sources=[],
-            policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-            sandbox=sandbox,
-        )
+    summary, candidate = runtime.execute_plan(
+        plan=_plan(),
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        sandbox=sandbox,
+        focus_check_id="check.vendor",
+    )
 
-    assert caught.value is failure
-    assert len(sandbox.submissions) == 1
+    assert summary.execution_status == "PARTIAL"
+    assert candidate is not sandbox
+    assert [item.check_id for item in candidate.submissions] == ["check.vendor"]
+    assert sandbox.submissions == ()
 
 
 def test_verifier_overreach_is_preserved_for_kernel_diagnosis(tmp_path, monkeypatch) -> None:
@@ -783,41 +1536,10 @@ def test_verifier_overreach_is_preserved_for_kernel_diagnosis(tmp_path, monkeypa
         plan=plan,
         sandbox=sandbox,
         policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        focus_check_id="check.vendor",
     )
 
     assert assessments[0].accepted_witness_ids == ["witness-not-submitted"]
-
-
-def test_sandbox_material_hash_changes_when_only_a_witness_is_added() -> None:
-    record = prepare_sources(
-        [{"attachment_id": "att-number", "content": "Amount EUR 10.00."}]
-    )[0].record
-    sandbox = EvidenceSandbox(
-        sources=[record],
-        allowed_check_ids=["check.total"],
-        allowed_check_facets={"check.total": ["final_total"]},
-    )
-    sandbox.read_source(record.source_id)
-    claim_id = sandbox.bind_claim(
-        subject="invoice:1",
-        predicate="amount",
-        value="10.00",
-        source_id=record.source_id,
-        quote="Amount EUR 10.00.",
-        locator="line 1",
-        attributes={"currency": "EUR"},
-    )["claim"]["id"]
-    before = _sandbox_proof_material_hash(sandbox)
-
-    result = sandbox.compute_witness(
-        check_id="check.total",
-        facet_ref="final_total",
-        operation="SUM",
-        refs=[{"kind": "CLAIM", "ref_id": claim_id}],
-    )
-
-    assert result["ok"] is True
-    assert _sandbox_proof_material_hash(sandbox) != before
 
 
 def test_execution_status_is_derived_from_final_full_plan_coverage() -> None:
@@ -906,6 +1628,30 @@ def test_compiler_phase_retries_one_transient_connection_failure_with_fresh_clie
     assert llm.calls[1].retry_of == "task_compiler:transport_attempt_1"
 
 
+def test_compiler_phase_sends_configured_high_reasoning_to_deepseek(tmp_path, monkeypatch) -> None:
+    expected = _plan()
+    observed_extra_bodies: list[dict] = []
+
+    def fake_run_agent_sync(agent, *_args, **_kwargs):
+        observed_extra_bodies.append(agent.model_settings.extra_body)
+        return SimpleNamespace(final_output=expected, raw_responses=[])
+
+    monkeypatch.setattr("app.compiler_runtime.runtime.run_agent_sync", fake_run_agent_sync)
+    settings = _settings(tmp_path).model_copy(update={"llm_thinking_type": "high"})
+    runtime = EvidenceCompilerRuntime(LlmClient(settings))
+
+    runtime._run_phase(  # noqa: SLF001
+        name="task_compiler",
+        prompt_file="task_compiler.md",
+        payload={"test": "reasoning contract"},
+        output_type=ProofPlan,
+        max_turns=1,
+    )
+
+    assert observed_extra_bodies == [{"reasoning": {"effort": "high"}}]
+    assert runtime.llm.calls[-1].thinking_type == "high"
+
+
 def test_compiler_stages_emit_public_progress_before_and_after_work(tmp_path, monkeypatch) -> None:
     events: list[tuple[str, dict, str]] = []
     runtime = EvidenceCompilerRuntime(
@@ -921,10 +1667,25 @@ def test_compiler_stages_emit_public_progress_before_and_after_work(tmp_path, mo
             return _plan()
         if name == "executor":
             assert kwargs["max_turns"] == EXECUTOR_MAX_TURNS == 10
+            submit = next(tool for tool in kwargs["tools"] if tool.name == "submit_check")
+            submitted = json.loads(
+                asyncio.run(
+                    submit.on_invoke_tool(
+                        None,
+                        json.dumps(
+                            {
+                                "check_id": "check.vendor",
+                                "note": "source did not establish the requested identity",
+                            }
+                        ),
+                    )
+                )
+            )
+            assert submitted["ok"] is True
             return ExecutorSummary(
-                completed_check_ids=[],
-                unresolved_check_ids=["check.vendor"],
-                summary="nothing admitted",
+                completed_check_ids=["check.vendor"],
+                unresolved_check_ids=[],
+                summary="note-only NOT_FOUND candidate",
             )
         return VerificationBatch(
             assessments=[
@@ -933,6 +1694,7 @@ def test_compiler_stages_emit_public_progress_before_and_after_work(tmp_path, mo
                     status="NOT_FOUND",
                     examined_source_ids=[_sources()[0].record.source_id],
                     missing_fact="grounded vendor identity",
+                    gap_code="SOURCE_MISSING",
                 )
             ]
         )
@@ -1055,7 +1817,7 @@ def test_focused_executor_cannot_write_another_check_or_leak_unowned_claim(
         prepared_sources=prepared,
         policy_excerpt=policy_excerpt_for(["vendor_identity"]),
         sandbox=frozen,
-        focus_check_ids=["check.one"],
+        focus_check_id="check.one",
     )
 
     assert tool_results["bind"]["ok"] is True
@@ -1075,134 +1837,6 @@ def test_focused_executor_cannot_write_another_check_or_leak_unowned_claim(
     assert boundary["orphan_claim_ids"] == [tool_results["bind"]["claim"]["id"]]
 
 
-def test_focused_repair_of_a_cannot_upgrade_frozen_b(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
-    plan = _two_check_plan()
-    prepared = _sources()
-    source = prepared[0].record
-    hostile_submit_results: list[dict] = []
-
-    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
-
-    def invoke(tools, name: str, payload: dict) -> dict:
-        tool = next(item for item in tools if item.name == name)
-        return json.loads(
-            asyncio.run(tool.on_invoke_tool(None, json.dumps(payload)))
-        )
-
-    def fake_phase(**kwargs):
-        assert kwargs["name"] == "executor"
-        focus = kwargs["payload"]["focus_check_ids"]
-        tools = kwargs["tools"]
-        if not focus:
-            invoke(tools, "read_source", {"source_id": source.source_id})
-            for check_id in ("check.one", "check.two"):
-                assert invoke(
-                    tools,
-                    "submit_check",
-                    {"check_id": check_id, "note": "initially unresolved"},
-                )["ok"] is True
-            return ExecutorSummary(
-                completed_check_ids=["check.one", "check.two"],
-                summary="initial submissions",
-            )
-
-        assert focus == ["check.one"]
-        claim = invoke(
-            tools,
-            "bind_claim",
-            {
-                "subject": "vendor:V-100",
-                "predicate": "status",
-                "value": "ACTIVE",
-                "source_id": source.source_id,
-                "quote": "Vendor V-100 is ACTIVE.",
-                "locator": "line 1",
-            },
-        )["claim"]
-        hostile_submit_results.append(
-            invoke(
-                tools,
-                "submit_check",
-                {
-                    "check_id": "check.two",
-                    "claim_ids": [claim["id"]],
-                    "note": "attempted frozen-CHECK upgrade",
-                },
-            )
-        )
-        assert invoke(
-            tools,
-            "submit_check",
-            {
-                "check_id": "check.one",
-                "claim_ids": [claim["id"]],
-                "note": "valid focused repair",
-            },
-        )["ok"] is True
-        return ExecutorSummary(
-            completed_check_ids=["check.one"],
-            summary="focused repair",
-        )
-
-    def fake_verify(**kwargs):
-        if kwargs.get("focus_check_ids"):
-            claim_ids = [item.id for item in kwargs["sandbox"].evidence_ir.claims]
-            return [
-                CheckAssessment(
-                    check_id="check.one",
-                    claim_ids=claim_ids,
-                    source_ids=[source.source_id],
-                    examined_source_ids=[source.source_id],
-                    reason="A was repaired",
-                    status="SUPPORTED",
-                )
-            ]
-        return [
-            CheckAssessment(
-                check_id=check_id,
-                missing_fact=f"evidence for {check_id}",
-                reason="frozen initial NOT_FOUND",
-                status="NOT_FOUND",
-            )
-            for check_id in ("check.one", "check.two")
-        ]
-
-    terminal_gap = CompiledProof(
-        diagnostics=[
-            CompilationDiagnostic(
-                code="TERMINAL_WITNESS_REQUIRED",
-                node_id="check.one",
-                message="A needs one terminal",
-            )
-        ]
-    )
-    compiled = iter([terminal_gap, CompiledProof()])
-    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
-    monkeypatch.setattr(runtime, "verify", fake_verify)
-    monkeypatch.setattr(
-        "app.compiler_runtime.runtime.compile_review_artifact",
-        lambda *_args, **_kwargs: next(compiled),
-    )
-
-    result = runtime.run(
-        active_requirement_ids=["vendor_identity"],
-        prepared_sources=prepared,
-        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-    )
-
-    assert hostile_submit_results[0]["ok"] is False
-    assert hostile_submit_results[0]["error"]["code"] == "CHECK_OUTSIDE_FOCUS"
-    assessment_by_id = {item.check_id: item for item in result.artifact.assessments}
-    assert assessment_by_id["check.one"].status == "SUPPORTED"
-    assert assessment_by_id["check.two"].status == "NOT_FOUND"
-    assert assessment_by_id["check.two"].reason == "frozen initial NOT_FOUND"
-    assert result.artifact.submitted_claim_refs["check.two"] == []
-    assert len(result.artifact.submitted_claim_refs["check.one"]) == 1
-    assert result.retry_count == 1
 
 
 def test_task_compiler_planning_context_is_independent_of_source_identity() -> None:
@@ -1250,60 +1884,60 @@ class _ScriptedRuntime(EvidenceCompilerRuntime):
     def compile_task(self, **_kwargs):
         return _plan()
 
-    def execute_plan(self, *, plan, prepared_sources, policy_excerpt, sandbox=None, focus_check_ids=(), hook_feedback=()):
-        del policy_excerpt, hook_feedback
+    def execute_plan(
+        self,
+        *,
+        plan,
+        prepared_sources,
+        policy_excerpt,
+        sandbox,
+        focus_check_id,
+        upstream_frontier_results=(),
+        hook_feedback=(),
+    ):
+        del policy_excerpt, upstream_frontier_results, hook_feedback
         self.execute_calls += 1
-        if sandbox is None:
-            record = prepared_sources[0].record
-            sandbox = EvidenceSandbox(
-                sources=[record],
-                allowed_check_ids=["check.vendor"],
-                evidence_ir=EvidenceIR(
-                    source_ids=[record.source_id],
-                    source_fingerprints={
-                        record.source_id: hashlib.sha256(record.content.encode("utf-8")).hexdigest()
-                    },
-                ),
-            )
-            sandbox.read_source(record.source_id)
-        if self.execute_calls == 1 or self.resolve_on_retry:
-            record = prepared_sources[0].record
-            sandbox.bind_claim(
-                subject="vendor:V-100",
-                predicate="status",
-                value="ACTIVE" if self.execute_calls == 1 else "identity_confirmed",
-                source_id=record.source_id,
-                quote="Vendor V-100 is ACTIVE.",
-                locator="line 3",
-                confidence="high",
-            )
-            sandbox.submit_check(
-                check_id="check.vendor",
-                claim_ids=[item.id for item in sandbox.evidence_ir.claims],
-                note="grounded source read",
-            )
+        assert focus_check_id == "check.vendor"
+        candidate = copy.deepcopy(sandbox)
+        record = prepared_sources[0].record
+        candidate.read_source(record.source_id)
+        claim = candidate.bind_claim(
+            subject="vendor:V-100",
+            predicate="status",
+            value="ACTIVE",
+            source_id=record.source_id,
+            quote="Vendor V-100 is ACTIVE.",
+            locator="line 3",
+            confidence="high",
+        )["claim"]
+        candidate.submit_check(
+            check_id=focus_check_id,
+            claim_ids=[claim["id"]],
+            note="grounded source read",
+        )
         return (
             ExecutorSummary(
-                completed_check_ids=[] if focus_check_ids else ["check.vendor"],
-                unresolved_check_ids=list(focus_check_ids),
-                summary="scripted executor",
+                completed_check_ids=[focus_check_id],
+                summary="scripted single-CHECK executor",
             ),
-            sandbox,
+            candidate,
         )
 
-    def verify(self, *, plan, sandbox, policy_excerpt):
-        del plan, policy_excerpt
+    def verify(
+        self,
+        *,
+        plan,
+        sandbox,
+        policy_excerpt,
+        focus_check_id,
+        upstream_frontier_results=(),
+        repair_feedback=(),
+    ):
+        del plan, policy_excerpt, upstream_frontier_results
+        del repair_feedback
+        assert focus_check_id == "check.vendor"
         self.verify_calls += 1
         claim_ids = [item.id for item in sandbox.evidence_ir.claims]
-        if self.verify_calls == 1 and self.resolve_on_retry:
-            return [
-                CheckAssessment(
-                    check_id="check.vendor",
-                    status="NOT_FOUND",
-                    examined_source_ids=list(sandbox.evidence_ir.source_ids),
-                    missing_fact="a second grounded identity fact",
-                )
-            ]
         return [
             CheckAssessment(
                 check_id="check.vendor",
@@ -1319,7 +1953,7 @@ class _ScriptedRuntime(EvidenceCompilerRuntime):
 class _DecisiveAnyRuntime(EvidenceCompilerRuntime):
     def __init__(self, llm: LlmClient) -> None:
         super().__init__(llm)
-        self.execute_calls = 0
+        self.execute_calls: list[str] = []
 
     def compile_task(self, **_kwargs):
         return ProofPlan(
@@ -1344,23 +1978,25 @@ class _DecisiveAnyRuntime(EvidenceCompilerRuntime):
             ],
         )
 
-    def execute_plan(self, *, plan, prepared_sources, policy_excerpt, sandbox=None, **_kwargs):
-        del plan, policy_excerpt
-        self.execute_calls += 1
-        if sandbox is None:
-            record = prepared_sources[0].record
-            sandbox = EvidenceSandbox(
-                sources=[record],
-                allowed_check_ids=["check.primary", "check.alternative"],
-                evidence_ir=EvidenceIR(
-                    source_ids=[record.source_id],
-                    source_fingerprints={
-                        record.source_id: hashlib.sha256(record.content.encode("utf-8")).hexdigest()
-                    },
-                ),
-            )
-            sandbox.read_source(record.source_id)
-            bound = sandbox.bind_claim(
+    def execute_plan(
+        self,
+        *,
+        plan,
+        prepared_sources,
+        policy_excerpt,
+        sandbox,
+        focus_check_id,
+        upstream_frontier_results=(),
+        hook_feedback=(),
+    ):
+        del plan, policy_excerpt, upstream_frontier_results
+        del hook_feedback
+        self.execute_calls.append(focus_check_id)
+        candidate = copy.deepcopy(sandbox)
+        record = prepared_sources[0].record
+        candidate.read_source(record.source_id)
+        if focus_check_id == "check.primary":
+            bound = candidate.bind_claim(
                 subject="vendor:V-100",
                 predicate="identity",
                 value="V-100",
@@ -1369,15 +2005,36 @@ class _DecisiveAnyRuntime(EvidenceCompilerRuntime):
                 locator="line 5",
                 confidence="high",
             )
-            sandbox.submit_check(
+            candidate.submit_check(
                 check_id="check.primary",
                 claim_ids=[bound["claim"]["id"]],
             )
-            sandbox.submit_check(check_id="check.alternative", note="no alternative source")
-        return ExecutorSummary(summary="scripted decisive ANY"), sandbox
+        else:
+            candidate.submit_check(check_id=focus_check_id, note="no alternative source")
+        return ExecutorSummary(completed_check_ids=[focus_check_id], summary="single ANY leaf"), candidate
 
-    def verify(self, *, plan, sandbox, policy_excerpt):
-        del plan, policy_excerpt
+    def verify(
+        self,
+        *,
+        plan,
+        sandbox,
+        policy_excerpt,
+        focus_check_id,
+        upstream_frontier_results=(),
+        repair_feedback=(),
+    ):
+        del plan, policy_excerpt, upstream_frontier_results
+        del repair_feedback
+        if focus_check_id == "check.alternative":
+            return [
+                CheckAssessment(
+                    check_id=focus_check_id,
+                    status="NOT_FOUND",
+                    examined_source_ids=list(sandbox.evidence_ir.source_ids),
+                    missing_fact="an alternative source",
+                    gap_code="SOURCE_MISSING",
+                )
+            ]
         claim = sandbox.evidence_ir.claims[0]
         return [
             CheckAssessment(
@@ -1386,12 +2043,6 @@ class _DecisiveAnyRuntime(EvidenceCompilerRuntime):
                 claim_ids=[claim.id],
                 source_ids=[claim.source_id],
                 examined_source_ids=list(sandbox.evidence_ir.source_ids),
-            ),
-            CheckAssessment(
-                check_id="check.alternative",
-                status="NOT_FOUND",
-                examined_source_ids=list(sandbox.evidence_ir.source_ids),
-                missing_fact="an alternative source",
             ),
         ]
 
@@ -1544,7 +2195,6 @@ def test_policy_activation_and_unconfigured_values_stay_declarative() -> None:
 def test_policy_expands_requirement_premises_in_stable_order() -> None:
     expected = ["vendor_identity_active", "vendor_identity"]
 
-    assert expand_active_requirements(["vendor_identity_active"]) == expected
     assert expand_active_requirements(["vendor_identity_active"]) == expected
     assert expand_active_requirements(["vendor_identity_active", "vendor_identity_active"]) == expected
 
@@ -2097,7 +2747,7 @@ def test_flipkart_contradiction_is_consistent_across_proof_review_and_patch() ->
     assert review["source_traceability"] == "original_document"
 
 
-def test_runtime_does_not_retry_unresolved_leaf_below_decisive_any_root(tmp_path) -> None:
+def test_runtime_executes_every_leaf_below_decisive_any_root(tmp_path) -> None:
     runtime = _DecisiveAnyRuntime(LlmClient(_settings(tmp_path)))
 
     result = runtime.run(
@@ -2107,28 +2757,8 @@ def test_runtime_does_not_retry_unresolved_leaf_below_decisive_any_root(tmp_path
     )
 
     assert result.proof.decision_for("vendor_identity").status == "SUPPORTED"
-    assert result.proof.obligations == []
     assert result.retry_count == 0
-    assert runtime.execute_calls == 1
-
-
-def test_runtime_does_not_retry_optional_not_found_requirement(tmp_path) -> None:
-    runtime = _ScriptedRuntime(LlmClient(_settings(tmp_path)), resolve_on_retry=True)
-
-    result = runtime.run(
-        active_requirement_ids=["vendor_identity"],
-        prepared_sources=_sources(),
-        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-        requirement_requiredness={"vendor_identity": False},
-    )
-
-    assert result.proof.decision_for("vendor_identity").status == "NOT_FOUND"
-    assert result.proof.obligations
-    assert all(item.blocking is False for item in result.proof.obligations)
-    assert result.retry_count == 0
-    assert runtime.execute_calls == 1
-    assert runtime.verify_calls == 1
-    assert result.review_result["suggested_patch"]["next_questions"]
+    assert runtime.execute_calls == ["check.primary", "check.alternative"]
 
 
 def test_verifier_receives_full_sources_and_only_per_check_submitted_claims(
@@ -2195,7 +2825,12 @@ def test_verifier_receives_full_sources_and_only_per_check_submitted_claims(
     runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
     monkeypatch.setattr(runtime, "_run_phase", fake_phase)
 
-    runtime.verify(plan=_plan(), sandbox=sandbox, policy_excerpt=policy_excerpt_for(["vendor_identity"]))
+    runtime.verify(
+        plan=_plan(),
+        sandbox=sandbox,
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        focus_check_id="check.vendor",
+    )
 
     assert "claims" not in captured
     assert {item["source_id"]: item["content"] for item in captured["sources"]} == {
@@ -2258,7 +2893,7 @@ def test_verifier_focused_repair_exposes_only_named_checks_and_feedback(
         plan=plan,
         sandbox=sandbox,
         policy_excerpt={},
-        focus_check_ids=["check.two"],
+        focus_check_id="check.two",
         repair_feedback=feedback,
     )
 
@@ -2338,7 +2973,12 @@ def test_verifier_false_terminal_link_conflict_is_observed_but_not_auto_repaired
 
     monkeypatch.setattr(runtime, "_run_phase", fake_phase)
 
-    assessments = runtime.verify(plan=plan, sandbox=sandbox, policy_excerpt={})
+    assessments = runtime.verify(
+        plan=plan,
+        sandbox=sandbox,
+        policy_excerpt={},
+        focus_check_id="check.threshold",
+    )
 
     # Runtime must not manufacture semantic polarity from this run's desired outcome.
     assert assessments[0].strong_status_links[0].true_status == "CONTRADICTED"
@@ -2357,7 +2997,7 @@ def test_verifier_false_terminal_link_conflict_is_observed_but_not_auto_repaired
     ]
 
 
-def test_verifier_reconciles_one_explicit_final_status_without_another_call(
+def test_focused_verifier_preserves_structured_status_for_kernel_review(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -2409,641 +3049,23 @@ def test_verifier_reconciles_one_explicit_final_status_without_another_call(
         plan=_plan(),
         sandbox=sandbox,
         policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        focus_check_id="check.vendor",
     )
 
     assert calls == 1
-    assert assessments[0].status == "CONTRADICTED"
+    assert assessments[0].status == "SUPPORTED"
 
 
-def test_runtime_retries_only_unresolved_checks_once(tmp_path) -> None:
-    runtime = _ScriptedRuntime(LlmClient(_settings(tmp_path)), resolve_on_retry=True)
-
-    result = runtime.run(
-        active_requirement_ids=["vendor_identity"],
-        prepared_sources=_sources(),
-        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-    )
-
-    assert result.proof.decision_for("vendor_identity").status == "SUPPORTED"
-    assert result.retry_count == 1
-    assert runtime.execute_calls == 2
-    assert runtime.verify_calls == 2
-    assert len(result.artifact.evidence_ir.claims) == 2
 
 
-def test_terminal_status_mismatch_routes_one_focused_verifier_repair(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    runtime_events: list[tuple[str, dict, str]] = []
-    runtime = EvidenceCompilerRuntime(
-        LlmClient(_settings(tmp_path)),
-        progress_sink=lambda kind, payload, action: runtime_events.append(
-            (kind, payload, action)
-        ),
-    )
-    plan = _plan()
-    sandbox = EvidenceSandbox(sources=[], allowed_check_ids=["check.vendor"])
-    sandbox.submit_check(check_id="check.vendor", note="typed proof already exists")
-    execute_calls = 0
-    verify_calls: list[dict] = []
-
-    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
-
-    def fake_execute(**_kwargs):
-        nonlocal execute_calls
-        execute_calls += 1
-        return (
-            ExecutorSummary(
-                completed_check_ids=["check.vendor"],
-                summary="scripted typed proof",
-            ),
-            sandbox,
-        )
-
-    def fake_verify(**kwargs):
-        verify_calls.append(kwargs)
-        repaired = bool(kwargs.get("focus_check_ids"))
-        return [
-            CheckAssessment(
-                check_id="check.vendor",
-                reason="repaired assessment" if repaired else "original assessment",
-                missing_fact="a terminal polarity",
-                gap_code="WITNESS_MISSING",
-                status="NOT_FOUND",
-            )
-        ]
-
-    mismatch = CompiledProof(
-        obligations=[
-            ProofObligation(
-                id="obligation.check.vendor",
-                requirement_id="vendor_identity",
-                check_id="check.vendor",
-                missing_fact="re-evaluate terminal Witness polarity",
-            )
-        ],
-        diagnostics=[
-            CompilationDiagnostic(
-                code="TERMINAL_WITNESS_STATUS_MISMATCH",
-                node_id="check.vendor",
-                message="terminal result maps to the opposite strong status",
-            )
-        ],
-    )
-    compiled = iter([mismatch, CompiledProof()])
-    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
-    monkeypatch.setattr(runtime, "verify", fake_verify)
-    monkeypatch.setattr(
-        "app.compiler_runtime.runtime.compile_review_artifact",
-        lambda *_args, **_kwargs: next(compiled),
-    )
-
-    result = runtime.run(
-        active_requirement_ids=["vendor_identity"],
-        prepared_sources=[],
-        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-    )
-
-    assert execute_calls == 1
-    assert len(verify_calls) == 2
-    assert "focus_check_ids" not in verify_calls[0]
-    assert verify_calls[1]["focus_check_ids"] == ["check.vendor"]
-    feedback = verify_calls[1]["repair_feedback"]
-    assert feedback[0]["diagnostic_code"] == "TERMINAL_WITNESS_STATUS_MISMATCH"
-    assert feedback[0]["previous_assessment"]["reason"] == "original assessment"
-    assert result.artifact.assessments[0].reason == "repaired assessment"
-    assert result.retry_count == 1
-    assert any(payload.get("status") == "repair_started" for _, payload, _ in runtime_events)
 
 
-def test_failed_terminal_status_repair_preserves_not_found_without_executor_retry(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    runtime_events: list[tuple[str, dict, str]] = []
-    runtime = EvidenceCompilerRuntime(
-        LlmClient(_settings(tmp_path)),
-        progress_sink=lambda kind, payload, action: runtime_events.append(
-            (kind, payload, action)
-        ),
-    )
-    plan = _plan()
-    sandbox = EvidenceSandbox(sources=[], allowed_check_ids=["check.vendor"])
-    sandbox.submit_check(check_id="check.vendor", note="typed proof already exists")
-    execute_calls = 0
-    verify_calls = 0
-
-    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
-
-    def fake_execute(**_kwargs):
-        nonlocal execute_calls
-        execute_calls += 1
-        return ExecutorSummary(completed_check_ids=["check.vendor"]), sandbox
-
-    def fake_verify(**kwargs):
-        nonlocal verify_calls
-        verify_calls += 1
-        if kwargs.get("focus_check_ids"):
-            raise ModelBehaviorError("focused repair remained malformed")
-        return [
-            CheckAssessment(
-                check_id="check.vendor",
-                reason="original fail-closed assessment",
-                missing_fact="a terminal polarity",
-                gap_code="WITNESS_MISSING",
-                status="NOT_FOUND",
-            )
-        ]
-
-    mismatch = CompiledProof(
-        obligations=[
-            ProofObligation(
-                id="obligation.check.vendor",
-                requirement_id="vendor_identity",
-                check_id="check.vendor",
-                missing_fact="re-evaluate terminal Witness polarity",
-            )
-        ],
-        diagnostics=[
-            CompilationDiagnostic(
-                code="TERMINAL_WITNESS_STATUS_MISMATCH",
-                node_id="check.vendor",
-                message="terminal result maps to the opposite strong status",
-            )
-        ],
-    )
-    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
-    monkeypatch.setattr(runtime, "verify", fake_verify)
-    monkeypatch.setattr(
-        "app.compiler_runtime.runtime.compile_review_artifact",
-        lambda *_args, **_kwargs: mismatch,
-    )
-
-    result = runtime.run(
-        active_requirement_ids=["vendor_identity"],
-        prepared_sources=[],
-        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-    )
-
-    assert execute_calls == 1
-    assert verify_calls == 2
-    assert result.proof is mismatch
-    assert result.artifact.assessments[0].reason == "original fail-closed assessment"
-    assert result.retry_count == 1
-    assert any(payload.get("status") == "repair_failed" for _, payload, _ in runtime_events)
 
 
-def test_terminal_witness_required_routes_one_focused_executor_repair_without_blocking(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    runtime_events: list[tuple[str, dict, str]] = []
-    runtime = EvidenceCompilerRuntime(
-        LlmClient(_settings(tmp_path)),
-        progress_sink=lambda kind, payload, action: runtime_events.append(
-            (kind, payload, action)
-        ),
-    )
-    plan = _plan()
-    prepared = _sources()
-    record = prepared[0].record
-    initial_sandbox = EvidenceSandbox(
-        sources=[record],
-        allowed_check_ids=["check.vendor"],
-        evidence_ir=EvidenceIR(
-            source_ids=[record.source_id],
-            source_fingerprints={
-                record.source_id: hashlib.sha256(record.content.encode("utf-8")).hexdigest()
-            },
-        ),
-    )
-    initial_sandbox.read_source(record.source_id)
-    initial_sandbox.submit_check(check_id="check.vendor", note="numeric proof only")
-    execute_calls: list[dict] = []
-    verify_calls: list[dict] = []
-
-    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
-
-    def fake_execute(**kwargs):
-        execute_calls.append(kwargs)
-        candidate = kwargs.get("sandbox")
-        if candidate is None:
-            return ExecutorSummary(completed_check_ids=["check.vendor"]), initial_sandbox
-        claim = candidate.bind_claim(
-            claim_id="claim.terminal.repair",
-            subject="vendor:V-100",
-            predicate="status",
-            value="ACTIVE",
-            source_id=record.source_id,
-            quote="Vendor V-100 is ACTIVE.",
-            locator="line 1",
-            confidence="high",
-        )["claim"]
-        candidate.submit_check(
-            check_id="check.vendor",
-            claim_ids=[claim["id"]],
-            note="terminal proof material added",
-        )
-        return ExecutorSummary(completed_check_ids=["check.vendor"]), candidate
-
-    def fake_verify(**kwargs):
-        verify_calls.append(kwargs)
-        if kwargs.get("focus_check_ids"):
-            claim_ids = [item.id for item in kwargs["sandbox"].evidence_ir.claims]
-            return [
-                CheckAssessment(
-                    check_id="check.vendor",
-                    status="SUPPORTED",
-                    claim_ids=claim_ids,
-                    source_ids=[record.source_id],
-                    examined_source_ids=[record.source_id],
-                    reason="focused terminal repair verified",
-                )
-            ]
-        return [
-            CheckAssessment(
-                check_id="check.vendor",
-                status="NOT_FOUND",
-                missing_fact="a replayable boolean terminal",
-                gap_code="WITNESS_MISSING",
-            )
-        ]
-
-    terminal_gap = CompiledProof(
-        diagnostics=[
-            CompilationDiagnostic(
-                code="TERMINAL_WITNESS_REQUIRED",
-                node_id="check.vendor",
-                message="a replayable boolean terminal is required",
-            )
-        ]
-    )
-    compiled = iter([terminal_gap, CompiledProof()])
-    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
-    monkeypatch.setattr(runtime, "verify", fake_verify)
-    monkeypatch.setattr(
-        "app.compiler_runtime.runtime.compile_review_artifact",
-        lambda *_args, **_kwargs: next(compiled),
-    )
-
-    result = runtime.run(
-        active_requirement_ids=["vendor_identity"],
-        prepared_sources=prepared,
-        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-    )
-
-    assert len(execute_calls) == 2
-    assert execute_calls[1]["focus_check_ids"] == ["check.vendor"]
-    assert execute_calls[1]["hook_feedback"][0]["diagnostic_code"] == (
-        "TERMINAL_WITNESS_REQUIRED"
-    )
-    assert len(verify_calls) == 2
-    assert verify_calls[1]["focus_check_ids"] == ["check.vendor"]
-    assert result.artifact.assessments[0].reason == "focused terminal repair verified"
-    assert result.retry_count == 1
-    assert len(result.artifact.evidence_ir.claims) == 1
-    assert initial_sandbox.evidence_ir.claims == []
-    assert any(
-        payload.get("status") == "terminal_repair_started"
-        for _, payload, _ in runtime_events
-    )
 
 
-def test_terminal_executor_repair_that_exposes_status_mismatch_gets_one_verifier_repair(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
-    plan = _plan()
-    prepared = _sources()
-    record = prepared[0].record
-    initial_sandbox = EvidenceSandbox(
-        sources=[record],
-        allowed_check_ids=["check.vendor"],
-        evidence_ir=EvidenceIR(
-            source_ids=[record.source_id],
-            source_fingerprints={
-                record.source_id: hashlib.sha256(record.content.encode("utf-8")).hexdigest()
-            },
-        ),
-    )
-    initial_sandbox.read_source(record.source_id)
-    initial_sandbox.submit_check(check_id="check.vendor", note="numeric proof only")
-    verify_calls: list[dict] = []
-
-    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
-
-    def fake_execute(**kwargs):
-        candidate = kwargs.get("sandbox")
-        if candidate is None:
-            return ExecutorSummary(completed_check_ids=["check.vendor"]), initial_sandbox
-        claim = candidate.bind_claim(
-            claim_id="claim.terminal.repair",
-            subject="vendor:V-100",
-            predicate="status",
-            value="ACTIVE",
-            source_id=record.source_id,
-            quote="Vendor V-100 is ACTIVE.",
-            locator="line 1",
-            confidence="high",
-        )["claim"]
-        candidate.submit_check(
-            check_id="check.vendor",
-            claim_ids=[claim["id"]],
-            note="terminal proof material added",
-        )
-        return ExecutorSummary(completed_check_ids=["check.vendor"]), candidate
-
-    def fake_verify(**kwargs):
-        verify_calls.append(kwargs)
-        diagnostic_code = (
-            kwargs.get("repair_feedback") or [{}]
-        )[0].get("diagnostic_code")
-        reason = {
-            None: "initial NOT_FOUND",
-            "TERMINAL_WITNESS_REQUIRED": "terminal exists but polarity is wrong",
-            "TERMINAL_WITNESS_STATUS_MISMATCH": "terminal polarity repaired",
-        }[diagnostic_code]
-        return [
-            CheckAssessment(
-                check_id="check.vendor",
-                status="NOT_FOUND" if diagnostic_code is None else "SUPPORTED",
-                reason=reason,
-                missing_fact="a replayable boolean terminal" if diagnostic_code is None else "",
-            )
-        ]
-
-    terminal_gap = CompiledProof(
-        diagnostics=[
-            CompilationDiagnostic(
-                code="TERMINAL_WITNESS_REQUIRED",
-                node_id="check.vendor",
-                message="a replayable boolean terminal is required",
-            )
-        ]
-    )
-    mismatch = CompiledProof(
-        diagnostics=[
-            CompilationDiagnostic(
-                code="TERMINAL_WITNESS_STATUS_MISMATCH",
-                node_id="check.vendor",
-                message="terminal result maps to the opposite strong status",
-            )
-        ]
-    )
-    compiled = iter([terminal_gap, mismatch, CompiledProof()])
-    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
-    monkeypatch.setattr(runtime, "verify", fake_verify)
-    monkeypatch.setattr(
-        "app.compiler_runtime.runtime.compile_review_artifact",
-        lambda *_args, **_kwargs: next(compiled),
-    )
-
-    result = runtime.run(
-        active_requirement_ids=["vendor_identity"],
-        prepared_sources=prepared,
-        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-    )
-
-    assert len(verify_calls) == 3
-    assert verify_calls[1]["repair_feedback"][0]["diagnostic_code"] == (
-        "TERMINAL_WITNESS_REQUIRED"
-    )
-    assert verify_calls[2]["repair_feedback"][0]["diagnostic_code"] == (
-        "TERMINAL_WITNESS_STATUS_MISMATCH"
-    )
-    assert result.proof.diagnostics == []
-    assert result.artifact.assessments[0].reason == "terminal polarity repaired"
-    assert result.retry_count == 2
 
 
-@pytest.mark.parametrize("repair_mode", ["no_change", "error"])
-def test_terminal_witness_repair_no_change_or_error_fails_closed_and_is_not_retried(
-    tmp_path,
-    monkeypatch,
-    repair_mode,
-) -> None:
-    runtime_events: list[tuple[str, dict, str]] = []
-    runtime = EvidenceCompilerRuntime(
-        LlmClient(_settings(tmp_path)),
-        progress_sink=lambda kind, payload, action: runtime_events.append(
-            (kind, payload, action)
-        ),
-    )
-    plan = _plan()
-    sandbox = EvidenceSandbox(sources=[], allowed_check_ids=["check.vendor"])
-    sandbox.submit_check(check_id="check.vendor", note="numeric proof only")
-    execute_calls: list[dict] = []
-    verify_calls = 0
-
-    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
-
-    def fake_execute(**kwargs):
-        execute_calls.append(kwargs)
-        if kwargs.get("sandbox") is None:
-            return ExecutorSummary(completed_check_ids=["check.vendor"]), sandbox
-        if repair_mode == "error":
-            raise ModelBehaviorError("focused Executor repair remained malformed")
-        return ExecutorSummary(completed_check_ids=["check.vendor"]), kwargs["sandbox"]
-
-    def fake_verify(**_kwargs):
-        nonlocal verify_calls
-        verify_calls += 1
-        return [
-            CheckAssessment(
-                check_id="check.vendor",
-                status="NOT_FOUND",
-                missing_fact="a replayable boolean terminal",
-                gap_code="WITNESS_MISSING",
-                reason="original fail-closed assessment",
-            )
-        ]
-
-    terminal_gap = CompiledProof(
-        obligations=[
-            ProofObligation(
-                id="obligation.check.vendor",
-                requirement_id="vendor_identity",
-                check_id="check.vendor",
-                missing_fact="a replayable boolean terminal",
-            )
-        ],
-        diagnostics=[
-            CompilationDiagnostic(
-                code="TERMINAL_WITNESS_REQUIRED",
-                node_id="check.vendor",
-                message="a replayable boolean terminal is required",
-            )
-        ],
-    )
-    compile_calls = 0
-
-    def fake_compile(*_args, **_kwargs):
-        nonlocal compile_calls
-        compile_calls += 1
-        return terminal_gap
-
-    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
-    monkeypatch.setattr(runtime, "verify", fake_verify)
-    monkeypatch.setattr(
-        "app.compiler_runtime.runtime.compile_review_artifact",
-        fake_compile,
-    )
-
-    result = runtime.run(
-        active_requirement_ids=["vendor_identity"],
-        prepared_sources=[],
-        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-    )
-
-    # Initial execution plus one focused terminal attempt. The blocking retry
-    # must not make a third call for the same CHECK.
-    assert len(execute_calls) == 2
-    assert execute_calls[1]["focus_check_ids"] == ["check.vendor"]
-    assert verify_calls == 1
-    assert compile_calls == 1
-    assert result.proof is terminal_gap
-    assert result.artifact.assessments[0].reason == "original fail-closed assessment"
-    assert result.retry_count == 1
-    expected_status = (
-        "terminal_repair_no_change" if repair_mode == "no_change" else "terminal_repair_failed"
-    )
-    assert any(
-        payload.get("status") == expected_status for _, payload, _ in runtime_events
-    )
-
-
-def test_blocking_retry_that_exposes_terminal_gap_gets_one_focused_executor_repair(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
-    plan = _plan()
-    prepared = _sources()
-    record = prepared[0].record
-    initial_sandbox = EvidenceSandbox(
-        sources=[record],
-        allowed_check_ids=["check.vendor"],
-        evidence_ir=EvidenceIR(
-            source_ids=[record.source_id],
-            source_fingerprints={
-                record.source_id: hashlib.sha256(record.content.encode("utf-8")).hexdigest()
-            },
-        ),
-    )
-    initial_sandbox.read_source(record.source_id)
-    execute_calls: list[dict] = []
-    verify_calls: list[dict] = []
-
-    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
-
-    def fake_execute(**kwargs):
-        execute_calls.append(kwargs)
-        candidate = kwargs.get("sandbox")
-        if candidate is None:
-            return ExecutorSummary(completed_check_ids=[]), initial_sandbox
-        call_number = len(execute_calls)
-        claim = candidate.bind_claim(
-            claim_id=f"claim.retry.{call_number}",
-            subject="vendor:V-100",
-            predicate=f"retry_fact_{call_number}",
-            value=f"fact-{call_number}",
-            source_id=record.source_id,
-            quote="Vendor V-100 is ACTIVE.",
-            locator="line 1",
-            confidence="high",
-        )["claim"]
-        candidate.submit_check(
-            check_id="check.vendor",
-            claim_ids=[item.id for item in candidate.evidence_ir.claims],
-            note=f"retry material {call_number}",
-        )
-        return ExecutorSummary(completed_check_ids=["check.vendor"]), candidate
-
-    def fake_verify(**kwargs):
-        verify_calls.append(kwargs)
-        diagnostic_code = (
-            kwargs.get("repair_feedback") or [{}]
-        )[0].get("diagnostic_code")
-        claim_ids = [item.id for item in kwargs["sandbox"].evidence_ir.claims]
-        return [
-            CheckAssessment(
-                check_id="check.vendor",
-                status="SUPPORTED" if claim_ids else "NOT_FOUND",
-                claim_ids=claim_ids,
-                source_ids=[record.source_id] if claim_ids else [],
-                examined_source_ids=[record.source_id],
-                missing_fact="" if claim_ids else "initial evidence gap",
-                reason={
-                    "TERMINAL_WITNESS_REQUIRED": "terminal exists but polarity is wrong",
-                    "TERMINAL_WITNESS_STATUS_MISMATCH": "terminal polarity repaired",
-                }.get(diagnostic_code, "full verification"),
-            )
-        ]
-
-    blocking_gap = CompiledProof(
-        obligations=[
-            ProofObligation(
-                id="obligation.check.vendor",
-                requirement_id="vendor_identity",
-                check_id="check.vendor",
-                missing_fact="initial evidence gap",
-            )
-        ]
-    )
-    terminal_gap = CompiledProof(
-        diagnostics=[
-            CompilationDiagnostic(
-                code="TERMINAL_WITNESS_REQUIRED",
-                node_id="check.vendor",
-                message="a replayable boolean terminal is required",
-            )
-        ]
-    )
-    mismatch = CompiledProof(
-        diagnostics=[
-            CompilationDiagnostic(
-                code="TERMINAL_WITNESS_STATUS_MISMATCH",
-                node_id="check.vendor",
-                message="terminal result maps to the opposite strong status",
-            )
-        ]
-    )
-    compiled = iter([blocking_gap, terminal_gap, mismatch, CompiledProof()])
-    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
-    monkeypatch.setattr(runtime, "verify", fake_verify)
-    monkeypatch.setattr(
-        "app.compiler_runtime.runtime.compile_review_artifact",
-        lambda *_args, **_kwargs: next(compiled),
-    )
-
-    result = runtime.run(
-        active_requirement_ids=["vendor_identity"],
-        prepared_sources=prepared,
-        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
-    )
-
-    assert len(execute_calls) == 3
-    assert execute_calls[1]["focus_check_ids"] == ["check.vendor"]
-    assert "diagnostic_code" not in execute_calls[1]["hook_feedback"][0]
-    assert execute_calls[2]["focus_check_ids"] == ["check.vendor"]
-    assert execute_calls[2]["hook_feedback"][0]["diagnostic_code"] == (
-        "TERMINAL_WITNESS_REQUIRED"
-    )
-    assert len(verify_calls) == 4
-    assert "focus_check_ids" not in verify_calls[1]
-    assert verify_calls[2]["focus_check_ids"] == ["check.vendor"]
-    assert verify_calls[2]["repair_feedback"][0]["diagnostic_code"] == (
-        "TERMINAL_WITNESS_REQUIRED"
-    )
-    assert verify_calls[3]["focus_check_ids"] == ["check.vendor"]
-    assert verify_calls[3]["repair_feedback"][0]["diagnostic_code"] == (
-        "TERMINAL_WITNESS_STATUS_MISMATCH"
-    )
-    assert result.artifact.assessments[0].reason == "terminal polarity repaired"
-    assert len(result.artifact.evidence_ir.claims) == 2
-    assert result.retry_count == 3
 
 
 def test_completion_hook_stops_only_after_every_check_is_submitted() -> None:
@@ -3098,38 +3120,6 @@ def test_retry_completion_hook_requires_a_new_submission_for_the_focus_check() -
     assert result.final_output.unresolved_check_ids == ["check.one"]
 
 
-def test_unconfigured_policy_hole_is_not_retried_by_evidence_executor() -> None:
-    plan = ProofPlan(
-        plan_id="policy-hole",
-        objective="Keep policy administration outside the evidence sandbox.",
-        active_requirement_ids=["no_active_duplicate"],
-        policy_refs=["duplicate_search_window"],
-        roots={"no_active_duplicate": "check.window"},
-        nodes=[
-            ProofNode(
-                id="check.window",
-                kind="CHECK",
-                statement="The duplicate search window is configured.",
-                requirement_refs=["no_active_duplicate"],
-                policy_refs=["duplicate_search_window"],
-            )
-        ],
-    )
-
-    assert _retryable_checks(
-        plan,
-        ["check.window"],
-        policy_excerpt_for(["no_active_duplicate"]),
-    ) == []
-    artifact = _artifact(
-        plan=plan,
-        evidence_ir=EvidenceIR(),
-        assessments=[],
-        submitted_claim_refs={"check.window": []},
-        policy_excerpt=policy_excerpt_for(["no_active_duplicate"]),
-        model="fixture",
-    )
-    assert artifact.unconfigured_policy_refs == ["duplicate_search_window"]
 
 
 def test_persisted_source_fails_closed_when_content_does_not_match_fingerprint() -> None:

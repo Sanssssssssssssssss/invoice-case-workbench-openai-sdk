@@ -728,6 +728,28 @@ def test_render_pdf_uses_injected_case_store_workspace(tmp_path) -> None:
     assert store.resolve_case_path("case_001", "reports/final_report.pdf").exists()
 
 
+def test_render_pdf_preserves_multiplication_sign_in_extracted_text(tmp_path) -> None:
+    store = CaseStore(tmp_path / "cases")
+    workspace = FileWorkspace(store)
+    workspace.write_case_file(
+        "case_multiplication",
+        "reports/final_report.md",
+        "# 发票付款材料审查报告\n\n## 算术核查\n\n数量 × 单价 = 行金额。",
+    )
+
+    workspace.render_pdf("case_multiplication", "reports/final_report.md", "reports/final_report.pdf")
+
+    import fitz
+
+    document = fitz.open(store.resolve_case_path("case_multiplication", "reports/final_report.pdf"))
+    try:
+        full_text = "\n".join(page.get_text() for page in document)
+    finally:
+        document.close()
+    assert "数量 否 单价" not in full_text
+    assert any(expression in full_text for expression in ("数量 × 单价", "数量 x 单价", "数量 * 单价"))
+
+
 def test_render_pdf_generates_clickable_toc_and_chapter_page_breaks(tmp_path) -> None:
     store = CaseStore(tmp_path / "cases")
     workspace = FileWorkspace(store)

@@ -180,6 +180,11 @@ def _typed_artifact(*, status: str = "SUPPORTED") -> ReviewArtifact:
                 requirement_refs=["invoice_calculation_valid"],
                 policy_refs=[_TYPED_POLICY],
                 facet_refs=list(_TYPED_FACETS),
+                semantic_role_refs=[
+                    "COMPONENT_OBSERVATION",
+                    "COMPONENT_APPLICABILITY",
+                    "COMPONENT_RECONCILIATION",
+                ],
             )
         ],
     )
@@ -1633,12 +1638,12 @@ def _typed_artifact_with_cross_check_parent_witness() -> ReviewArtifact:
         evidence_snapshot_hash=artifact.evidence_ir.source_snapshot_hash(),
         policy_snapshot_hash=artifact.policy_hash,
     )
-    line_terminal = compute_witness(
+    line_difference = compute_witness(
         CalculationRequest(
-            id="witness.line_extensions.terminal",
+            id="witness.line_extensions.difference",
             check_id="check.lines",
             facet_ref="line_extensions",
-            operation="GREATER_THAN",
+            operation="ABS_DIFF",
             operands=[
                 ProofTermRef(kind="WITNESS", ref_id=parent.id),
                 ProofTermRef(kind="CLAIM", ref_id=claim.id),
@@ -1646,6 +1651,23 @@ def _typed_artifact_with_cross_check_parent_witness() -> ReviewArtifact:
         ),
         claims={claim.id: claim},
         witnesses={parent.id: parent},
+        policy_values=artifact.resolved_policy_terms,
+        evidence_snapshot_hash=artifact.evidence_ir.source_snapshot_hash(),
+        policy_snapshot_hash=artifact.policy_hash,
+    )
+    line_terminal = compute_witness(
+        CalculationRequest(
+            id="witness.line_extensions.terminal",
+            check_id="check.lines",
+            facet_ref="line_extensions",
+            operation="GREATER_THAN",
+            operands=[
+                ProofTermRef(kind="WITNESS", ref_id=line_difference.id),
+                ProofTermRef(kind="POLICY", ref_id=_TYPED_POLICY),
+            ],
+        ),
+        claims={claim.id: claim},
+        witnesses={parent.id: parent, line_difference.id: line_difference},
         policy_values=artifact.resolved_policy_terms,
         evidence_snapshot_hash=artifact.evidence_ir.source_snapshot_hash(),
         policy_snapshot_hash=artifact.policy_hash,
@@ -1728,6 +1750,7 @@ def _typed_artifact_with_cross_check_parent_witness() -> ReviewArtifact:
                 kind="CHECK",
                 statement="Line extensions are recomputed.",
                 requirement_refs=["invoice_calculation_valid"],
+                policy_refs=[_TYPED_POLICY],
                 facet_refs=["line_extensions"],
             ),
             ProofNode(
@@ -1741,6 +1764,11 @@ def _typed_artifact_with_cross_check_parent_witness() -> ReviewArtifact:
                     "stated_components",
                     "final_total",
                 ],
+                semantic_role_refs=[
+                    "COMPONENT_OBSERVATION",
+                    "COMPONENT_APPLICABILITY",
+                    "COMPONENT_RECONCILIATION",
+                ],
             ),
             ProofNode(
                 id="root.typed",
@@ -1753,7 +1781,7 @@ def _typed_artifact_with_cross_check_parent_witness() -> ReviewArtifact:
         CheckAssessment(
             check_id="check.lines",
             claim_ids=[claim.id],
-            accepted_witness_ids=[parent.id, line_terminal.id],
+            accepted_witness_ids=[parent.id, line_difference.id, line_terminal.id],
             strong_status_links=[
                 StrongStatusLink(
                     witness_id=line_terminal.id,
@@ -1785,11 +1813,11 @@ def _typed_artifact_with_cross_check_parent_witness() -> ReviewArtifact:
         plan_hash=plan.content_hash(),
         assessments=assessments,
         binding_proposals=[binding],
-        calculation_witnesses=[parent, line_terminal, *children, *terminals],
+        calculation_witnesses=[parent, line_difference, line_terminal, *children, *terminals],
         submitted_claim_refs={"check.lines": [claim.id], "check.typed": []},
         submitted_binding_refs={"check.typed": [binding.id]},
         submitted_witness_refs={
-            "check.lines": [parent.id, line_terminal.id],
+            "check.lines": [parent.id, line_difference.id, line_terminal.id],
             "check.typed": [item.id for item in [*children, *terminals]],
         },
     )

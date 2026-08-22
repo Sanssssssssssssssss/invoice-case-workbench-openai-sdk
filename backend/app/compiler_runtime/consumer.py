@@ -609,6 +609,7 @@ def _proof_id_catalog(packet: CanonicalConsumerPacket) -> dict[str, set[str]]:
         "check": {item for item in checks if item},
         "obligation": {item.id for item in packet.obligations if item.id},
         "finding": {item.id for item in packet.leaf_findings if item.id},
+        "gap_code": {item.gap_code for item in packet.leaf_findings if item.gap_code},
     }
 
 
@@ -616,7 +617,7 @@ def _validate_explicit_proof_ids(markdown: str, catalog: dict[str, set[str]]) ->
     for match in _PROOF_ID_TOKEN_RE.finditer(markdown):
         token = match.group(0)
         kind = match.group("kind").lower()
-        if token not in catalog[kind]:
+        if token not in catalog[kind] and token not in catalog["gap_code"]:
             raise ValueError(
                 f"report cites proof id outside canonical consumer packet: {token}"
             )

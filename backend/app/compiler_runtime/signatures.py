@@ -7,7 +7,7 @@ from typing import Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.compiler_runtime.models import ProofNode, ProofPlan
+from app.compiler_runtime.models import ProofNode, ProofPlan, SemanticRole
 from app.domain.invoice_requirements import REQUIREMENT_PROOF_SIGNATURES
 
 
@@ -29,6 +29,8 @@ class _SignatureModel(BaseModel):
 class ProofFacet(_SignatureModel):
     id: str
     minimum_proof_terms: list[ProofTerm]
+    semantic_contract: str = ""
+    required_semantic_roles: list[SemanticRole] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
@@ -43,6 +45,24 @@ class ProofFacet(_SignatureModel):
         if len(set(value)) != len(value):
             raise ValueError("minimum_proof_terms must not contain duplicates")
         return value
+
+    @field_validator("semantic_contract")
+    @classmethod
+    def validate_semantic_contract(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("required_semantic_roles")
+    @classmethod
+    def validate_semantic_roles(cls, value: list[SemanticRole]) -> list[SemanticRole]:
+        if len(set(value)) != len(value):
+            raise ValueError("required_semantic_roles must not contain duplicates")
+        return value
+
+    @model_validator(mode="after")
+    def validate_semantic_shape(self) -> ProofFacet:
+        if self.required_semantic_roles and not self.semantic_contract:
+            raise ValueError("required_semantic_roles require a semantic_contract")
+        return self
 
 
 class ProofSignature(_SignatureModel):
@@ -138,12 +158,48 @@ class PlanConformanceGate:
         reachable = self._reachable(root_id, nodes)
         checks = [nodes[node_id] for node_id in reachable if nodes[node_id].kind == "CHECK"]
 
+        allowed_roles_by_check: dict[str, set[str]] = {node.id: set() for node in checks}
+        for node in checks:
+            for declared_signature in self._signatures:
+                if declared_signature.requirement_id not in node.requirement_refs:
+                    continue
+                for facet in declared_signature.facets:
+                    if facet.id in node.facet_refs:
+                        allowed_roles_by_check[node.id].update(facet.required_semantic_roles)
+                        missing_roles = sorted(
+                            set(facet.required_semantic_roles) - set(node.semantic_role_refs)
+                        )
+                        if missing_roles:
+                            raise ValueError(
+                                f"CHECK {node.id!r} must declare every required semantic role "
+                                f"for facet {facet.id!r}: {missing_roles}"
+                            )
+            unexpected = sorted(set(node.semantic_role_refs) - allowed_roles_by_check[node.id])
+            if unexpected:
+                raise ValueError(
+                    f"CHECK {node.id!r} declares semantic roles outside its ProofSignature facets: "
+                    f"{unexpected}"
+                )
+
         for facet in signature.facets:
             if not any(facet.id in node.facet_refs for node in checks):
                 raise ValueError(
                     f"Required facet {facet.id!r} is not reachable from "
                     f"requirement root {signature.requirement_id!r}"
                 )
+
+            if "WITNESS" in facet.minimum_proof_terms:
+                for node in checks:
+                    if facet.id not in node.facet_refs:
+                        continue
+                    missing = sorted(
+                        set(signature.required_policy_refs) - set(node.policy_refs)
+                    )
+                    if missing:
+                        raise ValueError(
+                            f"WITNESS facet {facet.id!r} CHECK {node.id!r} must declare "
+                            f"required policy refs: {missing}"
+                        )
 
         for policy_ref in signature.required_policy_refs:
             if policy_ref not in plan.policy_refs or not any(

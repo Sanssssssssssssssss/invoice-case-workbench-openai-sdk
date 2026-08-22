@@ -214,6 +214,77 @@ def test_focused_write_scope_rejects_non_focused_check_without_mutation() -> Non
     assert len(sandbox.evidence_ir.claims) == 1
 
 
+def test_discard_proof_material_keeps_submitted_terms_and_rebuilds_indexes() -> None:
+    sandbox = _sandbox()
+    sandbox.read_source("invoice-1")
+    claim_payload = {
+        "subject": "invoice:INV-42",
+        "value": "42",
+        "source_id": "invoice-1",
+        "quote": "Invoice INV-42",
+        "locator": "line 1",
+        "attributes": {"currency": "GBP"},
+    }
+    submitted_claim = sandbox.bind_claim(
+        **claim_payload,
+        predicate="invoice.total",
+    )["claim"]
+    orphan_claim = sandbox.bind_claim(
+        **claim_payload,
+        predicate="invoice.unsubmitted_total",
+    )["claim"]
+    difference_witness = sandbox.compute_witness(
+        check_id="check-total",
+        facet_ref="final_total",
+        operation="ABS_DIFF",
+        refs=[
+            {"kind": "CLAIM", "ref_id": orphan_claim["id"]},
+            {"kind": "CLAIM", "ref_id": submitted_claim["id"]},
+        ],
+    )["witness"]
+    terminal_witness = sandbox.compute_witness(
+        check_id="check-total",
+        facet_ref="final_total",
+        operation="GREATER_THAN",
+        refs=[
+            {"kind": "WITNESS", "ref_id": difference_witness["id"]},
+            {
+                "kind": "POLICY",
+                "ref_id": "invoice_calculation_rounding_tolerance",
+            },
+        ],
+    )["witness"]
+    sandbox.submit_check(
+        check_id="check-total",
+        claim_ids=[submitted_claim["id"]],
+    )
+
+    with pytest.raises(ValueError, match="referenced by a retained term or submission"):
+        sandbox.discard_proof_material(claim_ids=[submitted_claim["id"]])
+
+    assert sandbox.resolved_policy_terms["invoice_calculation_rounding_tolerance"] == {
+        "value": "0.01",
+        "currency": "GBP",
+        "unit": "",
+    }
+    sandbox.discard_proof_material(
+        claim_ids=[orphan_claim["id"]],
+        witness_ids=[difference_witness["id"], terminal_witness["id"]],
+    )
+
+    assert [item.id for item in sandbox.evidence_ir.claims] == [submitted_claim["id"]]
+    assert sandbox.calculation_witnesses == ()
+    assert sandbox.resolved_policy_terms["invoice_calculation_rounding_tolerance"]["unit"] == (
+        "document_currency"
+    )
+    rebound = sandbox.bind_claim(
+        **claim_payload,
+        predicate="invoice.unsubmitted_total",
+    )
+    assert rebound["ok"] is True
+    assert rebound["created"] is True
+
+
 def test_conflicting_claim_id_and_schema_error_do_not_mutate_ir() -> None:
     sandbox = _sandbox()
     sandbox.read_source("invoice-1")

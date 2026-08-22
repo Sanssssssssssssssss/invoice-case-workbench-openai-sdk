@@ -31,25 +31,40 @@ def test_deepseek_v4_uses_the_official_responses_contract() -> None:
     assert _model_extra_body("deepseek-v4-flash", "enabled") == {"reasoning": {"effort": "high"}}
 
 
-def test_role_thinking_scope_is_limited_to_planner() -> None:
-    configured = "enabled"
+def test_amd_deepseek_v4_uses_the_gateway_thinking_template_flag() -> None:
+    base_url = "https://developer.amd.com.cn/radeon/api/v1"
 
-    assert role_thinking_type("planner", {}, configured) == "enabled"
-    assert role_thinking_type("task_compiler", {}, configured) == "disabled"
-    assert role_thinking_type("executor", {}, configured) == "disabled"
-    assert role_thinking_type("fine_verifier", {}, configured) == "disabled"
-    assert role_thinking_type("materials_advisor", {}, configured) == "disabled"
-    assert role_thinking_type("case_patch_writer", {}, configured) == "disabled"
-    assert role_thinking_type("report_writer", {}, configured) == "disabled"
-    assert role_thinking_type("summarizer", {}, configured) == "disabled"
+    assert _use_responses_api("amd", base_url) is False
+    assert _model_extra_body("DeepSeek-V4-Flash", "high", base_url) == {
+        "chat_template_kwargs": {"thinking": True}
+    }
+    assert _model_extra_body("DeepSeek-V4-Flash", "disabled", base_url) == {
+        "chat_template_kwargs": {"thinking": False}
+    }
 
 
-def test_manager_tool_loop_and_specialists_disable_kimi_thinking() -> None:
+def test_configured_thinking_applies_to_every_model_role() -> None:
+    configured = "high"
+
+    assert role_thinking_type("planner", {}, configured) == "high"
+    assert role_thinking_type("task_compiler", {}, configured) == "high"
+    assert role_thinking_type("executor", {}, configured) == "high"
+    assert role_thinking_type("fine_verifier", {}, configured) == "high"
+    assert role_thinking_type("materials_advisor", {}, configured) == "high"
+    assert role_thinking_type("case_patch_writer", {}, configured) == "high"
+    assert role_thinking_type("report_writer", {}, configured) == "high"
+    assert role_thinking_type("summarizer", {}, configured) == "high"
+
+
+def test_kimi_manager_tool_loop_disables_thinking_but_specialists_follow_configuration() -> None:
     settings = Settings(llm_model="kimi-k2.5", llm_temperature=0.1, llm_thinking_type="enabled")
     manager = CaseManagerAgentFactory(settings).build([])
     registry = RoleRegistry(LlmClient(settings))
 
     assert manager_tool_loop_thinking_type("kimi-k2.5", "enabled") == "disabled"
     assert manager.model_settings.extra_body == {"thinking": {"type": "disabled"}}
-    assert registry.agent("materials_advisor").model_settings.extra_body == {"thinking": {"type": "disabled"}}
+    assert registry.agent(
+        "materials_advisor",
+        thinking_type=role_thinking_type("materials_advisor", {}, "enabled"),
+    ).model_settings.extra_body == {"thinking": {"type": "enabled"}}
     assert "evidence_reviewer" not in registry.role_names

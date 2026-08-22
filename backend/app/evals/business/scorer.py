@@ -19,11 +19,12 @@ from .models import (
     ExpectedFact,
     FrameworkCheck,
     FrameworkOracle,
+    OutcomeKind,
     ScoreCheck,
 )
 
 
-SCORER_VERSION = "business_eval_scorer_v2.6"
+SCORER_VERSION = "business_eval_scorer_v3.0"
 
 STAGE_WEIGHTS: dict[str, Decimal] = {
     "understanding": Decimal("10"),
@@ -57,13 +58,14 @@ _UNCERTAINTY = re.compile(
     r"\b(?:NOT_FOUND|not\s+found|cannot|could\s+not|not|unverified|unknown|uncertain|"
     r"insufficient|missing|pending|unresolved|obligation|configure(?:d)?|no\s+baseline)\b"
     r"|无法|不能|未(?:经)?(?:验证|核实|确认)|未找到|不确定|证据不足|缺少|待核实|未知|"
-    r"待配置|无(?:参考)?基准",
+    r"待配置|未决|未配置|需(?:要)?配置|无(?:参考)?基准",
     re.IGNORECASE,
 )
 _CONTRADICTION = re.compile(
     r"\b(?:incorrect|invalid|inapplicable|contradicted|false)\b|错误|不正确|不适用|矛盾|反驳",
     re.IGNORECASE,
 )
+_EXPLICIT_RELATION_SYNTAX = re.compile(r"等于|之和|加上|减去|[=≠≤≥<>×÷+]")
 
 
 def score_business_eval(
@@ -146,7 +148,7 @@ def score_business_eval(
             else {
                 "node_id": node_id,
                 "kind": canonical_result.get("kind", "CHECK"),
-                "status": "NOT_FOUND",
+                "status": "",
                 "claim_ids": [],
                 "binding_ids": [],
                 "witness_ids": [],
@@ -163,7 +165,43 @@ def score_business_eval(
         ),
         {},
     )
-    replayed_status = str(canonical_decision.get("status") or "NOT_FOUND")
+    replayed_status = str(canonical_decision.get("status") or "")
+    diagnostics = _dict_items(canonical_proof.get("diagnostics"))
+    plan_check_ids = {
+        node_id
+        for node_id, node in nodes.items()
+        if str(node.get("kind") or "") == "CHECK"
+    }
+    global_integrity_rejected = bool(
+        kernel_error
+        or any(
+            not (node_id := str(item.get("node_id") or ""))
+            or node_id not in plan_check_ids
+            for item in diagnostics
+        )
+        or (canonical_proof and stored_proof != canonical_proof)
+    )
+    check_outcomes = {
+        check_id: _check_outcome(
+            check_id,
+            artifact=artifact,
+            nodes=nodes,
+            assessments=assessments,
+            node_results=canonical_node_results,
+            diagnostics=diagnostics,
+            global_integrity_rejected=global_integrity_rejected,
+        )
+        for check_id in reachable_ids
+        if str(_mapping(nodes.get(check_id)).get("kind") or "") == "CHECK"
+    }
+    target_outcome = _target_outcome(
+        root_id=root_id,
+        nodes=nodes,
+        canonical_decision=canonical_decision,
+        canonical_node_results=canonical_node_results,
+        check_outcomes=check_outcomes,
+        global_integrity_rejected=global_integrity_rejected,
+    )
 
     user_text = _conversation_text(snapshot.conversation, role="user", final_only=False)
     request_seen = _normalized(case.user_message) in _normalized(user_text)
@@ -200,17 +238,6 @@ def score_business_eval(
             ),
         ]
     )
-    objective_ok = _meaning_oracle_matches(objective_text, oracle.intent.objective)
-    add(
-        "understanding.objective_semantics",
-        "understanding",
-        2,
-        objective_ok,
-        core=True,
-        expected=oracle.intent.objective.all_of,
-        observed=str(plan.get("objective") or ""),
-        detail="核对 objective 与目标根下 CHECK 的整体业务语义，不固定 Plan 文案。",
-    )
     milestone_by_id = {item.id: item for item in oracle.milestones}
     required_milestones = [
         milestone_by_id[item]
@@ -229,6 +256,29 @@ def score_business_eval(
     # that diagnostic fails, so wording cannot zero an otherwise grounded
     # typed proof graph.
     milestone_matches = _match_milestone_facets(required_milestones, target_checks)
+    frozen_objective = _normalized(plan.get("objective")) == _normalized(case.user_message)
+    typed_objective = (
+        frozen_objective
+        and target_covered
+        and all(milestone_matches.get(item.id) for item in required_milestones)
+    )
+    objective_ok = _meaning_oracle_matches(
+        objective_text,
+        oracle.intent.objective,
+    ) or typed_objective
+    add(
+        "understanding.objective_semantics",
+        "understanding",
+        2,
+        objective_ok,
+        core=True,
+        expected=oracle.intent.objective.all_of,
+        observed=str(plan.get("objective") or ""),
+        detail=(
+            "核对冻结用户目标与目标 root 下的 typed milestone 路由；"
+            "不要求 Plan 重复某个算术字面词。"
+        ),
+    )
     for milestone, points in zip(
         required_milestones,
         _split_points(Decimal("5"), len(required_milestones)),
@@ -249,7 +299,16 @@ def score_business_eval(
         # including distinct business paths under the same facet.  Extra
         # CHECKs do not have to repeat every milestone phrase; collectively
         # they must still express the milestone's business meaning.
-        semantic_ok = bool(facet_ids) and len(covered_groups) >= required_group_count
+        relation_syntax_ok = bool(milestone.relation_ids) and any(
+            _relational_statement_matches(
+                str(target_checks[check_id].get("statement") or ""),
+                milestone.statement_meaning,
+            )
+            for check_id in facet_ids
+        )
+        semantic_ok = bool(facet_ids) and (
+            len(covered_groups) >= required_group_count or relation_syntax_ok
+        )
         facet_points = (points * Decimal("0.60")).quantize(Decimal("0.01"))
         semantic_points = points - facet_points
         add(
@@ -259,7 +318,9 @@ def score_business_eval(
             bool(facet_ids),
             core=True,
             expected="target-root facet route",
-            observed={"facet_check_ids": facet_ids},
+            observed={
+                "facet_check_ids": facet_ids,
+            },
             detail="目标 root 下必须有 facet_refs 对应该里程碑的 CHECK。",
         )
         add(
@@ -274,6 +335,11 @@ def score_business_eval(
                 "relevant_check_ids": matched_ids,
                 "covered_groups": len(covered_groups),
                 "required_groups": required_group_count,
+                **(
+                    {"relation_syntax_fallback": True}
+                    if relation_syntax_ok
+                    else {}
+                ),
             },
             detail="facet 不是语义真值；CHECK 文案独立诊断且不级联清零 typed proof。",
         )
@@ -310,6 +376,20 @@ def score_business_eval(
         for claim_id in _list(result.get("claim_ids"))
         if str(claim_id)
     }
+    accepted_witness_ids = {
+        str(witness_id)
+        for result in relevant_node_results
+        for witness_id in _list(result.get("witness_ids"))
+        if str(witness_id)
+    }
+    subtracted_claim_ids = {
+        str(_mapping(operands[1].get("ref")).get("ref_id") or "")
+        for witness in _dict_items(artifact.get("calculation_witnesses"))
+        if str(witness.get("id") or "") in accepted_witness_ids
+        and str(witness.get("operation") or "") == "SUBTRACT"
+        and len(operands := _dict_items(witness.get("operands"))) == 2
+        and str(_mapping(operands[1].get("ref")).get("kind") or "") == "CLAIM"
+    }
     evidence_facts = [
         fact
         for fact in oracle.facts
@@ -321,6 +401,7 @@ def score_business_eval(
         grounded_claim_ids=grounded_claim_ids,
         source_roles=source_roles,
         source_content=source_content,
+        subtracted_claim_ids=subtracted_claim_ids,
     )
     fact_owner_claim_ids = {
         fact.id: {
@@ -459,13 +540,14 @@ def score_business_eval(
         _split_points(Decimal("8"), len(required_milestones)),
     ):
         check_ids = sorted(scoring_milestone_matches.get(milestone.id, set()))
-        observed_status = _aggregate_milestone_status(
+        observed_outcome = _aggregate_milestone_outcome(
             check_ids,
-            admitted_node_results,
+            check_outcomes,
             root_id=root_id,
             nodes=nodes,
         )
-        passed = bool(check_ids) and observed_status == milestone.expected_status
+        expected_outcome = _oracle_outcome(milestone.expected_status)
+        passed = bool(check_ids) and observed_outcome == expected_outcome
         milestone_status_results.append(passed)
         add(
             f"reasoning.milestone_status.{milestone.id}",
@@ -473,8 +555,12 @@ def score_business_eval(
             points,
             passed,
             core=True,
-            expected=milestone.expected_status,
-            observed={"check_ids": check_ids, "status": observed_status or "缺失"},
+            expected=expected_outcome,
+            observed={
+                "check_ids": check_ids,
+                "outcome": observed_outcome,
+            },
+            detail="按目标 facet 的实际 ALL/ANY 拓扑比较因果 outcome；执行缺口不能伪装成业务 NOT_FOUND。",
         )
 
     relation_results: list[bool] = []
@@ -561,20 +647,19 @@ def score_business_eval(
         matched_checks = [
             check_id
             for check_id, node in all_checks.items()
-            if _meaning_oracle_matches(
-                "\n".join(
-                    (
-                        str(node.get("statement") or ""),
-                        str(_mapping(assessments.get(check_id)).get("reason") or ""),
-                    )
-                ),
-                boundary.statement_meaning,
+            if any(
+                _meaning_oracle_matches(proposition, boundary.statement_meaning)
+                for text in (
+                    str(node.get("statement") or ""),
+                    str(_mapping(assessments.get(check_id)).get("reason") or ""),
+                )
+                for proposition in _boundary_propositions(text)
             )
         ]
         bad = [
             check_id
             for check_id in matched_checks
-            if str(_mapping(assessments.get(check_id)).get("status") or "NOT_FOUND")
+            if str(_mapping(assessments.get(check_id)).get("status") or "")
             not in set(boundary.allowed_statuses)
         ]
         output_bad = []
@@ -650,7 +735,7 @@ def score_business_eval(
         if item.get("node_id")
     }
     replayed_by_node = {
-        node_id: str(_mapping(canonical_node_results.get(node_id)).get("status") or "NOT_FOUND")
+        node_id: str(_mapping(canonical_node_results.get(node_id)).get("status") or "缺失")
         for node_id in reachable_ids
     }
     node_results_ok = bool(reachable_ids) and all(
@@ -688,16 +773,17 @@ def score_business_eval(
         observed=decision,
         detail="Proof 层只检查 Artifact→Kernel→Decision 的忠实性，不重复奖励业务标签。",
     )
-    target_truth_ok = bool(canonical_decision) and replayed_status == oracle.requirement.decision_status
+    expected_target_outcome = _oracle_outcome(oracle.requirement.decision_status)
+    target_truth_ok = target_outcome == expected_target_outcome
     add(
         "proof.target_decision_truth",
         "proof",
         0,
         target_truth_ok,
         core=True,
-        expected=oracle.requirement.decision_status,
-        observed=replayed_status if canonical_decision else "缺失",
-        detail="评分以 Kernel 重放得到的 canonical DecisionProof 为准，目标状态必须等于 Oracle。",
+        expected=expected_target_outcome,
+        observed=target_outcome,
+        detail="强结论先由 Kernel 拓扑决定；仅 canonical 根未决时才区分业务证据缺口与执行/完整性失败。",
     )
     requirement_rows = _dict_items(state.get("requirements"))
     requirement = next(
@@ -741,13 +827,14 @@ def score_business_eval(
         "proof.blocking_obligations",
         "proof",
         3,
-        blocking == oracle.requirement.blocking_obligations,
+        bool(canonical_decision)
+        and blocking == oracle.requirement.blocking_obligations,
         core=True,
         expected=oracle.requirement.blocking_obligations,
         observed=blocking,
     )
     proof_integrity_ok = (
-        not kernel_error
+        not global_integrity_rejected
         and stored_proof == canonical_proof
         and hash_integrity
         and node_results_ok
@@ -894,8 +981,8 @@ def score_business_eval(
             EvalVeto(
                 code="TARGET_DECISION_MISMATCH",
                 detail=(
-                    f"canonical DecisionProof 为 {replayed_status if canonical_decision else '缺失'}，"
-                    f"Oracle 要求 {oracle.requirement.decision_status}。"
+                    f"canonical outcome 为 {target_outcome}，"
+                    f"Oracle 要求 {expected_target_outcome}。"
                 ),
             )
         )
@@ -918,12 +1005,13 @@ def score_business_eval(
             )
         )
     if actual_status in STRONG_STATUSES and (
-        oracle.requirement.decision_status == "NOT_FOUND" or replayed_status == "NOT_FOUND"
+        expected_target_outcome == "BUSINESS_EVIDENCE_GAP"
+        or target_outcome in {"BUSINESS_EVIDENCE_GAP", "EXECUTION_INCOMPLETE"}
     ):
         vetoes.append(
             EvalVeto(
                 code="NOT_FOUND_UPGRADED",
-                detail="业务真值或 Verifier 输入为 NOT_FOUND，却被升级为强结论。",
+                detail="业务证据缺口或未完成执行被升级为强结论。",
             )
         )
     if oracle.sentinel and oracle.sentinel in _json_text(snapshot.model_dump(mode="json")):
@@ -1037,6 +1125,7 @@ def score_business_eval(
         case_version=case.case_version,
         run_id=snapshot.run_id,
         scorer_version=SCORER_VERSION,
+        oracle_version=oracle.oracle_version,
         passed=passed,
         business_passed=business_passed,
         score=score,
@@ -1101,6 +1190,37 @@ def _meaning_group_indexes(text: str, meaning: Any) -> set[int]:
             for option in group
         )
     }
+
+
+def _relational_statement_matches(text: str, meaning: Any) -> bool:
+    """Recognize a relation between two distinct business meanings."""
+    clauses = [
+        item.strip()
+        for item in re.split(r"(?:\r?\n)+|[。！？；;，,]", text)
+        if item.strip()
+    ]
+    for clause in clauses:
+        if not _EXPLICIT_RELATION_SYNTAX.search(clause):
+            continue
+        normalized = _semantic_normalized(clause)
+        group_spans: dict[int, set[tuple[int, int]]] = {}
+        for index, group in enumerate(list(getattr(meaning, "all_of", []))):
+            for option in group:
+                needle = _semantic_normalized(option)
+                if not needle:
+                    continue
+                for match in re.finditer(re.escape(needle), normalized):
+                    group_spans.setdefault(index, set()).add(match.span())
+        matches = list(group_spans.items())
+        if any(
+            left_end <= right_start or right_end <= left_start
+            for left_offset, (_, left_spans) in enumerate(matches)
+            for _, right_spans in matches[left_offset + 1 :]
+            for left_start, left_end in left_spans
+            for right_start, right_end in right_spans
+        ):
+            return True
+    return False
 
 
 def _identifier_terms(value: Any) -> set[str]:
@@ -1210,28 +1330,138 @@ def _refine_shared_facet_matches(
     return result
 
 
-def _aggregate_milestone_status(
-    check_ids: list[str],
+def _oracle_outcome(status: str) -> OutcomeKind:
+    try:
+        return {
+            "SUPPORTED": "SUPPORTED",
+            "CONTRADICTED": "CONTRADICTED",
+            "NOT_FOUND": "BUSINESS_EVIDENCE_GAP",
+        }[status]
+    except KeyError as exc:
+        raise ValueError(f"unknown Oracle status: {status!r}") from exc
+
+
+def _check_outcome(
+    check_id: str,
+    *,
+    artifact: dict[str, Any],
+    nodes: dict[str, dict[str, Any]],
     assessments: dict[str, dict[str, Any]],
+    node_results: dict[str, dict[str, Any]],
+    diagnostics: list[dict[str, Any]],
+    global_integrity_rejected: bool,
+) -> OutcomeKind:
+    if global_integrity_rejected:
+        return "INTEGRITY_REJECTED"
+    node = _mapping(nodes.get(check_id))
+    assessment = _mapping(assessments.get(check_id))
+    result = _mapping(node_results.get(check_id))
+    submitted = any(
+        check_id in _mapping(artifact.get(field))
+        for field in (
+            "submitted_claim_refs",
+            "submitted_binding_refs",
+            "submitted_witness_refs",
+        )
+    )
+    if (
+        str(node.get("kind") or "") != "CHECK"
+        or not submitted
+        or not assessment
+        or not result
+    ):
+        return "EXECUTION_INCOMPLETE"
+    check_diagnostics = [
+        item
+        for item in diagnostics
+        if str(item.get("node_id") or "") == check_id
+    ]
+    diagnostic_codes = {str(item.get("code") or "") for item in check_diagnostics}
+    assessment_status = str(assessment.get("status") or "")
+    result_status = str(result.get("status") or "")
+    assessment_gap = str(assessment.get("gap_code") or "")
+    result_gap = str(result.get("gap_code") or "")
+    has_missing_fact = bool(str(assessment.get("missing_fact") or "").strip())
+    blocked_policy_refs = (
+        set(_list(node.get("policy_refs")))
+        & set(_list(artifact.get("unconfigured_policy_refs")))
+        & set(_list(_mapping(artifact.get("plan")).get("policy_refs")))
+    )
+    if (
+        diagnostic_codes == {"POLICY_NOT_CONFIGURED"}
+        and blocked_policy_refs
+        and assessment_status == result_status == "NOT_FOUND"
+        and assessment_gap == result_gap == "POLICY_UNCONFIGURED"
+        and has_missing_fact
+    ):
+        return "BUSINESS_EVIDENCE_GAP"
+    if check_diagnostics:
+        return "EXECUTION_INCOMPLETE"
+    if result_status in STRONG_STATUSES and assessment_status == result_status:
+        return result_status  # type: ignore[return-value]
+    if (
+        result_status == assessment_status == "NOT_FOUND"
+        and assessment_gap == result_gap
+        and assessment_gap
+        and has_missing_fact
+    ):
+        return "BUSINESS_EVIDENCE_GAP"
+    return "EXECUTION_INCOMPLETE"
+
+
+def _combine_unresolved_outcomes(outcomes: list[OutcomeKind]) -> OutcomeKind:
+    if "INTEGRITY_REJECTED" in outcomes:
+        return "INTEGRITY_REJECTED"
+    if "EXECUTION_INCOMPLETE" in outcomes:
+        return "EXECUTION_INCOMPLETE"
+    if outcomes and all(item == "BUSINESS_EVIDENCE_GAP" for item in outcomes):
+        return "BUSINESS_EVIDENCE_GAP"
+    return "EXECUTION_INCOMPLETE"
+
+
+def _target_outcome(
     *,
     root_id: str,
     nodes: dict[str, dict[str, Any]],
-) -> str:
-    """Project a milestone through the ProofPlan's actual ALL/ANY topology."""
-    if not check_ids:
-        return ""
-    selected = set(check_ids)
-    memo: dict[str, str | None] = {}
+    canonical_decision: dict[str, Any],
+    canonical_node_results: dict[str, dict[str, Any]],
+    check_outcomes: dict[str, OutcomeKind],
+    global_integrity_rejected: bool,
+) -> OutcomeKind:
+    if global_integrity_rejected:
+        return "INTEGRITY_REJECTED"
+    if not root_id or not canonical_decision:
+        return "EXECUTION_INCOMPLETE"
+    root_result = _mapping(canonical_node_results.get(root_id))
+    root_status = str(root_result.get("status") or "")
+    if root_status != str(canonical_decision.get("status") or ""):
+        return "EXECUTION_INCOMPLETE"
+    projected = _project_outcome(root_id, nodes=nodes, check_outcomes=check_outcomes)
+    if root_status in STRONG_STATUSES and projected == root_status:
+        return root_status  # type: ignore[return-value]
+    if root_status == "NOT_FOUND" and projected not in STRONG_STATUSES:
+        return projected or "EXECUTION_INCOMPLETE"
+    return "EXECUTION_INCOMPLETE"
 
-    def project(node_id: str) -> str | None:
+
+def _project_outcome(
+    root_id: str,
+    *,
+    nodes: dict[str, dict[str, Any]],
+    check_outcomes: dict[str, OutcomeKind],
+    selected: set[str] | None = None,
+) -> OutcomeKind | None:
+    memo: dict[str, OutcomeKind | None] = {}
+
+    def project(node_id: str) -> OutcomeKind | None:
         if node_id in memo:
             return memo[node_id]
         node = _mapping(nodes.get(node_id))
         kind = str(node.get("kind") or "")
         if kind == "CHECK":
             result = (
-                str(_mapping(assessments.get(node_id)).get("status") or "NOT_FOUND")
-                if node_id in selected
+                check_outcomes.get(node_id, "EXECUTION_INCOMPLETE")
+                if selected is None or node_id in selected
                 else None
             )
             memo[node_id] = result
@@ -1244,24 +1474,38 @@ def _aggregate_milestone_status(
         if not child_statuses:
             memo[node_id] = None
             return None
-        if kind == "ANY":
-            if "SUPPORTED" in child_statuses:
-                result = "SUPPORTED"
-            elif all(item == "CONTRADICTED" for item in child_statuses):
-                result = "CONTRADICTED"
-            else:
-                result = "NOT_FOUND"
+        decisive = "SUPPORTED" if kind == "ANY" else "CONTRADICTED"
+        unanimous = "CONTRADICTED" if kind == "ANY" else "SUPPORTED"
+        if decisive in child_statuses:
+            result = decisive
+        elif all(item == unanimous for item in child_statuses):
+            result = unanimous
         else:
-            if "CONTRADICTED" in child_statuses:
-                result = "CONTRADICTED"
-            elif all(item == "SUPPORTED" for item in child_statuses):
-                result = "SUPPORTED"
-            else:
-                result = "NOT_FOUND"
+            result = _combine_unresolved_outcomes(
+                [item for item in child_statuses if item not in STRONG_STATUSES]
+            )
         memo[node_id] = result
         return result
 
-    return project(root_id) or ""
+    return project(root_id)
+
+
+def _aggregate_milestone_outcome(
+    check_ids: list[str],
+    check_outcomes: dict[str, OutcomeKind],
+    *,
+    root_id: str,
+    nodes: dict[str, dict[str, Any]],
+) -> OutcomeKind:
+    """Project selected facet CHECKs through the plan's real topology."""
+    if not check_ids:
+        return "EXECUTION_INCOMPLETE"
+    return _project_outcome(
+        root_id,
+        nodes=nodes,
+        check_outcomes=check_outcomes,
+        selected=set(check_ids),
+    ) or "EXECUTION_INCOMPLETE"
 
 
 def _source_role(item: dict[str, Any]) -> str:
@@ -1423,6 +1667,7 @@ def _claim_matches_source_fact(
     *,
     source_roles: dict[str, str],
     source_content: dict[str, str],
+    allow_subtracted_value: bool = False,
 ) -> bool:
     if fact.origin != "source" or not claim:
         return False
@@ -1465,8 +1710,17 @@ def _claim_matches_source_fact(
     expected = expected_decimal
     return bool(
         expected is not None
-        and _text_has_decimal(str(text), expected, fact.tolerance)
-        and _text_has_decimal(actual_quote, expected, fact.tolerance)
+        and (
+            _text_has_decimal(str(text), expected, fact.tolerance)
+            or (
+                allow_subtracted_value
+                and _text_has_decimal(str(text), -expected, fact.tolerance)
+            )
+        )
+        and (
+            actual_quote == expected_quote
+            or _text_has_decimal(actual_quote, expected, fact.tolerance)
+        )
     )
 
 
@@ -1477,7 +1731,9 @@ def _source_fact_claim_candidates(
     grounded_claim_ids: set[str],
     source_roles: dict[str, str],
     source_content: dict[str, str],
+    subtracted_claim_ids: set[str] | None = None,
 ) -> dict[str, set[str]]:
+    subtracted_claim_ids = subtracted_claim_ids or set()
     return {
         fact.id: {
             claim_id
@@ -1487,6 +1743,7 @@ def _source_fact_claim_candidates(
                 claims_by_id.get(claim_id, {}),
                 source_roles=source_roles,
                 source_content=source_content,
+                allow_subtracted_value=claim_id in subtracted_claim_ids,
             )
         }
         for fact in facts
@@ -2116,9 +2373,10 @@ def _typed_witness_matches_relation(
     witnesses_by_id: dict[str, dict[str, Any]],
     fact_equivalences: dict[str, set[str]],
 ) -> bool:
-    if str(witness.get("operation") or "") != _ORACLE_TO_WITNESS_OPERATION.get(
-        relation.operation
-    ):
+    operation = str(witness.get("operation") or "")
+    expected_operation = _ORACLE_TO_WITNESS_OPERATION.get(relation.operation)
+    sum_via_subtract = expected_operation == "SUM" and operation == "SUBTRACT"
+    if operation != expected_operation and not sum_via_subtract:
         return False
     witness_facet = str(witness.get("facet_ref") or "")
     if (
@@ -2127,7 +2385,6 @@ def _typed_witness_matches_relation(
         else not _facet_corresponds_to_milestone(witness_facet, milestone_facet_ref)
     ):
         return False
-    operation = str(witness.get("operation") or "")
     operands = (
         _flatten_associative_operands(
             witness,
@@ -2138,6 +2395,10 @@ def _typed_witness_matches_relation(
         if operation in {"SUM", "MULTIPLY"}
         else _dict_items(witness.get("operands"))
     )
+    if sum_via_subtract:
+        if len(operands) != 2 or (right := _typed_decimal(operands[1].get("value"))) is None:
+            return False
+        operands = [operands[0], {**operands[1], "value": str(-right)}]
     if not _operands_match_relation_inputs(
         operands,
         list(relation.input_fact_ids),
@@ -2450,12 +2711,21 @@ def _canonical_projection_violations(
                 }
             )
             continue
-        status = str(decision.get("status") or "NOT_FOUND")
+        status = str(decision.get("status") or "")
+        if status not in {"SUPPORTED", "CONTRADICTED", "NOT_FOUND"}:
+            violations.append(
+                {
+                    "requirement_id": requirement_id,
+                    "error": "missing_decision_status" if not status else "invalid_decision_status",
+                    "observed_status": status or "缺失",
+                }
+            )
+            continue
         leaf_field = {
             "SUPPORTED": "supporting_check_ids",
             "CONTRADICTED": "contradicting_check_ids",
             "NOT_FOUND": "unresolved_check_ids",
-        }.get(status, "unresolved_check_ids")
+        }[status]
         evidence_ids: list[str] = []
         for check_id in _list(decision.get(leaf_field)):
             for source_id in _list(_mapping(results.get(str(check_id))).get("source_ids")):
@@ -2466,7 +2736,7 @@ def _canonical_projection_violations(
             "SUPPORTED": "accepted" if requirement_owner(requirement_id) == "evidence" else "satisfied",
             "CONTRADICTED": "conflict",
             "NOT_FOUND": "weak" if evidence_ids else "missing",
-        }.get(status, "missing")
+        }[status]
         row = rows[0]
         observed_status = str(row.get("status") or "")
         observed_evidence_ids = sorted(str(item) for item in _list(row.get("evidence_ids")) if str(item))
@@ -2739,16 +3009,7 @@ def _affirmative_groups_match(text: str, meaning: Any) -> bool:
 
 def _boundary_output_assertions(text: str, meaning: Any) -> list[tuple[str, str]]:
     assertions: list[tuple[str, str]] = []
-    clauses = [
-        item.strip()
-        for item in re.split(
-            r"(?:\r?\n)+|(?<=[.!?。！？；;，])|\b(?:but|however)\b|但(?:是|而)?",
-            text,
-            flags=re.IGNORECASE,
-        )
-        if item.strip()
-    ]
-    for clause in clauses:
+    for clause in _boundary_propositions(text):
         if not _meaning_oracle_matches(clause, meaning):
             continue
         status = (
@@ -2760,6 +3021,18 @@ def _boundary_output_assertions(text: str, meaning: Any) -> list[tuple[str, str]
         )
         assertions.append((status, " ".join(clause.split())[:180]))
     return assertions
+
+
+def _boundary_propositions(text: str) -> list[str]:
+    return [
+        item.strip()
+        for item in re.split(
+            r"(?:\r?\n)+|(?<=[.!?。！？；;，])|\b(?:but|however)\b|但(?:是|而)?",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if item.strip()
+    ]
 
 
 def _score_cap(

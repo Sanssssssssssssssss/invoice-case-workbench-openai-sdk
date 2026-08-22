@@ -37,7 +37,10 @@ def render_eval_report(
         f"- 业务评分通过：**{'是' if result.business_passed else '否'}**",
         f"- 首个失败阶段：**{first_failure}**",
         f"- 案例：`{case.case_id}@{case.case_version}`",
-        f"- 运行：`{snapshot.run_id}`；评分器：`{result.scorer_version}`",
+        (
+            f"- 运行：`{snapshot.run_id}`；评分器：`{result.scorer_version}`；"
+            f"Oracle：`{result.oracle_version or '未记录'}`"
+        ),
         "",
         "## 一票否决",
         "",

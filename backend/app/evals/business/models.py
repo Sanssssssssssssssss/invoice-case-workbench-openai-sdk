@@ -14,6 +14,15 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+OutcomeKind = Literal[
+    "SUPPORTED",
+    "CONTRADICTED",
+    "BUSINESS_EVIDENCE_GAP",
+    "EXECUTION_INCOMPLETE",
+    "INTEGRITY_REJECTED",
+]
+
+
 class EvalAttachment(StrictModel):
     id: str
     path: str
@@ -563,6 +572,7 @@ class EvalResult(StrictModel):
     case_version: str
     run_id: str
     scorer_version: str
+    oracle_version: str = ""
     passed: bool
     business_passed: bool | None = None
     score: Decimal = Field(ge=0, le=100)

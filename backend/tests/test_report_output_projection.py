@@ -229,6 +229,22 @@ def test_rejects_explicit_proof_ids_outside_packet(invented: str) -> None:
         validate_canonical_report_projection(invented, _packet())
 
 
+def test_accepts_only_gap_codes_projected_by_the_packet() -> None:
+    packet = _packet().model_copy(
+        update={
+            "leaf_findings": [
+                _packet().leaf_findings[0].model_copy(
+                    update={"gap_code": "WITNESS_MISSING"}
+                )
+            ]
+        }
+    )
+
+    assert validate_canonical_report_projection("缺口：WITNESS_MISSING", packet)
+    with pytest.raises(ValueError, match="proof id outside canonical consumer packet"):
+        validate_canonical_report_projection("缺口：BINDING_MISSING", packet)
+
+
 def test_accepts_current_underscore_ids_and_validates_markdown_table_columns() -> None:
     markdown = """\
 | 要求编号 | 叶检查 | 三态结论 | 主张/绑定/计算编号 |

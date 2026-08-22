@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from decimal import Decimal
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
@@ -9,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from app.evals.business.models import EvalResult, EvalSnapshot
-from app.evals.business.runner import run_business_eval, score_snapshot
+from app.evals.business.models import EvalResult, EvalSnapshot, ScoreCheck
+from app.evals.business.runner import run_business_eval, score_revision_id, score_snapshot
 from app.state.schemas import AgentTurnResponse, CaseState
 from app.state.session_repository import SessionRepository
 
@@ -181,7 +182,18 @@ class _FakeRuntime:
         run_trace = case_root / "traces" / run_id
         run_trace.mkdir(parents=True, exist_ok=True)
         (run_trace / "events.jsonl").write_text(
-            json.dumps({"kind": "provider_call", "payload": {"role": "planner"}}) + "\n",
+            json.dumps(
+                {
+                    "kind": "provider_call",
+                    "payload": {
+                        "role": "planner",
+                        "model": "fake-model",
+                        "prompt_version": "planner_test_v1",
+                        "system_prompt": "planner system prompt",
+                    },
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
         (run_trace / "deepseek_calls.txt").write_text("调用 001 | planner | OK\n", encoding="utf-8")
@@ -243,6 +255,34 @@ async def test_runner_captures_isolated_streamed_run_and_two_allowed_approvals(
     assert (paths.run_dir / "w" / "invoice_eval" / "case_state.json").is_file()
     assert (paths.run_dir / "s" / "sessions.sqlite").is_file()
     assert paths.report.read_text(encoding="utf-8").startswith("# Eval 结果")
+    assert paths.revision is not None
+    assert paths.score.parent.parent == paths.run_dir / "scores"
+    assert not (paths.run_dir / "score.json").exists()
+    revision = json.loads(paths.revision.read_text(encoding="utf-8"))
+    assert revision["revision_id"] == score_revision_id(revision)
+    assert "created_at" not in revision
+    assert revision["artifacts"]["score"]["sha256"] == hashlib.sha256(
+        paths.score.read_bytes()
+    ).hexdigest()
+    assert revision["artifacts"]["report"]["sha256"] == hashlib.sha256(
+        paths.report.read_bytes()
+    ).hexdigest()
+    manifest_text = (paths.run_dir / "run_manifest.json").read_text(encoding="utf-8")
+    manifest = json.loads(manifest_text)
+    assert "NEVER_IN_RUNTIME" not in manifest_text
+    assert manifest["snapshot"]["sha256"] == hashlib.sha256(paths.snapshot.read_bytes()).hexdigest()
+    assert manifest["code"]["git_head"] == snapshot.agent_commit
+    assert manifest["code"]["scope"] == ["backend/app", "policies"]
+    assert len(manifest["code"]["fingerprint"]) == 64
+    assert manifest["provider_prompts"] == [
+        {
+            "calls": 1,
+            "model": "fake-model",
+            "prompt_sha256": hashlib.sha256(b"planner system prompt").hexdigest(),
+            "prompt_version": "planner_test_v1",
+            "role": "planner",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -340,18 +380,135 @@ def test_snapshot_can_be_rescored_without_constructing_runtime(
     )
     snapshot_path = run_dir / "snapshot.json"
     snapshot_path.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
+    legacy_score = run_dir / "score.json"
+    legacy_report = run_dir / "eval_report.md"
+    legacy_score.write_text("legacy score\n", encoding="utf-8")
+    legacy_report.write_text("legacy report\n", encoding="utf-8")
+    original_snapshot = snapshot_path.read_bytes()
     calls = 0
 
     def scorer(_case: Any, _oracle: Any, observed: EvalSnapshot) -> EvalResult:
         nonlocal calls
         calls += 1
-        return _result(observed)
+        result = _result(observed)
+        expected = {"a": 1, "b": 2} if calls % 2 else {"b": 2, "a": 1}
+        result.checks = [
+            ScoreCheck(
+                id="canonical.expected",
+                stage="reasoning",
+                points=Decimal("1"),
+                earned=Decimal("1"),
+                passed=True,
+                expected=expected,
+            )
+        ]
+        return result
 
     monkeypatch.setattr("app.evals.business.scorer.score_business_eval", scorer)
     monkeypatch.setattr("app.evals.business.report.render_eval_report", lambda *_args: "# 重评报告")
 
     paths = score_snapshot(snapshot_path, case_dir=case_dir)
+    first_revision = paths.revision.read_bytes() if paths.revision else b""
+    first_score = paths.score.read_bytes()
+    first_report = paths.report.read_bytes()
+    repeated = score_snapshot(snapshot_path, case_dir=case_dir)
+    shutil.rmtree(paths.score.parent)
+    rebuilt = score_snapshot(snapshot_path, case_dir=case_dir)
 
-    assert calls == 1
+    assert calls == 3
     assert paths.score.is_file()
     assert paths.report.read_text(encoding="utf-8").startswith("# 重评报告")
+    assert paths.revision is not None
+    assert repeated.revision == paths.revision
+    assert rebuilt.revision is not None
+    assert rebuilt.revision.read_bytes() == first_revision
+    assert rebuilt.score.read_bytes() == first_score
+    assert rebuilt.report.read_bytes() == first_report
+    assert snapshot_path.read_bytes() == original_snapshot
+    assert legacy_score.read_text(encoding="utf-8") == "legacy score\n"
+    assert legacy_report.read_text(encoding="utf-8") == "legacy report\n"
+
+
+def test_score_revision_conflict_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case_dir = _write_case(tmp_path)
+    run_dir = tmp_path / "existing"
+    run_dir.mkdir()
+    snapshot = EvalSnapshot(
+        case_id="invoice_eval",
+        case_version="1",
+        run_id="run_existing",
+        policy_version="policy_test_v1",
+        case_state={"case_id": "invoice_eval"},
+    )
+    snapshot_path = run_dir / "snapshot.json"
+    snapshot_path.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
+    monkeypatch.setattr("app.evals.business.scorer.score_business_eval", lambda _c, _o, observed: _result(observed))
+    monkeypatch.setattr("app.evals.business.report.render_eval_report", lambda *_args: "# stable")
+
+    paths = score_snapshot(snapshot_path, case_dir=case_dir)
+    paths.score.write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="score revision conflict"):
+        score_snapshot(snapshot_path, case_dir=case_dir)
+
+
+@pytest.mark.asyncio
+async def test_run_manifest_detects_snapshot_tampering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case_dir = _write_case(tmp_path)
+    monkeypatch.setattr("app.evals.business.scorer.score_business_eval", lambda _c, _o, snapshot: _result(snapshot))
+    monkeypatch.setattr("app.evals.business.report.render_eval_report", lambda *_args: "# Eval")
+    paths = await run_business_eval(
+        case_dir,
+        output_root=tmp_path / "output",
+        runtime_factory=lambda store: _FakeRuntime(store, ["write_case_file", "render_pdf"]),
+    )
+    paths.snapshot.write_text(paths.snapshot.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="run manifest input hash mismatch"):
+        score_snapshot(paths.snapshot, case_dir=case_dir)
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_if_case_changes_during_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case_dir = _write_case(tmp_path)
+
+    class MutatingRuntime(_FakeRuntime):
+        async def run_turn_streamed(
+            self,
+            request: Any,
+            *,
+            run_id: str,
+            event_sink: Any,
+        ) -> AgentTurnResponse:
+            response = await super().run_turn_streamed(
+                request,
+                run_id=run_id,
+                event_sink=event_sink,
+            )
+            case_path = case_dir / "case.json"
+            case_path.write_bytes(case_path.read_bytes() + b"\n")
+            return response
+
+    monkeypatch.setattr("app.evals.business.scorer.score_business_eval", lambda _c, _o, snapshot: _result(snapshot))
+    monkeypatch.setattr("app.evals.business.report.render_eval_report", lambda *_args: "# Eval")
+    output_root = tmp_path / "output"
+
+    with pytest.raises(RuntimeError, match="case.json changed during eval run"):
+        await run_business_eval(
+            case_dir,
+            output_root=output_root,
+            runtime_factory=lambda store: MutatingRuntime(
+                store,
+                ["write_case_file", "render_pdf"],
+            ),
+        )
+    assert not list(output_root.rglob("snapshot.json"))

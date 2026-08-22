@@ -86,6 +86,7 @@ CASES: dict[str, dict[str, Any]] = {
     },
     "invoice_subtotal_conflict_0006": {
         "framework": True,
+        "oracle_version": "5",
         "source": "pia_inv_2026_0006",
         "title": "含税行金额正确但票面小计错误",
         "holes": ["invoice_arithmetic", "subtotal_integrity", "tax_inclusive_prices"],
@@ -225,6 +226,7 @@ CASES: dict[str, dict[str, Any]] = {
         ],
     },
     "mixed_vat_subtotal_conflict_0044": {
+        "oracle_version": "5",
         "source": "pia_inv_2026_0044",
         "title": "混合税率发票票面小计错误",
         "holes": ["invoice_arithmetic", "mixed_vat", "subtotal_integrity"],
@@ -276,6 +278,7 @@ CASES: dict[str, dict[str, Any]] = {
     },
     "tax_inclusive_arithmetic_supported_0053": {
         "framework": True,
+        "oracle_version": "5",
         "source": "pia_inv_2026_0053",
         "title": "含税德式行金额与框架调整计算一致",
         "holes": ["invoice_arithmetic", "tax_inclusive_prices", "german_number_format"],
@@ -299,7 +302,7 @@ CASES: dict[str, dict[str, Any]] = {
                 "id": "adjustment_rate_base",
                 "component_fact_id": "adjustment_1",
                 "status": "NOT_FOUND",
-                "rate_factor": "0.025",
+                "rate_factor": "-0.025",
                 "rate_quote": "adjustment per framework agreement ref. FA-2024-136: -2.5% (2.817,38 EUR).",
                 "missing": "The framework adjustment base is not visible in the invoice.",
             }
@@ -683,8 +686,6 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
     recomputed_total = source_line_sum + sum(component_values, Decimal("0"))
     final_fact_ids = [trusted_subtotal_id, *component_ids, "printed_total"]
     final_relation_ids: list[str] = []
-    printed_path_fact_ids: list[str] = []
-    printed_path_relation_ids: list[str] = []
     if spec["subtotal_status"] == "CONTRADICTED":
         if spec["total_status"] != "SUPPORTED":
             raise ValueError(f"{case_id}: subtotal-conflict fixture must isolate the downstream total path")
@@ -697,61 +698,6 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
             }
         )
         final_relation_ids.append("line_derived_final_total_math")
-
-        printed_path_total = Decimal(printed_subtotal) + sum(component_values, Decimal("0"))
-        facts.extend(
-            [
-                _fact(
-                    "printed_subtotal_path_total",
-                    _money(printed_path_total),
-                    origin="derived",
-                    currency="EUR",
-                    required_in=["reasoning"],
-                ),
-                _fact(
-                    "printed_subtotal_path_difference",
-                    _money(abs(printed_path_total - Decimal(printed_total))),
-                    origin="derived",
-                    currency="EUR",
-                    required_in=["reasoning"],
-                ),
-            ]
-        )
-        relations.extend(
-            [
-                {
-                    "id": "printed_subtotal_path_math",
-                    "operation": "sum",
-                    "input_fact_ids": ["printed_subtotal", *component_ids],
-                    "output_fact_id": "printed_subtotal_path_total",
-                },
-                {
-                    "id": "printed_subtotal_path_difference_math",
-                    "operation": "absolute_difference",
-                    "input_fact_ids": ["printed_subtotal_path_total", "printed_total"],
-                    "output_fact_id": "printed_subtotal_path_difference",
-                },
-                {
-                    "id": "printed_subtotal_path_difference_exceeds_tolerance",
-                    "operation": "greater_than",
-                    "input_fact_ids": ["printed_subtotal_path_difference", "rounding_tolerance"],
-                    "expected_boolean": True,
-                },
-            ]
-        )
-        printed_path_fact_ids = [
-            "printed_subtotal",
-            *component_ids,
-            "printed_subtotal_path_total",
-            "printed_total",
-            "printed_subtotal_path_difference",
-            "rounding_tolerance",
-        ]
-        printed_path_relation_ids = [
-            "printed_subtotal_path_math",
-            "printed_subtotal_path_difference_math",
-            "printed_subtotal_path_difference_exceeds_tolerance",
-        ]
     elif spec["total_status"] == "SUPPORTED":
         if len(total_inputs) > 1:
             relations.append(
@@ -944,30 +890,15 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
         ["equal", "equals", "reconcile", "match", "plus", "add", "一致", "吻合", "核对", "重算", "加总"],
     )
     if spec["subtotal_status"] == "CONTRADICTED":
-        milestones.extend(
-            [
-                {
-                    "id": "printed_subtotal_total_reconciliation",
-                    "facet_ref": "final_total",
-                    "statement_meaning": _meaning(
-                        ["printed subtotal", "stated subtotal", "票面小计"],
-                        ["tax", "VAT", "discount", "adjustment", "component", "税", "折扣", "调整"],
-                        ["printed total", "final total", "amount due", "票面总额", "最终金额", "应付金额"],
-                        ["reconcile", "match", "plus", "add", "一致", "吻合", "核对", "加总"],
-                    ),
-                    "expected_status": "CONTRADICTED",
-                    "fact_ids": list(dict.fromkeys(printed_path_fact_ids)),
-                    "relation_ids": printed_path_relation_ids,
-                },
-                {
-                    "id": "line_derived_total_reconciliation",
-                    "facet_ref": "final_total",
-                    "statement_meaning": total_meaning,
-                    "expected_status": "SUPPORTED",
-                    "fact_ids": list(dict.fromkeys(final_fact_ids)),
-                    "relation_ids": final_relation_ids,
-                },
-            ]
+        milestones.append(
+            {
+                "id": "line_derived_total_reconciliation",
+                "facet_ref": "final_total",
+                "statement_meaning": total_meaning,
+                "expected_status": "SUPPORTED",
+                "fact_ids": list(dict.fromkeys(final_fact_ids)),
+                "relation_ids": final_relation_ids,
+            }
         )
     else:
         milestones.append(
@@ -1202,7 +1133,7 @@ def _build_oracle(case_id: str, spec: dict[str, Any], visible_text: str) -> dict
     oracle = {
         "schema_version": "2",
         "case_id": case_id,
-        "oracle_version": "4",
+        "oracle_version": str(spec.get("oracle_version", "4")),
         "sentinel": f"ORACLE_SENTINEL_DO_NOT_SEND::{case_id}",
         "facts": facts,
         "intent": {

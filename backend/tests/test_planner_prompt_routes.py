@@ -46,11 +46,18 @@ def test_supervisor_translates_business_goal_without_exposing_internal_profiles(
     prompt = load_system_prompt("agents/planner/prompt.md")
 
     assert "Users describe a business goal, not internal Requirements" in prompt
+    assert "smallest sufficient subset" in prompt
+    assert "Profiles are candidate bundles, not indivisible scopes" in prompt
+    assert "asking for a report never widens the review scope" in prompt
     assert "never require the user to name a profile or field checklist" in prompt
     assert "every key is only a grouping label and is never a Requirement id" in prompt
     assert "Never pass profile keys" in prompt
     assert "Every invoice review must include `invoice_calculation_valid`" in prompt
     assert "asked to skip it" in prompt
+    assert "does not activate the rest of an invoice profile" in prompt
+    assert '`active_requirement_ids` MUST contain EXACTLY `["invoice_calculation_valid"]`' in prompt
+    assert "Report generation is output only and MUST NOT add review scope" in prompt
+    assert "Runtime expands the Requirement's declared premises" in prompt
 
 
 def test_supervisor_reports_grounded_arithmetic_conflict_with_figures() -> None:
