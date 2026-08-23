@@ -225,7 +225,7 @@ class RoleRegistry:
             raw_response = parsed.model_dump_json()
             usage = usage_from_result(result)
             partition = with_usage_metrics(prompt_partition, usage)
-            reasoning = extract_reasoning_from_result(result)
+            reasoning = extract_reasoning_from_result(result, final_output=raw_response)
             record = ModelCallRecord(
                 role=role,
                 model=self.llm.settings.llm_model,

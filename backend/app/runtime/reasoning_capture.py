@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,7 +70,11 @@ def extract_reasoning_from_stream_item(item: Any) -> ReasoningCapture | None:
     return _capture_from_texts(_reasoning_item_texts(raw_item), source="stream_item")
 
 
-def extract_reasoning_from_result(result: Any) -> ReasoningCapture | None:
+def extract_reasoning_from_result(
+    result: Any,
+    *,
+    final_output: str = "",
+) -> ReasoningCapture | None:
     captures: list[ReasoningCapture] = []
 
     for item in _as_list(_get(result, "new_items")):
@@ -87,6 +92,8 @@ def extract_reasoning_from_result(result: Any) -> ReasoningCapture | None:
     if not texts:
         return None
     full_text = "\n".join(texts)
+    if final_output and _same_json_value(full_text, final_output):
+        return None
     return ReasoningCapture(
         text=_clip(full_text),
         chars=sum(capture.chars for capture in captures),
@@ -201,3 +208,10 @@ def _clip(value: str) -> str:
     if len(text) <= MAX_REASONING_EXCERPT_CHARS:
         return text
     return text[-MAX_REASONING_EXCERPT_CHARS:]
+
+
+def _same_json_value(left: str, right: str) -> bool:
+    try:
+        return json.loads(left) == json.loads(right)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False

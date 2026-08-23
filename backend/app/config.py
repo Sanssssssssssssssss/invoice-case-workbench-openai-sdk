@@ -53,6 +53,7 @@ class Settings(BaseModel):
     llm_output_cost_per_1m: float = 0.0
     llm_cached_input_cost_per_1m: float = 0.0
     llm_pricing_version: str = ""
+    llm_pricing_currency: str = "USD"
     strict_context_partition: bool = False
 
     def timeout_for_role(self, role: str) -> float:
@@ -183,5 +184,8 @@ def get_settings() -> Settings:
         llm_output_cost_per_1m=_float_env("INVOICE_AGENT_LLM_OUTPUT_COST_PER_1M", 0.0),
         llm_cached_input_cost_per_1m=_float_env("INVOICE_AGENT_LLM_CACHED_INPUT_COST_PER_1M", 0.0),
         llm_pricing_version=_first_env("INVOICE_AGENT_LLM_PRICING_VERSION") or "",
+        llm_pricing_currency=(
+            _first_env("INVOICE_AGENT_LLM_PRICING_CURRENCY") or "USD"
+        ).upper(),
         strict_context_partition=_bool_env("INVOICE_AGENT_STRICT_CONTEXT_PARTITION", False),
     )

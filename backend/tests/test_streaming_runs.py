@@ -103,6 +103,26 @@ def test_reasoning_extractor_reads_completed_result_items() -> None:
     assert capture.chunks == 2
 
 
+def test_reasoning_extractor_drops_structured_output_duplicate() -> None:
+    result = SimpleNamespace(
+        new_items=[],
+        raw_responses=[
+            {
+                "choices": [
+                    {"message": {"reasoning_content": '{\n  "status": "ok"\n}'}}
+                ]
+            }
+        ],
+    )
+
+    capture = extract_reasoning_from_result(
+        result,
+        final_output='{"status":"ok"}',
+    )
+
+    assert capture is None
+
+
 def test_stream_safe_payload_drops_hidden_reasoning() -> None:
     stream_hub.clear()
     stream_hub.create(run_id="run_reasoning", case_id="case_reasoning")

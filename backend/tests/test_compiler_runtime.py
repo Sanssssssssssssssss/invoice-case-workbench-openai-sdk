@@ -29,6 +29,8 @@ from app.compiler_runtime.runtime import (
     EvidenceCompilerRuntime,
     ExecutorSummary,
     VerificationBatch,
+    _CheckModelBudget,
+    _ExecutorConversation,
     _artifact,
     _completion_hook,
     _configured_policy_values,
@@ -270,7 +272,7 @@ def test_verifier_requires_a_grounded_comparison_baseline() -> None:
     assert "comparison baseline itself" in prompt
     assert "General resemblance without that baseline is NOT_FOUND, never SUPPORTED" in prompt
     assert "Absence of a baseline is also not evidence of mismatch" in prompt
-    assert "Arithmetic and reconciliation strong classifications must rely on submitted CalculationWitness ids" in prompt
+    assert "A CHECK that asserts arithmetic or reconciliation must rely on submitted CalculationWitness ids" in prompt
     assert "Never change an operand" in prompt
     assert "Do not perform free-form or mental arithmetic" in prompt
     assert "genuinely provide partial evidence" in prompt
@@ -343,22 +345,30 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "A component rate/base gap does not erase its narrower grounded amount/sign" in compiler
     assert "Claims are append-only and existing Claim content is immutable" in executor
     assert "later unrelated Claims are allowed" in executor
-    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v17"
-    assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v17"
+    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v21"
+    assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v21"
     assert "never bind a cross-Claim semantic relationship" in executor
     assert "only check_id, a facet_ref declared on that CHECK, an operation, and typed refs" in executor
     assert "For every declared facet whose minimum proof kinds include WITNESS" in executor
     assert "`GREATER_THAN` means exactly `refs[0] > refs[1]`" in executor
     assert "equality returns false" in executor
-    assert "Arithmetic and reconciliation strong classifications must rely on submitted CalculationWitness ids" in verifier
-    assert "Return it in strong_status_links" in verifier
+    assert "A CHECK that asserts arithmetic or reconciliation must rely on submitted CalculationWitness ids" in verifier
+    assert "return it in strong_status_links" in verifier
     assert "only `witness_id` and the semantic `true_status`" in verifier
     assert "`true_status` is counterfactual" in verifier
     assert "must not be copied from the current final classification" in verifier
     assert "false result conflates equality with exceedance" in verifier
     assert "When `repair_feedback` is present" in verifier
-    assert "never flip `status` or `true_status` merely to silence the diagnostic" in verifier
+    assert "Never flip `status` or `true_status` merely to silence any diagnostic" in verifier
     assert "A replayable multiplication with an unsupported business base remains NOT_FOUND" in verifier
+    assert "account for every source-listed subtotal input exactly once" in executor
+    assert "never treat a partial sum as direct contradiction" in verifier
+    assert "not a separate quota for every submitted Claim" in verifier
+    assert "do not demand an identity or invented calculation Witness" in verifier
+    assert "does not require a subtotal aggregation Witness" in verifier
+    assert "replay every explicit quantity-by-unit-price extension" in executor
+    assert "taxonomy, not an ambiguity" in verifier
+    assert "The subtype does not refute the parent business role" in verifier
     assert "Observation alone is never completion" in executor
     assert "lower bounds for the current CHECK whenever it declares that facet" in executor
     assert "the base need not be repeated in the applicability sentence" in executor
@@ -860,9 +870,11 @@ class _FrontierScriptRuntime(EvidenceCompilerRuntime):
         sandbox,
         focus_check_id,
         upstream_frontier_results=(),
-        hook_feedback=(),
+        runtime_observations=(),
+        conversation=None,
+        model_budget=None,
     ):
-        del plan, prepared_sources, policy_excerpt, hook_feedback
+        del plan, prepared_sources, policy_excerpt, runtime_observations, conversation, model_budget
         self.execute_calls.append(focus_check_id)
         self.upstream_frontiers[focus_check_id] = list(upstream_frontier_results)
         self.prior_submissions[focus_check_id] = [
@@ -884,8 +896,9 @@ class _FrontierScriptRuntime(EvidenceCompilerRuntime):
         focus_check_id,
         upstream_frontier_results=(),
         repair_feedback=(),
+        model_budget=None,
     ):
-        del plan, sandbox, policy_excerpt, upstream_frontier_results, repair_feedback
+        del plan, sandbox, policy_excerpt, upstream_frontier_results, repair_feedback, model_budget
         self.verify_calls.append(focus_check_id)
         remaining = self.verifier_failures.get(focus_check_id, 0)
         if remaining:
@@ -1169,6 +1182,7 @@ def test_frontier_second_diagnostic_exhausts_cap_without_third_call(
     runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
     execute_calls: list[str] = []
     verify_calls: list[str] = []
+    verifier_feedback: list[list[dict]] = []
     monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: _plan())
 
     def fake_execute(**kwargs):
@@ -1184,6 +1198,7 @@ def test_frontier_second_diagnostic_exhausts_cap_without_third_call(
     def fake_verify(**kwargs):
         check_id = kwargs["focus_check_id"]
         verify_calls.append(check_id)
+        verifier_feedback.append(list(kwargs["repair_feedback"]))
         return [
             CheckAssessment(
                 check_id=check_id,
@@ -1204,8 +1219,31 @@ def test_frontier_second_diagnostic_exhausts_cap_without_third_call(
     assert CHECK_FRONTIER_ATTEMPT_CAP == 2
     assert execute_calls == ["check.vendor", "check.vendor"]
     assert verify_calls == ["check.vendor", "check.vendor"]
+    assert verifier_feedback == [[], []]
     assert result.artifact.assessments == []
     assert result.retry_count == 1
+
+
+def test_frontier_does_not_ask_model_to_repair_runtime_exception(tmp_path, monkeypatch) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    calls = 0
+    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: _plan())
+
+    def fail_runtime(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("broken runtime invariant")
+
+    monkeypatch.setattr(runtime, "execute_plan", fail_runtime)
+
+    with pytest.raises(RuntimeError, match="broken runtime invariant"):
+        runtime.run(
+            active_requirement_ids=["vendor_identity"],
+            prepared_sources=[],
+            policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        )
+
+    assert calls == 1
 
 
 def test_later_frontier_can_resubmit_frozen_claim_lineage(
@@ -1315,6 +1353,63 @@ def test_executor_user_error_after_valid_submission_returns_private_candidate(
     assert candidate is not frozen
     assert [item.check_id for item in candidate.submissions] == ["check.vendor"]
     assert frozen.submissions == ()
+
+
+def test_executor_retry_continues_with_prior_tool_history_and_runtime_observation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    frozen = EvidenceSandbox(sources=[], allowed_check_ids=["check.vendor"])
+    conversation = _ExecutorConversation(
+        checkpoint=frozen,
+        sandbox=copy.deepcopy(frozen),
+    )
+    prior_history = [
+        {"role": "user", "content": "initial CHECK"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "accepted"},
+    ]
+    observed_inputs: list[object] = []
+
+    def fake_phase(**kwargs):
+        observed_inputs.append(kwargs["input_override"])
+        attempt = len(observed_inputs)
+        result = conversation.sandbox.submit_check(
+            check_id="check.vendor",
+            note=f"candidate attempt {attempt}",
+        )
+        assert result["ok"] is True
+        history = prior_history if attempt == 1 else [*observed_inputs[-1], {"role": "assistant"}]
+        kwargs["result_sink"](SimpleNamespace(to_input_list=lambda: list(history)))
+        return ExecutorSummary(completed_check_ids=["check.vendor"])
+
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+    call = {
+        "plan": _plan(),
+        "prepared_sources": [],
+        "policy_excerpt": policy_excerpt_for(["vendor_identity"]),
+        "sandbox": frozen,
+        "focus_check_id": "check.vendor",
+        "conversation": conversation,
+    }
+    runtime.execute_plan(**call)
+    signal = {
+        "check_id": "check.vendor",
+        "diagnostic_code": "UNSUBMITTED_CLAIM_REFERENCE",
+        "kernel_message": "Claim A was omitted from the CHECK submission.",
+    }
+    runtime.execute_plan(
+        **call,
+        runtime_observations=[signal],
+    )
+
+    assert observed_inputs[0] is None
+    assert observed_inputs[1][:-1] == prior_history
+    observation = json.loads(observed_inputs[1][-1]["content"])
+    assert observation["failure_signals"] == [signal]
+    assert observation["candidate_committed"] is False
+    assert observation["current_candidate_submissions"][0]["note"] == "candidate attempt 1"
+    assert len(conversation.sandbox.submissions) == 2
 
 
 @pytest.mark.parametrize("failure_type", [UserError, ModelBehaviorError])
@@ -1699,6 +1794,56 @@ def test_compiler_phase_retries_one_transient_connection_failure_with_fresh_clie
     assert llm.calls[1].retry_of == "task_compiler:transport_attempt_1"
 
 
+def test_check_budget_counts_transport_attempts(tmp_path, monkeypatch) -> None:
+    attempts = 0
+
+    def fail_transport(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise ConnectionError("connection failed")
+
+    monkeypatch.setattr("app.compiler_runtime.runtime.run_agent_sync", fail_transport)
+    monkeypatch.setattr("app.compiler_runtime.runtime.time.sleep", lambda _seconds: None)
+    budget = _CheckModelBudget(remaining=1)
+
+    with pytest.raises(RuntimeError, match="model call budget exhausted"):
+        EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))._run_phase(  # noqa: SLF001
+            name="fine_verifier",
+            prompt_file="verifier.md",
+            payload={"test": "bounded transport retry"},
+            output_type=VerificationBatch,
+            max_turns=1,
+            model_budget=budget,
+        )
+
+    assert attempts == 1
+    assert budget.remaining == 0
+
+
+def test_fine_verifier_leaves_malformed_output_to_frontier_budget(tmp_path, monkeypatch) -> None:
+    attempts = 0
+
+    def fake_run_agent_sync(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise ModelBehaviorError("model output was malformed")
+
+    monkeypatch.setattr("app.compiler_runtime.runtime.run_agent_sync", fake_run_agent_sync)
+    monkeypatch.setattr("app.compiler_runtime.runtime.time.sleep", lambda _seconds: None)
+
+    llm = LlmClient(_settings(tmp_path))
+    with pytest.raises(ModelBehaviorError):
+        EvidenceCompilerRuntime(llm)._run_phase(  # noqa: SLF001
+            name="fine_verifier",
+            prompt_file="verifier.md",
+            payload={"test": "structured output retry"},
+            output_type=VerificationBatch,
+            max_turns=1,
+        )
+
+    assert attempts == 1
+
+
 def test_compiler_phase_sends_configured_high_reasoning_to_deepseek(tmp_path, monkeypatch) -> None:
     expected = _plan()
     observed_extra_bodies: list[dict] = []
@@ -1839,6 +1984,10 @@ def test_focused_executor_cannot_write_another_check_or_leak_unowned_claim(
         allowed_check_ids=["check.one", "check.two"],
     )
     frozen.read_source(source.source_id)
+    conversation = _ExecutorConversation(
+        checkpoint=frozen,
+        sandbox=copy.deepcopy(frozen),
+    )
     tool_results: dict[str, dict] = {}
 
     def fake_phase(**kwargs):
@@ -1889,6 +2038,7 @@ def test_focused_executor_cannot_write_another_check_or_leak_unowned_claim(
         policy_excerpt=policy_excerpt_for(["vendor_identity"]),
         sandbox=frozen,
         focus_check_id="check.one",
+        conversation=conversation,
     )
 
     assert tool_results["bind"]["ok"] is True
@@ -1906,6 +2056,17 @@ def test_focused_executor_cannot_write_another_check_or_leak_unowned_claim(
     )
     assert boundary["scope_error"] == "UNOWNED_FOCUSED_PROOF_MATERIAL"
     assert boundary["orphan_claim_ids"] == [tool_results["bind"]["claim"]["id"]]
+    assert conversation.last_runtime_rejection == {
+        "check_id": "check.one",
+        "diagnostic_code": "FOCUSED_CHECK_SCOPE_VIOLATION",
+        "kernel_message": "Executor candidate crossed the focused CHECK ownership boundary.",
+        "details": {
+            "scope_error": "UNOWNED_FOCUSED_PROOF_MATERIAL",
+            "orphan_claim_ids": [tool_results["bind"]["claim"]["id"]],
+            "orphan_binding_ids": [],
+            "orphan_witness_ids": [],
+        },
+    }
 
 
 
@@ -1964,9 +2125,11 @@ class _ScriptedRuntime(EvidenceCompilerRuntime):
         sandbox,
         focus_check_id,
         upstream_frontier_results=(),
-        hook_feedback=(),
+        runtime_observations=(),
+        conversation=None,
+        model_budget=None,
     ):
-        del policy_excerpt, upstream_frontier_results, hook_feedback
+        del policy_excerpt, upstream_frontier_results, runtime_observations, conversation, model_budget
         self.execute_calls += 1
         assert focus_check_id == "check.vendor"
         candidate = copy.deepcopy(sandbox)
@@ -2003,9 +2166,10 @@ class _ScriptedRuntime(EvidenceCompilerRuntime):
         focus_check_id,
         upstream_frontier_results=(),
         repair_feedback=(),
+        model_budget=None,
     ):
         del plan, policy_excerpt, upstream_frontier_results
-        del repair_feedback
+        del repair_feedback, model_budget
         assert focus_check_id == "check.vendor"
         self.verify_calls += 1
         claim_ids = [item.id for item in sandbox.evidence_ir.claims]
@@ -2058,10 +2222,12 @@ class _DecisiveAnyRuntime(EvidenceCompilerRuntime):
         sandbox,
         focus_check_id,
         upstream_frontier_results=(),
-        hook_feedback=(),
+        runtime_observations=(),
+        conversation=None,
+        model_budget=None,
     ):
         del plan, policy_excerpt, upstream_frontier_results
-        del hook_feedback
+        del runtime_observations, conversation, model_budget
         self.execute_calls.append(focus_check_id)
         candidate = copy.deepcopy(sandbox)
         record = prepared_sources[0].record
@@ -2093,9 +2259,10 @@ class _DecisiveAnyRuntime(EvidenceCompilerRuntime):
         focus_check_id,
         upstream_frontier_results=(),
         repair_feedback=(),
+        model_budget=None,
     ):
         del plan, policy_excerpt, upstream_frontier_results
-        del repair_feedback
+        del repair_feedback, model_budget
         if focus_check_id == "check.alternative":
             return [
                 CheckAssessment(

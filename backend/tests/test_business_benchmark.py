@@ -565,7 +565,7 @@ def test_efficiency_uses_canonical_events_and_preserves_raw_engineering(tmp_path
         }},
         pricing={
             "version": "test-pricing-v1",
-            "currency": "USD",
+            "currency": "CNY",
             "input_miss_per_1m": 1.0,
             "cached_input_per_1m": 0.25,
             "output_per_1m": 2.0,
@@ -604,21 +604,21 @@ def test_efficiency_uses_canonical_events_and_preserves_raw_engineering(tmp_path
     assert metrics["context"] == {"peak_context_tokens": 320, "cache_hit_ratio": round(107 / 430, 4)}
     assert metrics["cost"] == {
         "pricing_version": "test-pricing-v1",
-        "currency": "USD",
+        "currency": "CNY",
         "rates_per_1m": {"input_miss": 1.0, "cached_input": 0.25, "output": 2.0},
-        "input_miss_usd": 0.000323,
-        "cached_input_usd": 0.00002675,
-        "output_usd": 0.00004,
-        "total_usd": 0.00038975,
+        "input_miss_cost": 0.000323,
+        "cached_input_cost": 0.00002675,
+        "output_cost": 0.00004,
+        "total_cost": 0.00038975,
     }
     assert metrics["by_role"]["task_compiler"]["latency_p50_ms"] == 200
-    assert metrics["by_role"]["task_compiler"]["cost_usd"] == 0.00010975
+    assert metrics["by_role"]["task_compiler"]["cost"] == 0.00010975
     assert metrics["by_role"]["executor"]["ttft_p50_ms"] is None
     assert "_model_latency_samples_ms" not in json.dumps(metrics)
     assert "_ttft_samples_ms" not in json.dumps(metrics)
     assert summary["strict_pass"] is True and summary["score_mean"] == 87
     report = benchmark.render_business_benchmark(summary)
-    assert all(label in report for label in ("Calls", "Tokens", "Cost USD", "TTFT", "效率指标不与业务分合成"))
+    assert all(label in report for label in ("Calls", "Tokens", "Cost CNY", "TTFT", "效率指标不与业务分合成"))
     assert "task_compiler" in report
     assert "pass^" not in report.casefold()
 
@@ -649,7 +649,7 @@ def test_missing_provider_telemetry_stays_unknown(tmp_path: Path) -> None:
 
     assert metrics["execution"]["provider_calls"] is None
     assert metrics["tokens"]["total_tokens"] is None
-    assert metrics["cost"]["total_usd"] is None
+    assert metrics["cost"]["total_cost"] is None
     assert metrics["by_role"]["executor"]["provider_calls"] is None
     assert metrics["by_role"]["executor"]["total_tokens"] is None
     assert summary["engineering_by_role"]["executor"]["provider_calls"] is None
@@ -723,14 +723,14 @@ def test_percentiles_null_coverage_and_success_adjusted_metrics(tmp_path: Path) 
     assert summary["case_runs"][fail_index]["efficiency"]["latency"]["ttft_ms"] is None
     assert summary["engineering_efficiency"] == {
         "business_pass_count": 1, "tokens_per_business_pass": 400,
-        "latency_ms_per_business_pass": 4_000, "cost_usd_per_business_pass": None,
+        "latency_ms_per_business_pass": 4_000, "cost_per_business_pass": None,
     }
     no_pass = benchmark.summarize_business_results(
         [runs[1]], case_dirs={"fail": cases["fail"]}, run_dir=tmp_path / "runs"
     )
     assert no_pass["engineering_efficiency"]["tokens_per_business_pass"] is None
     assert no_pass["engineering_efficiency"]["latency_ms_per_business_pass"] is None
-    assert no_pass["engineering_efficiency"]["cost_usd_per_business_pass"] is None
+    assert no_pass["engineering_efficiency"]["cost_per_business_pass"] is None
     assert summary["engineering_distribution"] == benchmark.summarize_business_results(
         runs, case_dirs=cases, run_dir=tmp_path / "runs"
     )["engineering_distribution"]

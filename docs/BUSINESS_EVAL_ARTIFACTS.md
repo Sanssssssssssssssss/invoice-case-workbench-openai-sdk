@@ -20,10 +20,11 @@ Offline rescoring must point at an existing canonical snapshot and write only a 
 
 ## Baseline telemetry
 
-Before a live baseline, freeze the provider's published rates together with a human-readable pricing version. Rates are USD per one million tokens; use zero only for a provider that is explicitly free.
+Before a live baseline, freeze the provider's published rates, currency, and a human-readable pricing version. Rates are per one million tokens; use zero only for a provider that is explicitly free.
 
 ```powershell
 $env:INVOICE_AGENT_LLM_PRICING_VERSION='provider-model-YYYY-MM-DD'
+$env:INVOICE_AGENT_LLM_PRICING_CURRENCY='USD'
 $env:INVOICE_AGENT_LLM_INPUT_COST_PER_1M='0'
 $env:INVOICE_AGENT_LLM_CACHED_INPUT_COST_PER_1M='0'
 $env:INVOICE_AGENT_LLM_OUTPUT_COST_PER_1M='0'

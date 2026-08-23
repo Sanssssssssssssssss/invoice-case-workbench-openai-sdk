@@ -1631,11 +1631,23 @@ def test_runtime_page_locator_alias_is_grounded_by_the_locator_resolver() -> Non
         source_ids={"source_1"},
         source_content={"source_1": content},
     )
+    assert _claim_is_grounded(
+        {
+            "id": "claim_total_short_alias",
+            "source_id": "source_1",
+            "quote": "TOTAL: 188813.24 EUR",
+            "locator": "page 1 body",
+            "confidence": "high",
+        },
+        source_ids={"source_1"},
+        source_content={"source_1": content},
+    )
     assert _meaning_groups_match(
         "Each line item's extension equals unit price × quantity.",
         [["line item extension"], ["unit price"], ["quantity"]],
     )
     assert _predicate_matches_options("line_total", ["line total"])
+    assert _predicate_matches_options("extension amount", ["extended amount"])
     assert _text_has_decimal("Statutory VAT (20%)", Decimal("0.20"))
 
     fact = next(item for item in _oracle().facts if item.id == "adjustment_1_rate_factor")

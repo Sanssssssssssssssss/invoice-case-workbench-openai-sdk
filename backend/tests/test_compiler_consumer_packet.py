@@ -324,8 +324,30 @@ def test_deterministic_report_applies_grounded_component_sign_to_amount() -> Non
     assert "EUR 2817.38" not in markdown
 
 
-def test_deterministic_report_names_final_total_business_amounts() -> None:
-    packet = derive_consumer_packet(_case(["CONTRADICTED"]))
+@pytest.mark.parametrize(
+    ("status", "recomputed", "difference", "expected"),
+    [
+        (
+            "CONTRADICTED",
+            "13563.84",
+            "406.92",
+            "最终总金额不一致：票面总额 13156.92 EUR，重算总额 13563.84 EUR，差额 406.92 EUR",
+        ),
+        (
+            "SUPPORTED",
+            "13156.92",
+            "0.00",
+            "金额核对通过：最终总金额一致：票面总额 13156.92 EUR，重算总额 13156.92 EUR，差额 0.00 EUR",
+        ),
+    ],
+)
+def test_deterministic_report_names_final_total_business_amounts(
+    status: str,
+    recomputed: str,
+    difference: str,
+    expected: str,
+) -> None:
+    packet = derive_consumer_packet(_case([status]))
     printed = packet.claims[0].model_copy(
         update={"id": "claim.total", "predicate": "total_amount", "value": "13156.92", "currency": "EUR"}
     )
@@ -338,7 +360,7 @@ def test_deterministic_report_names_final_total_business_amounts() -> None:
         },
         {
             "ref": {"kind": "CLAIM", "ref_id": printed.id},
-            "value": "406.92",
+            "value": difference,
             "currency": "EUR",
             "claim_content_hash": "sha256:claim",
         },
@@ -352,10 +374,10 @@ def test_deterministic_report_names_final_total_business_amounts() -> None:
         "lineage_hash": "sha256:lineage",
     }
     total = CalculationWitness.model_validate(
-        {"id": "witness.total", "operation": "SUM", "operands": operands, "result": "13563.84", **common}
+        {"id": "witness.total", "operation": "SUM", "operands": operands, "result": recomputed, **common}
     )
     difference = CalculationWitness.model_validate(
-        {"id": "witness.diff", "operation": "ABS_DIFF", "operands": operands, "result": "406.92", **common}
+        {"id": "witness.diff", "operation": "ABS_DIFF", "operands": operands, "result": difference, **common}
     )
     finding = packet.leaf_findings[0].model_copy(
         update={
@@ -375,9 +397,17 @@ def test_deterministic_report_names_final_total_business_amounts() -> None:
     markdown = render_consumer_report(packet)
 
     assert "### 摘要结论" in markdown
-    assert "最终总金额不一致：票面总额 13156.92 EUR，重算总额 13563.84 EUR，差额 406.92 EUR" in markdown
+    assert expected in markdown
     assert "重算总额（SUM）" in markdown
     assert "总额差额（ABS_DIFF）" in markdown
+
+
+def test_deterministic_report_names_supported_final_total_business_meaning() -> None:
+    packet = derive_consumer_packet(_case(["SUPPORTED"]))
+    finding = packet.leaf_findings[0].model_copy(update={"facet_refs": ["final_total"]})
+    packet = packet.model_copy(update={"leaf_findings": [finding]})
+
+    assert "内部计算验证通过" in render_consumer_report(packet)
 
 
 def test_contradicted_root_with_unresolved_required_sibling_is_partial_but_decision_ready() -> None:

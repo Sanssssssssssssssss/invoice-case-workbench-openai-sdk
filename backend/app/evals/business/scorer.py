@@ -25,7 +25,7 @@ from .models import (
 )
 
 
-SCORER_VERSION = "business_eval_scorer_v3.3"
+SCORER_VERSION = "business_eval_scorer_v3.5"
 
 STAGE_WEIGHTS: dict[str, Decimal] = {
     "understanding": Decimal("10"),
@@ -1574,7 +1574,8 @@ def _predicate_key(value: Any) -> str:
     # language (``unit price``).  They are the same typed predicate for eval
     # purposes; keeping ``_`` as a token character created broad false
     # negatives on otherwise grounded real runs.
-    return " ".join(re.sub(r"[_\W]+", " ", str(value or "").casefold()).split())
+    terms = re.sub(r"[_\W]+", " ", str(value or "").casefold()).split()
+    return " ".join("extension" if term == "extended" else term for term in terms)
 
 
 def _predicate_matches_options(value: Any, options: list[str]) -> bool:
@@ -1679,7 +1680,11 @@ def _claim_semantics_match_source_fact(
 
 def _locator_supports_quote(content: str, *, locator: str, quote: str) -> bool:
     """Require the locator and quote to resolve to the same local source neighborhood."""
-    page_text = re.search(r"\bpage\s+(\d+)\s+(?:body\s+)?text\b", locator, re.IGNORECASE)
+    page_text = re.search(
+        r"\bpage\s+(\d+)\s+(?:text|body(?:\s+text)?)\b",
+        locator,
+        re.IGNORECASE,
+    )
     if page_text:
         page_number = page_text.group(1)
         marker = re.search(

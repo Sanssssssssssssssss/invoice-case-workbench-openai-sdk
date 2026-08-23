@@ -279,7 +279,7 @@ class LlmClient:
                 raw_response = parsed.model_dump_json()
                 usage = usage_from_result(result)
                 partition = with_usage_metrics(packet.debug_metadata(), usage)
-                reasoning = extract_reasoning_from_result(result)
+                reasoning = extract_reasoning_from_result(result, final_output=raw_response)
                 record = ModelCallRecord(
                     role=role,
                     model=selected_model,

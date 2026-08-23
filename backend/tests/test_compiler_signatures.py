@@ -25,23 +25,55 @@ TEMPLATE_POLICY_REF = "invoice_template_baseline_ref"
 def _signature() -> ProofSignature:
     return ProofSignature(
         signature_id="invoice_arithmetic",
-        version="1",
+        version="2",
         requirement_id=REQUIREMENT_ID,
         root_composition="ALL_REQUIRED",
         required_policy_refs=[POLICY_REF],
         facets=[
-            ProofFacet(id="line_extensions", minimum_proof_terms=["WITNESS"]),
-            ProofFacet(id="subtotal_aggregation", minimum_proof_terms=["WITNESS"]),
+            ProofFacet(
+                id="line_extensions",
+                minimum_proof_terms=["WITNESS"],
+                semantic_contract=(
+                    "Enumerate every source-listed item, service, or detail amount that contributes "
+                    "to the subtotal. For every entry that explicitly states quantity, unit price, "
+                    "and extension, ground all three and replay the multiplication before accepting "
+                    "its extension. A lump-sum entry remains a line extension even when quantity or "
+                    "unit price is absent: ground its stated extension without inventing a "
+                    "multiplication. For this facet, complete coverage means one grounded extension "
+                    "Claim per source-listed entry; arithmetic inclusion exactly once in a SUM "
+                    "belongs to the subtotal_aggregation facet. No entry may be omitted or "
+                    "reclassified as an applied component merely from its label. If an entry's "
+                    "arithmetic role is ambiguous or an explicit calculation is not replayed, "
+                    "preserve the outcome as NOT_FOUND."
+                ),
+            ),
+            ProofFacet(
+                id="subtotal_aggregation",
+                minimum_proof_terms=["WITNESS"],
+                semantic_contract=(
+                    "Recompute the subtotal from every source-listed line extension established "
+                    "for the document, including grounded lump-sum entries, and compare that "
+                    "derived subtotal with the stated subtotal. An omitted or ambiguously "
+                    "classified subtotal input is a coverage gap, not evidence that the stated "
+                    "subtotal is contradicted."
+                ),
+            ),
             ProofFacet(
                 id="stated_components",
                 minimum_proof_terms=["BINDING", "WITNESS"],
                 semantic_contract=(
-                    "Verify each source-stated tax, discount, charge, or other adjustment as "
-                    "an applied calculation component. The component amount and sign/role must "
-                    "be grounded in the source. When a rate-based calculation is claimed, both "
-                    "the rate and its applicable base relationship must be grounded; numerical "
-                    "coincidence cannot establish the base. If the applicable base cannot be "
-                    "established, preserve the component-validity outcome as NOT_FOUND."
+                    "Verify each source-stated tax, discount, charge, or other adjustment that "
+                    "source context presents as an applied component outside the item, service, "
+                    "or detail listing. Do not reclassify a listed subtotal input as a component "
+                    "merely from its label, and do not classify one source amount as both a line "
+                    "extension and an applied component. The component amount and sign/role must "
+                    "be grounded in the source. When a rate-based calculation is claimed, both the "
+                    "rate and its applicable base relationship must be grounded; numerical "
+                    "coincidence cannot establish the base. COMPONENT_RECONCILIATION means "
+                    "computing the component amount, comparing it with the stated component amount, "
+                    "and applying tolerance; inclusion in the final total belongs to the final_total "
+                    "facet and is not a prerequisite here. If the applicable base or arithmetic role "
+                    "cannot be established, preserve the component-validity outcome as NOT_FOUND."
                 ),
                 required_semantic_roles=[
                     "COMPONENT_OBSERVATION",
@@ -49,7 +81,17 @@ def _signature() -> ProofSignature:
                     "COMPONENT_RECONCILIATION",
                 ],
             ),
-            ProofFacet(id="final_total", minimum_proof_terms=["WITNESS"]),
+            ProofFacet(
+                id="final_total",
+                minimum_proof_terms=["WITNESS"],
+                semantic_contract=(
+                    "Reconcile the stated final total from independently established upstream "
+                    "amounts while preserving every source-stated sign. When the source states a "
+                    "transaction-document type or subtype that determines sign semantics, ground "
+                    "that document type and include it in the final-total proof; never infer "
+                    "polarity from convention alone."
+                ),
+            ),
         ],
     )
 
@@ -160,12 +202,21 @@ def test_pack_exposes_the_minimal_invoice_calculation_signature() -> None:
         for facet in signature.facets
     )
     components = next(facet for facet in signature.facets if facet.id == "stated_components")
+    lines = next(facet for facet in signature.facets if facet.id == "line_extensions")
+    subtotal = next(facet for facet in signature.facets if facet.id == "subtotal_aggregation")
+    final_total = next(facet for facet in signature.facets if facet.id == "final_total")
     assert components.required_semantic_roles == [
         "COMPONENT_OBSERVATION",
         "COMPONENT_APPLICABILITY",
         "COMPONENT_RECONCILIATION",
     ]
     assert "numerical coincidence cannot establish the base" in components.semantic_contract
+    assert "inclusion in the final total belongs to the final_total facet" in components.semantic_contract
+    assert "lump-sum entry remains a line extension" in lines.semantic_contract
+    assert "one grounded extension Claim per source-listed entry" in lines.semantic_contract
+    assert "belongs to the subtotal_aggregation facet" in lines.semantic_contract
+    assert "coverage gap, not evidence" in subtotal.semantic_contract
+    assert "transaction-document type or subtype" in final_total.semantic_contract
 
 
 def test_pack_exposes_a_tiny_template_baseline_signature() -> None:

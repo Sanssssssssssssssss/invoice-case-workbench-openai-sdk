@@ -393,6 +393,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
     status = "PASS" if summary["strict_pass"] else "FAIL"
     core = summary["core_checks"]
     framework = summary.get("framework") or {}
+    currency = summary.get("cost_currency") or "currency"
     lines = [
         "# Business Benchmark 报告",
         "",
@@ -438,7 +439,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             "",
             "## 案例结果",
             "",
-            "| 案例 | 套件 | 结果 | 业务分 | 框架 | 首个失败阶段 | Veto | Provider Calls | Tokens | Cost USD | 模型 TTFT p50 ms | 耗时 ms |",
+            f"| 案例 | 套件 | 结果 | 业务分 | 框架 | 首个失败阶段 | Veto | Provider Calls | Tokens | Cost {currency} | 模型 TTFT p50 ms | 耗时 ms |",
             "|---|---|---|---:|---|---|---|---:|---:|---:|---:|---:|",
         ]
     )
@@ -463,7 +464,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
                 veto=_escape(", ".join(row["veto_codes"]) or "-"),
                 calls=metrics["execution"]["provider_calls"],
                 tokens=metrics["tokens"]["total_tokens"],
-                cost=_metric_text(metrics["cost"]["total_usd"]),
+                cost=_metric_text(metrics["cost"]["total_cost"]),
                 ttft=_metric_text(metrics["latency"]["ttft_ms"]),
                 duration=_metric_text(metrics["latency"]["e2e_duration_ms"]),
             )
@@ -503,7 +504,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             f"- 业务通过次数：`{efficiency['business_pass_count']}`",
             f"- Tokens / business pass：`{_metric_text(efficiency['tokens_per_business_pass'])}`",
             f"- Latency ms / business pass：`{_metric_text(efficiency['latency_ms_per_business_pass'])}`",
-            f"- Cost USD / business pass：`{_metric_text(efficiency['cost_usd_per_business_pass'])}`",
+            f"- Cost {currency} / business pass：`{_metric_text(efficiency['cost_per_business_pass'])}`",
             (
                 "- E2E latency p50/p95 ms："
                 f"`{_metric_text(summary['engineering_distribution']['e2e_duration_ms']['p50'])}` / "
@@ -513,7 +514,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             "### 分层模型指标",
             "",
             "| 层/角色 | Provider Calls | Logical Calls | Input | Output | Reasoning | Cached | "
-            "Total | Cost USD | Latency p50/p95 ms | TTFT p50/p95 ms |",
+            f"Total | Cost {currency} | Latency p50/p95 ms | TTFT p50/p95 ms |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -524,7 +525,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             f"{_metric_text(values['input_tokens'])} | {_metric_text(values['output_tokens'])} | "
             f"{_metric_text(values['reasoning_tokens'])} | {_metric_text(values['cached_tokens'])} | "
             f"{_metric_text(values['total_tokens'])} | "
-            f"{_metric_text(values['cost_usd'])} | "
+            f"{_metric_text(values['cost'])} | "
             f"{_metric_text(values['latency_p50_ms'])}/{_metric_text(values['latency_p95_ms'])} | "
             f"{_metric_text(values['ttft_p50_ms'])}/{_metric_text(values['ttft_p95_ms'])} |"
         )
@@ -668,10 +669,10 @@ def _cost_metrics(tokens: Mapping[str, Any], pricing: Mapping[str, Any]) -> dict
         "pricing_version": version or None,
         "currency": str(pricing.get("currency") or "USD") if version else None,
         "rates_per_1m": rates,
-        "input_miss_usd": None,
-        "cached_input_usd": None,
-        "output_usd": None,
-        "total_usd": None,
+        "input_miss_cost": None,
+        "cached_input_cost": None,
+        "output_cost": None,
+        "total_cost": None,
     }
     input_tokens = _num(tokens.get("input_tokens"))
     output_tokens = _num(tokens.get("output_tokens"))
@@ -689,10 +690,10 @@ def _cost_metrics(tokens: Mapping[str, Any], pricing: Mapping[str, Any]) -> dict
     cached_input = cached_tokens * rates["cached_input"] / 1_000_000
     output = output_tokens * rates["output"] / 1_000_000
     result.update(
-        input_miss_usd=round(input_miss, 10),
-        cached_input_usd=round(cached_input, 10),
-        output_usd=round(output, 10),
-        total_usd=round(input_miss + cached_input + output, 10),
+        input_miss_cost=round(input_miss, 10),
+        cached_input_cost=round(cached_input, 10),
+        output_cost=round(output, 10),
+        total_cost=round(input_miss + cached_input + output, 10),
     )
     return result
 
@@ -767,7 +768,7 @@ def _role_metrics(
             "provider_calls": provider_calls,
             "model_role_calls": item["model_role_calls"],
             **tokens,
-            "cost_usd": _cost_metrics(tokens, pricing)["total_usd"],
+            "cost": _cost_metrics(tokens, pricing)["total_cost"],
             "latency_p50_ms": _pctl(item["_latency"], 0.50),
             "latency_p95_ms": _pctl(item["_latency"], 0.95),
             "ttft_p50_ms": _pctl(item["_ttft"], 0.50),
@@ -788,7 +789,15 @@ def _role_metrics(
 
 def _summarize_efficiency(rows: list[dict[str, Any]]) -> dict[str, Any]:
     totals = [row["efficiency"]["tokens"]["total_tokens"] for row in rows]
-    costs = [row["efficiency"]["cost"]["total_usd"] for row in rows]
+    currencies = {
+        row["efficiency"]["cost"]["currency"]
+        for row in rows
+        if row["efficiency"]["cost"]["currency"]
+    }
+    currency = next(iter(currencies)) if len(currencies) == 1 else None
+    costs = [row["efficiency"]["cost"]["total_cost"] for row in rows]
+    if len(currencies) > 1:
+        costs = [None] * len(rows)
     durations = [row["efficiency"]["latency"]["e2e_duration_ms"] for row in rows]
     call_latencies = [value for row in rows for value in row["efficiency"]["_model_latency_samples_ms"]]
     ttfts = [value for row in rows for value in row["efficiency"]["_ttft_samples_ms"]]
@@ -799,7 +808,7 @@ def _summarize_efficiency(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "engineering_distribution": {
             "total_tokens": _dist(observed_tokens, len(rows), "runs"),
-            "total_cost_usd": _dist(observed_costs, len(rows), "runs"),
+            "total_cost": _dist(observed_costs, len(rows), "runs"),
             "e2e_duration_ms": _dist(observed_durations, len(rows), "runs"),
             "model_call_latency_ms": _dist(
                 call_latencies,
@@ -825,12 +834,13 @@ def _summarize_efficiency(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 if pass_count and len(observed_durations) == len(rows)
                 else None
             ),
-            "cost_usd_per_business_pass": (
+            "cost_per_business_pass": (
                 round(sum(observed_costs) / pass_count, 10)
                 if pass_count and len(observed_costs) == len(rows)
                 else None
             ),
         },
+        "cost_currency": currency,
     }
 
 
@@ -851,7 +861,7 @@ def _aggregate_roles(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     "provider_calls": [],
                     "model_role_calls": 0,
                     **{key: [] for key in token_keys},
-                    "cost_usd": [],
+                    "cost": [],
                 },
             )
             item.setdefault("_latency", []).extend(values["_latency_samples_ms"])
@@ -860,7 +870,7 @@ def _aggregate_roles(rows: list[dict[str, Any]]) -> dict[str, Any]:
             item["model_role_calls"] += values["model_role_calls"]
             for key in token_keys:
                 item[key].append(values[key])
-            item["cost_usd"].append(values["cost_usd"])
+            item["cost"].append(values["cost"])
     return {
         role: {
             "provider_calls": (
@@ -874,9 +884,9 @@ def _aggregate_roles(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 key: sum(values[key]) if all(item is not None for item in values[key]) else None
                 for key in token_keys
             },
-            "cost_usd": (
-                round(sum(values["cost_usd"]), 10)
-                if all(item is not None for item in values["cost_usd"])
+            "cost": (
+                round(sum(values["cost"]), 10)
+                if all(item is not None for item in values["cost"])
                 else None
             ),
             "latency_p50_ms": _pctl(values["_latency"], 0.50),

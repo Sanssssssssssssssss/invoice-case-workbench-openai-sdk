@@ -19,6 +19,7 @@ from app.domain.invoice_requirements import default_requirement_required, requir
 from app.llm import LlmClient, ModelCallRecord
 from app.runtime.agents_sdk import FencedJsonOutputSchema, build_run_config, run_agent_sync
 from app.runtime.context_partition import usage_from_result
+from app.runtime.reasoning_capture import extract_reasoning_from_result
 from app.runtime.retry import is_transient_llm_error
 
 from .kernel import compile_review_artifact
@@ -51,13 +52,14 @@ from .signatures import (
 )
 
 
-COMPILER_VERSION = "typed_evidence_compiler_runtime_v14"
+COMPILER_VERSION = "typed_evidence_compiler_runtime_v15"
 EXECUTOR_MAX_TURNS = 24
 CHECK_FRONTIER_ATTEMPT_CAP = 2
+CHECK_MODEL_CALL_BUDGET = 4
 PROMPT_VERSIONS = {
     "task_compiler": "typed_task_compiler_v18",
-    "executor": "typed_evidence_executor_v17",
-    "verifier": "typed_fine_verifier_v17",
+    "executor": "typed_evidence_executor_v21",
+    "verifier": "typed_fine_verifier_v21",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
 _TRACE_METADATA = {
@@ -214,6 +216,28 @@ class CompilerRunResult:
     retry_count: int
 
 
+@dataclass
+class _ExecutorConversation:
+    checkpoint: EvidenceSandbox
+    sandbox: EvidenceSandbox
+    input_items: list[Any] | None = None
+    last_runtime_rejection: dict[str, Any] | None = None
+
+
+class _CheckBudgetExhausted(RuntimeError):
+    pass
+
+
+@dataclass
+class _CheckModelBudget:
+    remaining: int = CHECK_MODEL_CALL_BUDGET
+
+    def consume(self) -> None:
+        if self.remaining <= 0:
+            raise _CheckBudgetExhausted("CHECK model call budget exhausted")
+        self.remaining -= 1
+
+
 class EvidenceCompilerRuntime:
     """A small plan -> act -> verify loop over an in-memory evidence sandbox."""
 
@@ -353,7 +377,9 @@ class EvidenceCompilerRuntime:
         sandbox: EvidenceSandbox,
         focus_check_id: str,
         upstream_frontier_results: Sequence[Mapping[str, Any]] = (),
-        hook_feedback: Sequence[dict[str, Any]] = (),
+        runtime_observations: Sequence[dict[str, Any]] = (),
+        conversation: _ExecutorConversation | None = None,
+        model_budget: _CheckModelBudget | None = None,
     ) -> tuple[ExecutorSummary, EvidenceSandbox]:
         source_records = [item.record for item in prepared_sources]
         check_ids = [node.id for node in plan.nodes if node.kind == "CHECK"]
@@ -363,11 +389,13 @@ class EvidenceCompilerRuntime:
                 f"Executor focus references a check outside the ProofPlan: {focus_check_id!r}"
             )
         requested_focus = [focused_check_id]
-        rollback_sandbox = sandbox
+        rollback_sandbox = conversation.checkpoint if conversation is not None else sandbox
         # Every Executor call is a speculative single-CHECK transaction.  The
         # caller commits the returned candidate only after focused verification
         # and a full Kernel replay both succeed.
-        sandbox = copy.deepcopy(sandbox)
+        sandbox = conversation.sandbox if conversation is not None else copy.deepcopy(sandbox)
+        if conversation is not None:
+            conversation.last_runtime_rejection = None
         current_check_terms = _submitted_proof_terms(
             sandbox,
             check_ids={focused_check_id},
@@ -389,8 +417,57 @@ class EvidenceCompilerRuntime:
             "focus_check_ids": requested_focus,
             "current_check_prior_terms": current_check_terms,
             "upstream_frontier_results": list(upstream_frontier_results),
-            "hook_feedback": list(hook_feedback),
         }
+        model_input: str | list[Any] | None = None
+        if runtime_observations:
+            candidate_terms = _proof_terms_by_ids(
+                sandbox,
+                claim_ids=(
+                    {item.id for item in sandbox.evidence_ir.claims}
+                    - {item.id for item in rollback_sandbox.evidence_ir.claims}
+                ),
+                binding_ids=(
+                    {item.id for item in sandbox.binding_proposals}
+                    - {item.id for item in rollback_sandbox.binding_proposals}
+                ),
+                witness_ids=(
+                    {item.id for item in sandbox.calculation_witnesses}
+                    - {item.id for item in rollback_sandbox.calculation_witnesses}
+                ),
+            )
+            observation = {
+                "type": "runtime_observation",
+                "focused_check_id": focused_check_id,
+                "candidate_committed": False,
+                "failure_signals": list(runtime_observations),
+                "current_candidate_terms": candidate_terms,
+                "current_submitted_terms": current_check_terms,
+                "read_source_ids": list(sandbox.read_source_ids),
+                "current_candidate_submissions": [
+                    {
+                        "submission_id": item.submission_id,
+                        "claim_ids": list(item.claim_ids),
+                        "binding_ids": list(item.binding_ids),
+                        "witness_ids": list(item.witness_ids),
+                        "note": item.note,
+                    }
+                    for item in sandbox.submissions
+                    if item.check_id == focused_check_id
+                ],
+                "instruction": (
+                    "Continue this same CHECK from the observed state. Decide the next permitted "
+                    "tool action yourself; diagnostics are environment observations, not evidence."
+                ),
+            }
+            payload["runtime_observation"] = observation
+            if conversation is not None and conversation.input_items is not None:
+                model_input = [
+                    *conversation.input_items,
+                    {
+                        "role": "user",
+                        "content": json.dumps(observation, ensure_ascii=False, default=str),
+                    },
+                ]
         target_check_ids = requested_focus
         self._progress(
             "model_started",
@@ -407,6 +484,7 @@ class EvidenceCompilerRuntime:
             for check_id in target_check_ids
         }
         try:
+            run_results: list[Any] = []
             with sandbox.focused_writes(requested_focus):
                 summary = self._run_phase(
                     name="executor",
@@ -420,7 +498,12 @@ class EvidenceCompilerRuntime:
                         target_check_ids,
                         prior_submission_counts=submission_counts,
                     ),
+                    input_override=model_input,
+                    result_sink=run_results.append if conversation is not None else None,
+                    model_budget=model_budget,
                 )
+            if conversation is not None and run_results:
+                conversation.input_items = run_results[-1].to_input_list()
         except (ModelBehaviorError, UserError):
             submitted = {
                 check_id
@@ -520,6 +603,16 @@ class EvidenceCompilerRuntime:
                 focused_check_ids=requested_focus,
                 **details,
             )
+            if conversation is not None:
+                conversation.sandbox = copy.deepcopy(rollback_sandbox)
+                conversation.last_runtime_rejection = {
+                    "check_id": focused_check_id,
+                    "diagnostic_code": "FOCUSED_CHECK_SCOPE_VIOLATION",
+                    "kernel_message": (
+                        "Executor candidate crossed the focused CHECK ownership boundary."
+                    ),
+                    "details": details,
+                }
             return (
                 ExecutorSummary(
                     completed_check_ids=[],
@@ -564,6 +657,7 @@ class EvidenceCompilerRuntime:
         focus_check_id: str,
         upstream_frontier_results: Sequence[Mapping[str, Any]] = (),
         repair_feedback: Sequence[dict[str, Any]] = (),
+        model_budget: _CheckModelBudget | None = None,
     ) -> list[CheckAssessment]:
         all_check_ids = [node.id for node in plan.nodes if node.kind == "CHECK"]
         focused_check_id = focus_check_id.strip()
@@ -668,6 +762,7 @@ class EvidenceCompilerRuntime:
             payload=payload,
             output_type=VerificationBatch,
             max_turns=1,
+            model_budget=model_budget,
         )
         expected = {item["id"] for item in checks}
         actual = [item.check_id for item in batch.assessments]
@@ -858,6 +953,8 @@ class EvidenceCompilerRuntime:
         feedback: list[dict[str, Any]] = []
         repair_owner = "executor"
         attempts_used = 0
+        executor_conversation: _ExecutorConversation | None = None
+        model_budget = _CheckModelBudget()
 
         for attempt in range(1, CHECK_FRONTIER_ATTEMPT_CAP + 1):
             attempts_used = attempt
@@ -874,6 +971,11 @@ class EvidenceCompilerRuntime:
             if attempt == 1 or repair_owner == "executor":
                 executor_base = candidate_sandbox or sandbox
                 before_submission_count = _check_submission_count(executor_base, check_id)
+                if executor_conversation is None:
+                    executor_conversation = _ExecutorConversation(
+                        checkpoint=sandbox,
+                        sandbox=copy.deepcopy(executor_base),
+                    )
                 try:
                     _summary, executed_sandbox = self.execute_plan(
                         plan=plan,
@@ -882,9 +984,13 @@ class EvidenceCompilerRuntime:
                         sandbox=executor_base,
                         focus_check_id=check_id,
                         upstream_frontier_results=upstream_frontier_results,
-                        hook_feedback=feedback,
+                        runtime_observations=feedback,
+                        conversation=executor_conversation,
+                        model_budget=model_budget,
                     )
-                except Exception as exc:
+                except _CheckBudgetExhausted:
+                    break
+                except (ModelBehaviorError, UserError) as exc:
                     feedback = [
                         _frontier_feedback(
                             check_id,
@@ -903,13 +1009,28 @@ class EvidenceCompilerRuntime:
                         frontier_attempt=attempt,
                     )
                     continue
+                except Exception as exc:
+                    self._progress(
+                        "model_thinking",
+                        stage="executor",
+                        status="fatal",
+                        action="Executor Runtime 失败，停止当前运行",
+                        public_reason=f"{type(exc).__name__}: 该异常不属于模型可修复协议错误。",
+                        focused_check_ids=[check_id],
+                        frontier_attempt=attempt,
+                    )
+                    raise
 
+                candidate_sandbox = executed_sandbox
                 if _check_submission_count(executed_sandbox, check_id) <= before_submission_count:
                     feedback = [
-                        _frontier_feedback(
+                        executor_conversation.last_runtime_rejection
+                        or _frontier_feedback(
                             check_id,
                             code="CHECK_SUBMISSION_REQUIRED",
-                            message="Executor did not create a new submission for the focused CHECK.",
+                            message=(
+                                "Executor did not create a new submission for the focused CHECK."
+                            ),
                         )
                     ]
                     repair_owner = "executor"
@@ -923,7 +1044,6 @@ class EvidenceCompilerRuntime:
                         frontier_attempt=attempt,
                     )
                     continue
-                candidate_sandbox = executed_sandbox
 
             if candidate_sandbox is None:
                 continue
@@ -935,9 +1055,12 @@ class EvidenceCompilerRuntime:
                     policy_excerpt=policy_excerpt,
                     focus_check_id=check_id,
                     upstream_frontier_results=upstream_frontier_results,
-                    repair_feedback=feedback,
+                    repair_feedback=feedback if repair_owner == "verifier" else (),
+                    model_budget=model_budget,
                 )
-            except Exception as exc:
+            except _CheckBudgetExhausted:
+                break
+            except (ModelBehaviorError, UserError) as exc:
                 feedback = [
                     _frontier_feedback(
                         check_id,
@@ -954,8 +1077,21 @@ class EvidenceCompilerRuntime:
                     public_reason="Executor 候选仍保持私有；Verifier 未通过时不会提交任何证明工件。",
                     focused_check_ids=[check_id],
                     frontier_attempt=attempt,
+                    model_calls_used=CHECK_MODEL_CALL_BUDGET - model_budget.remaining,
                 )
                 continue
+            except Exception as exc:
+                self._progress(
+                    "model_thinking",
+                    stage="fine_verifier",
+                    status="fatal",
+                    action="Verifier Runtime 失败，停止当前运行",
+                    public_reason=f"{type(exc).__name__}: 该异常不属于模型可修复协议错误。",
+                    focused_check_ids=[check_id],
+                    frontier_attempt=attempt,
+                    model_calls_used=CHECK_MODEL_CALL_BUDGET - model_budget.remaining,
+                )
+                raise
 
             candidate_assessments = _upsert_focused_assessment(
                 plan,
@@ -996,25 +1132,16 @@ class EvidenceCompilerRuntime:
                 )
                 self._emit_kernel_completed(candidate_proof)
             except Exception as exc:
-                feedback = [
-                    _frontier_feedback(
-                        check_id,
-                        code="KERNEL_ATTEMPT_FAILED",
-                        message=f"{type(exc).__name__}: {exc}",
-                        previous_assessment=focused_assessments[0],
-                    )
-                ]
-                repair_owner = "executor"
                 self._progress(
                     "model_thinking",
                     stage="proof_kernel",
-                    status="frontier_attempt_failed",
-                    action="当前 CHECK 的 Kernel 候选失败",
-                    public_reason="候选 Artifact 未提交；已提交 checkpoint 保持不变。",
+                    status="fatal",
+                    action="Proof Kernel Runtime 失败，停止当前运行",
+                    public_reason=f"{type(exc).__name__}: Kernel 异常不能由模型修复。",
                     focused_check_ids=[check_id],
                     frontier_attempt=attempt,
                 )
-                continue
+                raise
 
             failures = _frontier_kernel_failures(
                 check_id=check_id,
@@ -1032,6 +1159,7 @@ class EvidenceCompilerRuntime:
                     public_reason="Executor、focused Verifier 与 Kernel 结果一致；内存 checkpoint 已前移。",
                     focused_check_ids=[check_id],
                     frontier_attempt=attempt,
+                    model_calls_used=CHECK_MODEL_CALL_BUDGET - model_budget.remaining,
                 )
                 return (
                     candidate_sandbox,
@@ -1040,6 +1168,23 @@ class EvidenceCompilerRuntime:
                     candidate_proof,
                     attempt - 1,
                 )
+
+            global_failures = [item for item in failures if not item.get("node_id")]
+            if global_failures:
+                codes = sorted(
+                    {str(item.get("diagnostic_code") or "") for item in global_failures}
+                )
+                self._progress(
+                    "model_thinking",
+                    stage="proof_kernel",
+                    status="fatal",
+                    action="Artifact 全局完整性失败，停止当前运行",
+                    public_reason=f"全局 Kernel diagnostics 不能由单个 CHECK 修复：{codes}",
+                    focused_check_ids=[check_id],
+                    frontier_attempt=attempt,
+                    diagnostic_codes=codes,
+                )
+                raise RuntimeError(f"Fatal artifact integrity diagnostics: {codes}")
 
             feedback = failures
             repair_owner = (
@@ -1069,9 +1214,15 @@ class EvidenceCompilerRuntime:
             stage="proof_kernel",
             status="frontier_rolled_back",
             action="当前 CHECK 已回滚，继续完整审核",
-            public_reason="固定尝试预算已耗尽；仅当前 CHECK 的私有候选被丢弃。",
+            public_reason=(
+                "CHECK 共享模型调用预算已耗尽；私有候选被丢弃。"
+                if model_budget.remaining == 0
+                else "固定尝试预算已耗尽；仅当前 CHECK 的私有候选被丢弃。"
+            ),
             focused_check_ids=[check_id],
             frontier_attempt=attempts_used,
+            model_calls_used=CHECK_MODEL_CALL_BUDGET - model_budget.remaining,
+            model_budget_exhausted=model_budget.remaining == 0,
         )
         return (
             sandbox,
@@ -1091,6 +1242,9 @@ class EvidenceCompilerRuntime:
         tools: Sequence[FunctionTool] = (),
         max_turns: int,
         tool_use_behavior: Any = "run_llm_again",
+        input_override: str | list[Any] | None = None,
+        result_sink: Callable[[Any], None] | None = None,
+        model_budget: _CheckModelBudget | None = None,
     ) -> Any:
         if not self.llm.available:
             raise RuntimeError("LLM_API_KEY is required for Evidence Compiler execution")
@@ -1113,10 +1267,21 @@ class EvidenceCompilerRuntime:
             output_type=FencedJsonOutputSchema(output_type, strict_json_schema=False),
             tool_use_behavior=tool_use_behavior,
         )
-        input_text = json.dumps(payload, ensure_ascii=False, default=str)
+        model_input = (
+            input_override
+            if input_override is not None
+            else json.dumps(payload, ensure_ascii=False, default=str)
+        )
+        input_text = (
+            model_input
+            if isinstance(model_input, str)
+            else json.dumps(model_input, ensure_ascii=False, default=str)
+        )
         prompt_version = PROMPT_VERSIONS[name if name != "fine_verifier" else "verifier"]
         failed_record: ModelCallRecord | None = None
         for attempt in range(2):
+            if model_budget is not None:
+                model_budget.consume()
             # A failed SDK run closes its client. Build a fresh config so the one
             # visible transport retry cannot reuse a broken connection pool.
             run_config = build_run_config(
@@ -1134,7 +1299,7 @@ class EvidenceCompilerRuntime:
             try:
                 result = run_agent_sync(
                     agent,
-                    input_text,
+                    model_input,
                     max_turns=max_turns,
                     hooks=self.hooks,
                     run_config=run_config,
@@ -1144,6 +1309,7 @@ class EvidenceCompilerRuntime:
                     parsed = output_type.model_validate(parsed)
                 raw = parsed.model_dump_json()
                 usage = usage_from_result(result)
+                reasoning = extract_reasoning_from_result(result, final_output=raw)
                 if failed_record is not None:
                     failed_record.recovered_by = "compiler_transport_retry_success"
                 self.llm.calls.append(
@@ -1161,9 +1327,15 @@ class EvidenceCompilerRuntime:
                         content_chars=len(raw),
                         retry_of=f"{name}:transport_attempt_1" if attempt else "",
                         runtime="evidence_compiler_runtime",
+                        reasoning_excerpt=reasoning.text if reasoning else "",
+                        reasoning_chars=reasoning.chars if reasoning else 0,
+                        reasoning_chunks=reasoning.chunks if reasoning else 0,
                         thinking_type=thinking_type,
+                        reasoning_source=reasoning.source if reasoning else "",
                     )
                 )
+                if result_sink is not None:
+                    result_sink(result)
                 return parsed
             except Exception as exc:
                 if self.hooks is not None and hasattr(self.hooks, "record_error"):
@@ -1179,6 +1351,7 @@ class EvidenceCompilerRuntime:
                     payload=payload,
                     latency_ms=round((time.perf_counter() - attempt_started) * 1000, 2),
                     runtime="evidence_compiler_runtime",
+                    thinking_type=thinking_type,
                 )
                 self.llm.calls.append(failed_record)
                 if attempt or not is_transient_llm_error(exc):
@@ -1777,6 +1950,7 @@ def _frontier_feedback(
     *,
     code: str,
     message: str,
+    node_id: str = "",
     previous_assessment: CheckAssessment | None = None,
 ) -> dict[str, Any]:
     feedback: dict[str, Any] = {
@@ -1784,6 +1958,8 @@ def _frontier_feedback(
         "diagnostic_code": code,
         "kernel_message": message,
     }
+    if node_id:
+        feedback["node_id"] = node_id
     if previous_assessment is not None:
         feedback["previous_assessment"] = previous_assessment.model_dump(mode="json")
     return feedback
@@ -1815,6 +1991,7 @@ def _frontier_kernel_failures(
             check_id,
             code=diagnostic.code,
             message=diagnostic.message,
+            node_id=diagnostic.node_id,
             previous_assessment=assessments_by_id.get(diagnostic.node_id),
         )
         for diagnostic in candidate_proof.diagnostics
@@ -1837,6 +2014,7 @@ def _frontier_kernel_failures(
                     f"assessment={focused_assessment.status}, "
                     f"result={getattr(focused_result, 'status', None)}"
                 ),
+                node_id=check_id,
                 previous_assessment=focused_assessment,
             )
         )
@@ -1858,6 +2036,7 @@ def _frontier_kernel_failures(
                         f"Candidate for {check_id!r} changed committed CHECK "
                         f"{committed_check_id!r}."
                     ),
+                    node_id=committed_check_id,
                     previous_assessment=focused_assessment,
                 )
             )

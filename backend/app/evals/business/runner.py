@@ -434,7 +434,7 @@ def _pricing_snapshot(runtime: Any | None) -> dict[str, Any]:
         return {}
     return {
         "version": version,
-        "currency": "USD",
+        "currency": str(getattr(settings, "llm_pricing_currency", "USD") or "USD").upper(),
         "input_miss_per_1m": float(getattr(settings, "llm_input_cost_per_1m", 0.0) or 0.0),
         "cached_input_per_1m": float(
             getattr(settings, "llm_cached_input_cost_per_1m", 0.0) or 0.0

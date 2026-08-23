@@ -761,11 +761,15 @@ def _consumer_report_summary(packet: CanonicalConsumerPacket) -> str:
         )
         if printed is not None and recomputed is not None and difference is not None:
             relation = "不一致" if final.status == "CONTRADICTED" else "一致"
+            conclusion = "金额核对通过：" if final.status == "SUPPORTED" else ""
             return (
-                f"最终总金额{relation}：票面总额 {_report_amount(printed.value, printed.currency)}，"
+                f"{conclusion}最终总金额{relation}："
+                f"票面总额 {_report_amount(printed.value, printed.currency)}，"
                 f"重算总额 {_report_amount(recomputed.result, recomputed.currency)}，"
                 f"差额 {_report_amount(difference.result, difference.currency)}。"
             )
+        if final.status == "SUPPORTED":
+            return "核定结论：内部计算验证通过，目标要求已获得证据支持。"
     statuses = {item.status for item in packet.root_decisions}
     if "CONTRADICTED" in statuses:
         return "核定结论：目标要求存在已证实冲突。"
