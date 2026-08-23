@@ -419,8 +419,6 @@ class CheckAssessment(_CompilerModel):
 
 _EXPLICIT_FINAL_STATUS = re.compile(
     r"\b(?:final\s+(?:classification|status)|verdict)\s*(?:is|:|=|should\s+be|must\s+be)?\s*"
-    r"`?(SUPPORTED|CONTRADICTED|NOT_FOUND)`?\b"
-    r"|\b(?:the\s+)?check\s+(?:is|should\s+be|must\s+be|is\s+classified\s+as)\s*"
     r"`?(SUPPORTED|CONTRADICTED|NOT_FOUND)`?\b",
     flags=re.IGNORECASE,
 )
@@ -428,10 +426,7 @@ _EXPLICIT_FINAL_STATUS = re.compile(
 
 def explicit_final_statuses(reason: str) -> set[str]:
     """Return only statuses the verifier explicitly presents as its conclusion."""
-    return {
-        next(value for value in match if value).upper()
-        for match in _EXPLICIT_FINAL_STATUS.findall(reason)
-    }
+    return {match.upper() for match in _EXPLICIT_FINAL_STATUS.findall(reason)}
 
 
 class ReviewArtifact(_CompilerModel):

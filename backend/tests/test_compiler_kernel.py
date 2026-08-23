@@ -525,7 +525,7 @@ def test_explicit_status_reason_conflict_fails_closed_at_kernel_boundary() -> No
         update={
             "reason": (
                 "The recomputed total differs from the printed total beyond tolerance, "
-                "so the check is CONTRADICTED."
+                "so Final classification: CONTRADICTED."
             )
         }
     )
@@ -538,6 +538,24 @@ def test_explicit_status_reason_conflict_fails_closed_at_kernel_boundary() -> No
     assert [item.code for item in proof.diagnostics] == [
         "ASSESSMENT_STATUS_REASON_CONFLICT"
     ]
+
+
+def test_counterfactual_status_does_not_conflict_with_final_classification() -> None:
+    assessment = _assessment("check.invoice_total", "SUPPORTED").model_copy(
+        update={
+            "reason": (
+                "If the terminal witness were true, the CHECK is CONTRADICTED; "
+                "its false result maps to SUPPORTED. Final classification: SUPPORTED"
+            )
+        }
+    )
+
+    proof = compile_review_artifact(
+        _artifact([assessment, _assessment("check.currency", "SUPPORTED")])
+    )
+
+    assert proof.decision_for("req.invoice_review").status == "SUPPORTED"
+    assert proof.diagnostics == []
 
 
 def test_negated_status_word_is_not_treated_as_an_explicit_final_status() -> None:
