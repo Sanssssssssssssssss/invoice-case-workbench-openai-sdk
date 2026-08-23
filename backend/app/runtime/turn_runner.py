@@ -800,8 +800,11 @@ class TurnRunner:
             return "case_patch_writer", {}
         if writer_index > write_index:
             return "write_case_patch", {}
-        if _report_requested_message(request.message) and self.store.load(state.case_id).status == "ready_for_report":
-            if not self.context.last_role_result(state, name="report_writer"):
+        if _report_requested_message(request.message):
+            report = self.context.last_role_result(state, name="report_writer")
+            if not report:
+                if self.store.load(state.case_id).status != "ready_for_report":
+                    return None
                 return "report_writer", {}
             if not _latest_observation(state, kind="tool", name="write_case_file"):
                 return "write_case_file", {}

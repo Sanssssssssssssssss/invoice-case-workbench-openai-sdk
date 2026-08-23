@@ -1373,6 +1373,23 @@ def test_attachment_review_waits_for_manager_scope_when_none_was_selected(tmp_pa
     assert runtime.runner._deterministic_policy_continuation(request, state) is None
 
 
+def test_existing_partial_report_continues_to_file_write_without_ready_status(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    request = AgentTurnRequest(case_id="case_partial_report", message="生成最终报告并渲染 PDF")
+    runtime.runner.store.save(CaseState(case_id=request.case_id, status="collecting_materials"))
+    state = runtime.runner.harness.begin_run(request.case_id, request.message)
+
+    assert runtime.runner._deterministic_policy_continuation(request, state) is None
+
+    report = {"title": "部分审核报告", "markdown": "# 部分审核报告\n\n存在待补证据。\n"}
+    runtime.runner.harness.record_observation(
+        state,
+        runtime.runner.context.record_result(state, kind="role", name="report_writer", result=report),
+    )
+
+    assert runtime.runner._deterministic_policy_continuation(request, state) == ("write_case_file", {})
+
+
 @pytest.mark.parametrize(
     ("compiler_status", "case_status", "requirement_status"),
     [
