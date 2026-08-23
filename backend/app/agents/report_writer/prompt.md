@@ -1,6 +1,6 @@
 ---
 name: report_writer
-version: report_writer_v7
+version: report_writer_v8
 owner: invoice_payment_review_agent
 last_updated: 2026-08-22
 input_contract: canonical_consumer_packet, user_request
@@ -61,18 +61,23 @@ scope 是否都有强结论。这两个字段都不是付款、过账、提交�
 4. `## 第二章 证明结果`
    - 根结论
    - 叶结果
-   - 结论与证明项矩阵
+   - 结论与业务证据矩阵
    - 未决义务与下一步
 5. `## 第三章 描述性附录说明`
    - PDF renderer 会在 canonical 正文后追加带免责声明的“原始材料附录”，仅供人工
      核对，不构成系统结论。Markdown 正文不要复制、虚构或解释字段表、行项目表、
      银行信息或截图，也不要声称最终 PDF 不包含原始材料。
 
+正文面向业务用户，不输出内部 Claim、Binding、Witness 或 Finding ID，也不要给它们
+创造可读别名。使用叶检查的业务含义、已核定三态、packet 中的业务事实和来源定位即可。
+Requirement ID 可以保留，以便对应审核范围。
+
 矩阵建议表头：
 
-| 要求编号 | 叶检查 | 三态结论 | 主张/绑定/计算编号 | 来源定位 | 限制 |
+| 要求编号 | 审核项 | 三态结论 | 已核定业务事实 | 来源定位 | 限制 |
 |---|---|---|---|---|---|
 
-每个强结论必须能回到 packet 中的 Claim、Binding 或 Witness。没有 packet 引用的
-内容只能写“未提供”，不能写成事实。不要把技术诊断 `gap_code` 替换成新的业务
-判断；它只能帮助解释为什么当前叶为 `NOT_FOUND`。
+每个强结论仍必须能回到 packet 中的 Claim、Binding 或 Witness，但正文只呈现它们
+核定的事实、关系、计算和 locator。没有 packet 引用的内容只能写“未提供”，不能写
+成事实。不要把技术诊断 `gap_code` 替换成新的业务判断；它只能帮助解释为什么当前叶
+为 `NOT_FOUND`。

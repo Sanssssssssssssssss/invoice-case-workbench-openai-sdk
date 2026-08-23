@@ -30,7 +30,7 @@ _TRISTATE_RE = re.compile(
     re.IGNORECASE,
 )
 _NUMBER_TOKEN_RE = re.compile(
-    r"(?<![\w.:-])"
+    r"(?<![A-Za-z0-9_.,:'\N{RIGHT SINGLE QUOTATION MARK}\N{NO-BREAK SPACE}\N{NARROW NO-BREAK SPACE}:-])"
     r"(?P<open>\()?\s*(?P<sign>[+\-\N{MINUS SIGN}]?)\s*"
     r"(?P<number>"
     r"(?:\d{1,3}(?:[ ,.\N{NO-BREAK SPACE}\N{NARROW NO-BREAK SPACE}'\N{RIGHT SINGLE QUOTATION MARK}]\d{3})+(?:[.,]\d{1,6})?)"
@@ -901,7 +901,15 @@ def _validate_report_business_numbers(
             continue
         if _is_structural_number(markdown, match, has_currency=has_currency, is_percent=is_percent):
             continue
-        values = _parse_localized_decimals(match.group(0))
+        parse_text = match.group(0)
+        if _is_markdown_list_marker(markdown, match):
+            parse_text = re.sub(
+                r"^\s*[\-\N{MINUS SIGN}]\s+",
+                "",
+                parse_text,
+                count=1,
+            )
+        values = _parse_localized_decimals(parse_text)
         if not values:
             continue
         if any(
@@ -919,6 +927,16 @@ def _validate_report_business_numbers(
             "report contains business numeric value outside canonical consumer packet: "
             f"{raw}"
         )
+
+
+def _is_markdown_list_marker(markdown: str, match: re.Match[str]) -> bool:
+    if match.group("open") or match.group("sign") not in {"-", "\N{MINUS SIGN}"}:
+        return False
+    line_start = markdown.rfind("\n", 0, match.start()) + 1
+    return (
+        not markdown[line_start:match.start()].strip()
+        and re.match(r"^\s*[\-\N{MINUS SIGN}]\s+\d", match.group(0)) is not None
+    )
 
 
 def _packet_numeric_values(

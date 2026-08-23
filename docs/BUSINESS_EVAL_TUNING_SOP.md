@@ -1,0 +1,44 @@
+# Business Eval tuning SOP
+
+## Recovery baseline
+
+- Tag: `business-eval-baseline-20260823`
+- Commit: `9497a53ea1b0eab20e706fe5125c4083977ff278`
+- Safe recovery: create a new branch from the tag, or revert an experimental commit. Do not rewrite `main` history.
+
+## One-change loop
+
+1. Locate the first layer that diverges: Scope → Plan → Executor → Binding → Witness → Verifier → Kernel → Consumer → Runtime.
+2. State one falsifiable hypothesis. Do not mix scorer, Kernel, prompt, and delivery changes in one experiment unless they share one deterministic contract.
+3. Prefer replacing an existing rule over adding a new type, repair loop, business formula, or compatibility path.
+4. Run focused deterministic tests.
+5. Run only the affected live case. Record the actual provider, model, reasoning mode, commit, score revision, root/facet outcomes, False Strong count, completion, calls, tokens, latency, and tool errors.
+6. Keep the change only when it fixes the targeted layer without introducing a new false strong or integrity failure. Otherwise revert it and record the open gap.
+7. After a kept 0025 or 0006 change, run the other arithmetic sentinels before merging.
+
+## Provider order
+
+1. Prefer the configured AMD DeepSeek-compatible gateway when a credential is available.
+2. If its health check, authentication, rate limit, or response protocol fails, use the DeepSeek official API.
+3. Never switch provider inside one run. Record the fallback reason in the run label or benchmark report.
+4. Read credentials from ignored environment configuration only. Never write them to source, traces, reports, or Git.
+
+## Acceptance gate
+
+- Correct target root and causal facet outcomes.
+- False Strong = 0.
+- Witness replay, Binding relevance, policy lineage, and Kernel integrity pass.
+- Canonical packet contains every business fact and proof term used by the report.
+- Markdown, PDF, and final reply are generated when reportable.
+- Runtime completes without MaxTurns or repeated deterministic retries.
+- Efficiency is recorded but does not override correctness.
+
+## Active experiments
+
+| ID | Case | Hypothesis | Change | Keep condition | Status |
+|---|---|---|---|---|---|
+| E001 | 0025 | The dense component rule lets Executor stop after observation even when explicit applicability plus one unambiguous base is present. | Replace it with an ordered observation → applicability → reconciliation checklist; no schema or Kernel change. | Component submits Binding + Witness, final total closes, no false strong. | Keep: fresh run closed 5/5 CHECKs with the correct root; report exposed a separate internal-ID delivery problem. |
+| E002 | 0025 | A business report matrix that asks for internal proof IDs invites the model to place a canonical Finding ID in a CHECK-ID column. | Replace the internal-ID matrix with business meaning, status, facts, and locator; keep the write guard strict. | Report contains no internal proof IDs and the original ID-column rejection disappears. | Keep: fresh report used the business matrix; its next rejection was an independent numeric parser bug. |
+| E003 | 0025 / 0006 | The report number tokenizer can start inside a CJK-adjacent grouped amount and can treat a Markdown bullet as a negative sign. | Fix the token boundary and strip only a line-leading list marker before numeric comparison; do not loosen admitted values or currency checks. | The exact failed 0025 report replays successfully; invented, relabelled, and true negative values remain guarded. | Keep offline: 65 projection/report tests pass and the exact rejected report now passes. Fresh 0025 was inconclusive because TaskCompiler failed before delivery. |
+| E004 | 0025 | Component reconciliation is sometimes accepted and sometimes rejected despite the same grounded rate/base/amount Witness chain. | Do not change yet. First compare accepted vs rejected Verifier inputs and identify the smallest semantic wording mismatch. | Two fresh runs classify the facet consistently without weakening the grounded-base rule. | Open gap. |
+| E005 | 0006 | The derived final path must consume independently established upstream results rather than infer a component base from numerical coincidence. | Pending the retained 0025 changes; inspect the first divergent layer in a fresh run before changing code. | Correct subtotal/final causal path, component base remains NOT_FOUND when ungrounded, no false strong. | Pending |

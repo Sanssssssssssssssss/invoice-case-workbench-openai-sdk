@@ -21,10 +21,10 @@
     "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:case_patch_writer:case_patch_writer_v4.8+global_policy_v1.2:ac018da654bfe992578d8443"
   },
   "report_writer": {
-    "stable_prefix_hash": "1d6055608f367a8b1b00f193c1ad18378c98357c1fbc0d8d8cae64495f670957",
+    "stable_prefix_hash": "32b02cad2565263a0d89cf0e8e8fc663b8a7d3ecd2948e88cffa42056c91ab37",
     "tool_catalog_hash": "282fe52c728d6d59ea379ae6089ea976c0cf8e63590d7f445c65d01842405623",
     "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
     "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
-    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:report_writer:report_writer_v7+global_policy_v1.2+canonical_consumer_v1+pdf_skill_v4:1d6055608f367a8b1b00f193"
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:report_writer:report_writer_v8+global_policy_v1.2+canonical_consumer_v1+pdf_skill_v4:32b02cad2565263a0d89cf0e"
   }
 }

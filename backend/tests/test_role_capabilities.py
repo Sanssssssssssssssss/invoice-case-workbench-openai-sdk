@@ -72,6 +72,14 @@ def test_role_agents_use_manifest_prompt_versions() -> None:
         assert registry.trace_metadata(role)["prompt_version"] == role_prompt_version(role)
 
 
+def test_report_writer_keeps_internal_proof_ids_out_of_business_markdown() -> None:
+    prompt = Path("backend/app/agents/report_writer/prompt.md").read_text(encoding="utf-8")
+
+    assert "不输出内部 Claim、Binding、Witness 或 Finding ID" in prompt
+    assert "已核定业务事实" in prompt
+    assert "主张/绑定/计算编号" not in prompt
+
+
 def test_report_writer_role_accepts_unclosed_json_fence_but_rejects_invalid_json() -> None:
     schema = RoleRegistry(LlmClient()).agent("report_writer").output_type
     fenced = "```json\n" + json.dumps(

@@ -342,7 +342,7 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert PROMPT_VERSIONS["task_compiler"] == "typed_task_compiler_v15"
     assert "Claims are append-only and existing Claim content is immutable" in executor
     assert "later unrelated Claims are allowed" in executor
-    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v13"
+    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v14"
     assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v17"
     assert "never bind a cross-Claim semantic relationship" in executor
     assert "only check_id, a facet_ref declared on that CHECK, an operation, and typed refs" in executor
@@ -358,6 +358,9 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "When `repair_feedback` is present" in verifier
     assert "never flip `status` or `true_status` merely to silence the diagnostic" in verifier
     assert "A replayable multiplication with an unsupported business base remains NOT_FOUND" in verifier
+    assert "Observation alone is never completion" in executor
+    assert "the base need not be repeated in the applicability sentence" in executor
+    assert "include the actual Binding and reconciliation Witness lineage in the same submission" in executor
 
 
 def test_invoice_arithmetic_plan_contract_keeps_recomputations_atomic(

@@ -145,6 +145,26 @@ def test_accepts_packet_values_in_english_german_swiss_and_percent_forms(
     assert validate_canonical_report_projection(rendered, _packet()) == rendered
 
 
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        "发票总额13,156.92 EUR",
+        "- 13,156.92 EUR",
+        "  - 13,156.92 EUR",
+        "- -406.92 EUR",
+    ],
+)
+def test_accepts_cjk_adjacent_amounts_and_does_not_treat_list_markers_as_signs(
+    rendered: str,
+) -> None:
+    assert validate_canonical_report_projection(rendered, _packet()) == rendered
+
+
+def test_markdown_list_marker_does_not_admit_an_invented_amount() -> None:
+    with pytest.raises(ValueError, match="business numeric value.*999999.99"):
+        validate_canonical_report_projection("- 999999.99 EUR", _packet())
+
+
 def test_rejects_unadmitted_percentage() -> None:
     with pytest.raises(ValueError, match="business numeric value.*21%"):
         validate_canonical_report_projection("税率：21%", _packet())

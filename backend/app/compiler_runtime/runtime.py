@@ -56,7 +56,7 @@ EXECUTOR_MAX_TURNS = 10
 CHECK_FRONTIER_ATTEMPT_CAP = 2
 PROMPT_VERSIONS = {
     "task_compiler": "typed_task_compiler_v15",
-    "executor": "typed_evidence_executor_v13",
+    "executor": "typed_evidence_executor_v14",
     "verifier": "typed_fine_verifier_v17",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
