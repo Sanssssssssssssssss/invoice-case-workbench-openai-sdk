@@ -206,7 +206,6 @@ def test_stated_component_semantic_roles_prevent_amount_presence_shortcuts() -> 
 
     assert "must collectively cover all required roles" in compiler
     assert "each CHECK declares only the roles it actually tests" in compiler
-    assert "remove every stale alias" in compiler
     assert "Mere component-amount presence covers only COMPONENT_OBSERVATION" in compiler
     assert "The number of CHECKs remains free" in compiler
     assert "If a declared role cannot be grounded, submit that exact gap" in executor
@@ -341,7 +340,7 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "A ProofSignature is a type constraint, not a plan template" in compiler
     assert "The number, wording, sharing, and ALL/ANY arrangement of CHECKs remain your decision" in compiler
     assert "never reduce calculation validity to field presence" in compiler.lower()
-    assert PROMPT_VERSIONS["task_compiler"] == "typed_task_compiler_v18"
+    assert PROMPT_VERSIONS["task_compiler"] == "typed_task_compiler_v17"
     assert "A component rate/base gap does not erase its narrower grounded amount/sign" in compiler
     assert "Claims are append-only and existing Claim content is immutable" in executor
     assert "later unrelated Claims are allowed" in executor

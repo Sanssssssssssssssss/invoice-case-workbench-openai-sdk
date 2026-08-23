@@ -55,7 +55,7 @@ COMPILER_VERSION = "typed_evidence_compiler_runtime_v12"
 EXECUTOR_MAX_TURNS = 10
 CHECK_FRONTIER_ATTEMPT_CAP = 2
 PROMPT_VERSIONS = {
-    "task_compiler": "typed_task_compiler_v18",
+    "task_compiler": "typed_task_compiler_v17",
     "executor": "typed_evidence_executor_v16",
     "verifier": "typed_fine_verifier_v17",
 }
