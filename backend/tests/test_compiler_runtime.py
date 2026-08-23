@@ -542,6 +542,68 @@ def test_task_compiler_normalizes_and_freezes_objective_after_planning(
     assert compiled.objective == objective
 
 
+def test_task_compiler_retries_one_invalid_structured_plan_with_exact_error(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    payloads: list[dict] = []
+
+    def fake_phase(**kwargs):
+        payloads.append(kwargs["payload"])
+        if len(payloads) == 1:
+            runtime.llm.calls.append(
+                SimpleNamespace(recovered_by="", retry_of="")
+            )
+            raise ModelBehaviorError(
+                "CHECK node 'check.final' cannot have status dependencies"
+            )
+        runtime.llm.calls.append(SimpleNamespace(recovered_by="", retry_of=""))
+        return _plan()
+
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+
+    compiled = runtime.compile_task(
+        active_requirement_ids=["vendor_identity"],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        source_catalog=[],
+    )
+
+    assert compiled == _plan()
+    assert len(payloads) == 2
+    assert "repair_feedback" not in payloads[0]
+    assert payloads[1]["repair_feedback"] == {
+        "instruction": "Return one corrected ProofPlan; preserve the supplied scope and objective.",
+        "validation_error": "CHECK node 'check.final' cannot have status dependencies",
+    }
+    assert runtime.llm.calls[0].recovered_by == "task_compiler_validation_retry_success"
+    assert runtime.llm.calls[1].retry_of == "task_compiler:validation_attempt_1"
+
+
+def test_task_compiler_validation_retry_is_bounded_to_one_attempt(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    attempts = 0
+
+    def fake_phase(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise ModelBehaviorError("invalid ProofPlan")
+
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+
+    with pytest.raises(ModelBehaviorError, match="invalid ProofPlan"):
+        runtime.compile_task(
+            active_requirement_ids=["vendor_identity"],
+            policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+            source_catalog=[],
+        )
+
+    assert attempts == 2
+
+
 def test_compute_witness_tool_schema_accepts_refs_but_no_raw_values_or_results() -> None:
     sandbox = EvidenceSandbox(
         sources=[],

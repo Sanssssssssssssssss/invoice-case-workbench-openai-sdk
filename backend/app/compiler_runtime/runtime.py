@@ -51,7 +51,7 @@ from .signatures import (
 )
 
 
-COMPILER_VERSION = "typed_evidence_compiler_runtime_v12"
+COMPILER_VERSION = "typed_evidence_compiler_runtime_v13"
 EXECUTOR_MAX_TURNS = 10
 CHECK_FRONTIER_ATTEMPT_CAP = 2
 PROMPT_VERSIONS = {
@@ -264,13 +264,33 @@ class EvidenceCompilerRuntime:
             "extraction_summary": _planning_extraction_summary(extraction_summary),
             "required_output": required_output,
         }
-        plan = self._run_phase(
-            name="task_compiler",
-            prompt_file="task_compiler.md",
-            payload=payload,
-            output_type=ProofPlan,
-            max_turns=1,
-        )
+        try:
+            plan = self._run_phase(
+                name="task_compiler",
+                prompt_file="task_compiler.md",
+                payload=payload,
+                output_type=ProofPlan,
+                max_turns=1,
+            )
+        except ModelBehaviorError as exc:
+            failed_call = self.llm.calls[-1] if self.llm.calls else None
+            plan = self._run_phase(
+                name="task_compiler",
+                prompt_file="task_compiler.md",
+                payload={
+                    **payload,
+                    "repair_feedback": {
+                        "instruction": "Return one corrected ProofPlan; preserve the supplied scope and objective.",
+                        "validation_error": str(exc),
+                    },
+                },
+                output_type=ProofPlan,
+                max_turns=1,
+            )
+            if failed_call is not None:
+                failed_call.recovered_by = "task_compiler_validation_retry_success"
+            if self.llm.calls:
+                self.llm.calls[-1].retry_of = "task_compiler:validation_attempt_1"
         if task_objective:
             plan = plan.model_copy(update={"objective": task_objective})
         if plan.active_requirement_ids != requirement_ids:
