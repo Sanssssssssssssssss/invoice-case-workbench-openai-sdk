@@ -1494,6 +1494,29 @@ def test_chinese_adjacent_numbers_are_recognized_but_wrong_currency_is_not() -> 
 
 def test_source_fact_matching_normalizes_snake_case_percent_and_quote_alternatives() -> None:
     assert _predicate_matches_options("unit_price", ["unit price"])
+    fact = next(
+        item
+        for item in BusinessEvalOracle.model_validate_json(
+            (
+                Path(__file__).resolve().parents[2]
+                / "evals/business_v1/cases/invoice_subtotal_conflict_0006/oracle.json"
+            ).read_text(encoding="utf-8")
+        ).facts
+        if item.id == "line_1_extension"
+    )
+    assert _claim_matches_source_fact(
+        fact,
+        {
+            "subject": "line1 Marketing collateral refresh",
+            "predicate": "extension_amount",
+            "value": "6404.64",
+            "source_id": "invoice",
+            "quote": fact.source_quote,
+            "attributes": {"currency": "EUR"},
+        },
+        source_roles={"invoice": "invoice"},
+        source_content={"invoice": fact.source_quote},
+    )
 
 
 def test_unique_atomic_numeric_quote_matches_its_source_fact() -> None:
@@ -1850,7 +1873,7 @@ def test_negated_conflict_and_formal_payment_approval_are_vetoed() -> None:
     assert result.passed is False
 
 
-def test_v2_nonsense_plan_semantics_cannot_receive_full_understanding_score() -> None:
+def test_v32_nonsense_check_wording_is_only_a_diagnostic() -> None:
     snapshot = _strict_snapshot()
     for node in snapshot.case_state["review_artifact"]["plan"]["nodes"]:
         if node["kind"] == "CHECK":
@@ -1866,13 +1889,18 @@ def test_v2_nonsense_plan_semantics_cannot_receive_full_understanding_score() ->
         if item.id.startswith("understanding.milestone_semantics.")
     )
     assert all(
+        item.core is False
+        for item in result.checks
+        if item.id.startswith("understanding.milestone_semantics.")
+    )
+    assert all(
         item.passed
         for item in result.checks
         if item.id.startswith("reasoning.relation.")
     )
     assert _stage_score(result, "evidence") == STAGE_WEIGHTS["evidence"]
     assert _compiler_score(result) < Decimal("75")
-    assert result.passed is False
+    assert result.passed is True
 
 
 def test_v28_frozen_objective_and_typed_target_route_express_business_intent() -> None:
@@ -2359,6 +2387,62 @@ def test_v26_kernel_admitted_pairwise_sum_dag_matches_nary_oracle() -> None:
     assert result.passed is True
 
 
+def test_v32_relation_preserves_an_admitted_derived_operand() -> None:
+    oracle_path = (
+        Path(__file__).resolve().parents[2]
+        / "evals/business_v1/cases/invoice_subtotal_conflict_0006/oracle.json"
+    )
+    oracle = BusinessEvalOracle.model_validate_json(oracle_path.read_text(encoding="utf-8"))
+    facts = {item.id: item for item in oracle.facts}
+    relation = next(
+        item for item in oracle.relations if item.id == "line_derived_final_total_math"
+    )
+    line_sum = {
+        "id": "witness_line_sum",
+        "operation": "SUM",
+        "operands": [
+            {"ref": {"kind": "CLAIM", "ref_id": "claim_line_1"}, "value": "6404.64"},
+            {"ref": {"kind": "CLAIM", "ref_id": "claim_line_2"}, "value": "9097.80"},
+        ],
+    }
+    final = {
+        "id": "witness_final",
+        "check_id": "check_final",
+        "facet_ref": "final_total",
+        "operation": "SUM",
+        "result": "14856.50",
+        "currency": "EUR",
+        "operands": [
+            {
+                "ref": {"kind": "WITNESS", "ref_id": "witness_line_sum"},
+                "value": "15502.44",
+                "currency": "EUR",
+            },
+            {
+                "ref": {"kind": "CLAIM", "ref_id": "claim_adjustment"},
+                "value": "-645.94",
+                "currency": "EUR",
+            },
+        ],
+    }
+
+    assert _typed_witness_matches_relation(
+        final,
+        relation,
+        milestone_facet_ref="final_total",
+        explicit_facet=True,
+        source_assignments={
+            "adjustment_1": "claim_adjustment",
+            "printed_total": "claim_total",
+        },
+        facts_by_id=facts,
+        witness_outputs={"witness_line_sum": {"line_sum"}},
+        accepted_witness_ids={"witness_line_sum", "witness_final"},
+        witnesses_by_id={"witness_line_sum": line_sum, "witness_final": final},
+        fact_equivalences={fact_id: {fact_id} for fact_id in facts},
+    )
+
+
 def test_v26_proven_zero_difference_allows_transitive_fact_substitution() -> None:
     snapshot = _strict_snapshot()
     _add_line_sum_equivalence_witness(snapshot)
@@ -2600,7 +2684,7 @@ def test_v26_0006_difference_above_tolerance_blocks_invalid_substitution() -> No
         )
         for relation in relations
     }
-    matched = _match_typed_relation_witnesses(
+    matched, _ = _match_typed_relation_witnesses(
         relations,
         relation_owner=relation_owner,
         milestone_check_ids={

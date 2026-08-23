@@ -24,7 +24,7 @@ from .models import (
 )
 
 
-SCORER_VERSION = "business_eval_scorer_v3.1"
+SCORER_VERSION = "business_eval_scorer_v3.2"
 
 STAGE_WEIGHTS: dict[str, Decimal] = {
     "understanding": Decimal("10"),
@@ -328,7 +328,7 @@ def score_business_eval(
             "understanding",
             semantic_points,
             semantic_ok,
-            core=True,
+            core=False,
             expected="CHECK statement matches milestone.statement_meaning",
             observed={
                 "facet_check_ids": facet_ids,
@@ -341,7 +341,7 @@ def score_business_eval(
                     else {}
                 ),
             },
-            detail="facet 不是语义真值；CHECK 文案独立诊断且不级联清零 typed proof。",
+            detail="CHECK 文案仅作诊断；typed facet、proof terms 与 Kernel outcome 决定核心语义。",
         )
 
     claims = _dict_items(_mapping(artifact.get("evidence_ir")).get("claims"))
@@ -382,9 +382,15 @@ def score_business_eval(
         for witness_id in _list(result.get("witness_ids"))
         if str(witness_id)
     }
+    calculation_witnesses = _dict_items(artifact.get("calculation_witnesses"))
+    witnesses_by_id = {
+        str(item.get("id") or ""): item
+        for item in calculation_witnesses
+        if item.get("id")
+    }
     subtracted_claim_ids = {
         str(_mapping(operands[1].get("ref")).get("ref_id") or "")
-        for witness in _dict_items(artifact.get("calculation_witnesses"))
+        for witness in calculation_witnesses
         if str(witness.get("id") or "") in accepted_witness_ids
         and str(witness.get("operation") or "") == "SUBTRACT"
         and len(operands := _dict_items(witness.get("operands"))) == 2
@@ -447,18 +453,17 @@ def score_business_eval(
         add("evidence.no_required_facts", "evidence", 12, True)
 
     facts_by_id = {item.id: item for item in oracle.facts}
-    relations_by_id = {item.id: item for item in oracle.relations}
     relation_owner = {
         relation_id: milestone
         for milestone in oracle.milestones
         for relation_id in milestone.relation_ids
     }
-    relation_matches = _match_typed_relation_witnesses(
+    relation_matches, relation_witness_outputs = _match_typed_relation_witnesses(
         oracle.relations,
         relation_owner=relation_owner,
         milestone_check_ids=milestone_matches,
         canonical_node_results=admitted_node_results,
-        calculation_witnesses=_dict_items(artifact.get("calculation_witnesses")),
+        calculation_witnesses=calculation_witnesses,
         facts_by_id=facts_by_id,
         fact_claim_ids=fact_claim_ids,
     )
@@ -483,6 +488,20 @@ def score_business_eval(
             )
             if str(claim_id)
         }
+        milestone_witness_ids = {
+            str(witness_id)
+            for check_id in check_ids
+            for witness_id in _list(
+                _mapping(admitted_node_results.get(check_id)).get("witness_ids")
+            )
+            if str(witness_id)
+        }
+        lineage_witness_ids, lineage_claim_ids = _accepted_witness_lineage(
+            milestone_witness_ids,
+            accepted_witness_ids=accepted_witness_ids,
+            witnesses_by_id=witnesses_by_id,
+        )
+        accepted_claim_ids.update(lineage_claim_ids)
         required_source_facts = [
             fact_id
             for fact_id in milestone.fact_ids
@@ -495,12 +514,8 @@ def score_business_eval(
         )
         relation_covered_facts = {
             fact_id
-            for relation_id in milestone.relation_ids
-            if relation_id in relation_matches
-            for fact_id in (
-                *relations_by_id[relation_id].input_fact_ids,
-                relations_by_id[relation_id].output_fact_id,
-            )
+            for witness_id in lineage_witness_ids
+            for fact_id in relation_witness_outputs.get(witness_id, set())
             if fact_id
         }
         missing = [
@@ -573,7 +588,7 @@ def score_business_eval(
         witness = next(
             (
                 item
-                for item in _dict_items(artifact.get("calculation_witnesses"))
+                for item in calculation_witnesses
                 if str(item.get("id") or "") == witness_id
             ),
             {},
@@ -1227,7 +1242,7 @@ def _relational_statement_matches(text: str, meaning: Any) -> bool:
 def _identifier_terms(value: Any) -> set[str]:
     """Normalize structural ids without introducing a business alias table."""
     terms: set[str] = set()
-    for raw in re.findall(r"[a-z0-9]+", str(value or "").casefold()):
+    for raw in re.findall(r"[a-z]+|\d+", str(value or "").casefold()):
         if raw.endswith("ies") and len(raw) > 4:
             raw = f"{raw[:-3]}y"
         elif raw.endswith("s") and not raw.endswith("ss") and len(raw) > 3:
@@ -2212,6 +2227,33 @@ def _typed_value_matches_fact(
     return not expected_currency or observed_currency == expected_currency
 
 
+def _accepted_witness_lineage(
+    witness_ids: set[str],
+    *,
+    accepted_witness_ids: set[str],
+    witnesses_by_id: dict[str, dict[str, Any]],
+) -> tuple[set[str], set[str]]:
+    """Return accepted Witnesses and Claim leaves reachable from a frontier."""
+    claims: set[str] = set()
+    pending = list(witness_ids & accepted_witness_ids)
+    visited: set[str] = set()
+    while pending:
+        witness_id = pending.pop()
+        if witness_id in visited:
+            continue
+        visited.add(witness_id)
+        for operand in _dict_items(
+            _mapping(witnesses_by_id.get(witness_id)).get("operands")
+        ):
+            ref = _mapping(operand.get("ref"))
+            ref_id = str(ref.get("ref_id") or "")
+            if str(ref.get("kind") or "") == "CLAIM" and ref_id:
+                claims.add(ref_id)
+            elif str(ref.get("kind") or "") == "WITNESS" and ref_id in accepted_witness_ids:
+                pending.append(ref_id)
+    return visited, claims
+
+
 def _operand_fact_candidates(
     operand: dict[str, Any],
     *,
@@ -2393,30 +2435,34 @@ def _typed_witness_matches_relation(
         else not _facet_corresponds_to_milestone(witness_facet, milestone_facet_ref)
     ):
         return False
-    operands = (
-        _flatten_associative_operands(
-            witness,
-            operation=operation,
-            witnesses_by_id=witnesses_by_id,
-            accepted_witness_ids=accepted_witness_ids,
-        )
-        if operation in {"SUM", "MULTIPLY"}
-        else _dict_items(witness.get("operands"))
-    )
+    operands = _dict_items(witness.get("operands"))
     if sum_via_subtract:
         if len(operands) != 2 or (right := _typed_decimal(operands[1].get("value"))) is None:
             return False
         operands = [operands[0], {**operands[1], "value": str(-right)}]
-    if not _operands_match_relation_inputs(
-        operands,
-        list(relation.input_fact_ids),
-        ordered=relation.operation == "greater_than",
-        facts_by_id=facts_by_id,
-        source_assignments=source_assignments,
-        witness_outputs=witness_outputs,
-        accepted_witness_ids=accepted_witness_ids,
-        witnesses_by_id=witnesses_by_id,
-        fact_equivalences=fact_equivalences,
+    operand_variants = [operands]
+    if operation in {"SUM", "MULTIPLY"}:
+        operand_variants.append(
+            _flatten_associative_operands(
+                witness,
+                operation=operation,
+                witnesses_by_id=witnesses_by_id,
+                accepted_witness_ids=accepted_witness_ids,
+            )
+        )
+    if not any(
+        _operands_match_relation_inputs(
+            candidate,
+            list(relation.input_fact_ids),
+            ordered=relation.operation == "greater_than",
+            facts_by_id=facts_by_id,
+            source_assignments=source_assignments,
+            witness_outputs=witness_outputs,
+            accepted_witness_ids=accepted_witness_ids,
+            witnesses_by_id=witnesses_by_id,
+            fact_equivalences=fact_equivalences,
+        )
+        for candidate in operand_variants
     ):
         return False
     if relation.operation == "greater_than":
@@ -2493,7 +2539,7 @@ def _match_typed_relation_witnesses(
     calculation_witnesses: list[dict[str, Any]],
     facts_by_id: dict[str, ExpectedFact],
     fact_claim_ids: dict[str, set[str]],
-) -> dict[str, tuple[str, str]]:
+) -> tuple[dict[str, tuple[str, str]], dict[str, set[str]]]:
     """Match Oracle relations against the Kernel-admitted typed proof graph.
 
     The graph starts at grounded source Claims and policy refs.  Each matched
@@ -2520,14 +2566,19 @@ def _match_typed_relation_witnesses(
 
     source_assignments_by_milestone: dict[str, dict[str, str]] = {}
     for milestone_id, check_ids in milestone_check_ids.items():
-        accepted_claim_ids = {
-            str(claim_id)
+        milestone_witness_ids = {
+            str(witness_id)
             for check_id in check_ids
-            for claim_id in _list(
-                _mapping(canonical_node_results.get(check_id)).get("claim_ids")
+            for witness_id in _list(
+                _mapping(canonical_node_results.get(check_id)).get("witness_ids")
             )
-            if str(claim_id)
+            if str(witness_id)
         }
+        _, accepted_claim_ids = _accepted_witness_lineage(
+            milestone_witness_ids,
+            accepted_witness_ids=accepted_witness_ids,
+            witnesses_by_id=witnesses_by_id,
+        )
         # A valid alternative path may use a source fact not named as an input
         # in this Oracle milestone (for example a printed subtotal substituted
         # for an independently proven line-derived subtotal).  It still has to
@@ -2617,7 +2668,10 @@ def _match_typed_relation_witnesses(
             witness_id = match[1]
             used_witness_ids.add(witness_id)
             if relation.output_fact_id:
-                witness_outputs.setdefault(witness_id, set()).add(relation.output_fact_id)
+                for _, candidate_id in candidates.get(relation_id, []):
+                    witness_outputs.setdefault(candidate_id, set()).add(
+                        relation.output_fact_id
+                    )
             if (
                 relation.operation == "absolute_difference"
                 and _witness_proves_within_tolerance(
@@ -2632,7 +2686,7 @@ def _match_typed_relation_witnesses(
                     fact_equivalences,
                 )
 
-    return matched
+    return matched, witness_outputs
 
 
 def _relation_points(
