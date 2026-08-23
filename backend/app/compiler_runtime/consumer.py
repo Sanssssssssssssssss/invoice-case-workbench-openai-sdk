@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.compiler_runtime.graph_walk import reachable_ids
 from app.compiler_runtime.models import AssessmentStatus, ExecutionStatus
 from app.compiler_runtime.proof_terms import (
     CalculationWitness,
@@ -533,17 +534,294 @@ def partial_report_appendix(packet: CanonicalConsumerPacket) -> str:
     if unresolved:
         lines.extend(["", "### 未决叶"])
         for item in unresolved:
-            gap = item.missing_fact or "所需事实尚未取得"
+            gap = _business_gap_text(item)
             lines.append(f"- `{item.root_requirement_id}` / `{item.check_id}`：{gap}")
     if packet.obligations:
+        gaps_by_check = {item.check_id: _business_gap_text(item) for item in unresolved}
         lines.extend(["", "### 未完成义务"])
         for item in packet.obligations:
-            lines.append(f"- `{item.requirement_id}` / `{item.check_id}`：{item.missing_fact}")
+            gap = gaps_by_check.get(item.check_id, item.missing_fact)
+            lines.append(f"- `{item.requirement_id}` / `{item.check_id}`：{gap}")
     lines.extend([
         "",
         "边界：以上局部发现不构成整体支持；不得据此付款、过账或作最终审批。",
     ])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def render_consumer_report(packet: CanonicalConsumerPacket) -> str:
+    """Render the canonical business report without asking a model to restate proof."""
+
+    if packet.reportability == "NONE":
+        raise ValueError("canonical proof has no reportable Kernel-accepted leaf finding")
+    lines = [
+        "# 证据审查报告",
+        "",
+        "## 第一章 概览",
+        "",
+        f"- 案件：`{_md_cell(packet.case_id)}`",
+        f"- 报告等级：`{packet.reportability}`",
+        f"- 编译执行状态：`{packet.execution_status}`",
+        f"- review_complete：`{str(packet.review_complete).lower()}`",
+        f"- decision_ready：`{str(packet.decision_ready).lower()}`",
+        "",
+        "本报告仅呈现 Canonical Consumer Packet 中由 Proof Kernel 接纳的结果，"
+        "不构成付款、审批、过账或其他执行授权。",
+        "",
+        "### 摘要结论",
+        "",
+        _consumer_report_summary(packet),
+        "",
+        "## 第二章 状态表",
+        "",
+        "### 根结论",
+        "",
+        "| 要求编号 | 三态结论 | 支持叶 | 冲突叶 | 未决叶 |",
+        "|---|---|---|---|---|",
+    ]
+    for item in packet.root_decisions:
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    _md_code(item.requirement_id),
+                    item.status,
+                    _md_ids(item.supporting_check_ids),
+                    _md_ids(item.contradicting_check_ids),
+                    _md_ids(item.unresolved_check_ids),
+                )
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "### 叶结果",
+            "",
+            "| 叶检查 | Facet | 三态结论 | 根结论决定性 | 缺口 |",
+            "|---|---|---|---|---|",
+        ]
+    )
+    for item in packet.leaf_findings:
+        gap = _business_gap_text(item) if item.status == "NOT_FOUND" else "—"
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    _md_code(item.check_id),
+                    _md_ids(item.facet_refs),
+                    item.status,
+                    "是" if item.decisive_for_root else "否",
+                    _md_cell(gap),
+                )
+            )
+            + " |"
+        )
+
+    lines.extend(["", "## 第三章 金额与计算表", ""])
+    numeric_rows = _consumer_numeric_rows(packet)
+    if numeric_rows:
+        lines.extend(
+            [
+                "| 类型 | 证明项 | 项目/运算 | 核定值 | 来源 |",
+                "|---|---|---|---|---|",
+            ]
+        )
+        for row in numeric_rows:
+            lines.append("| " + " | ".join(_md_cell(value) for value in row) + " |")
+    else:
+        lines.append("本轮 Canonical Consumer Packet 中没有可报告的数值证明项。")
+
+    lines.extend(["", "## 第四章 缺口表", ""])
+    gaps = [item for item in packet.leaf_findings if item.status == "NOT_FOUND"]
+    if gaps or packet.obligations:
+        gaps_by_check = {item.check_id: _business_gap_text(item) for item in gaps}
+        lines.extend(
+            [
+                "| 对象 | 缺失事实 | 缺口代码 | 阻断 |",
+                "|---|---|---|---|",
+            ]
+        )
+        for item in gaps:
+            lines.append(
+                "| "
+                + " | ".join(
+                    (
+                        _md_code(item.check_id),
+                        _md_cell(_business_gap_text(item)),
+                        _md_cell(item.gap_code or "—"),
+                        "—",
+                    )
+                )
+                + " |"
+            )
+        for item in packet.obligations:
+            lines.append(
+                "| "
+                + " | ".join(
+                    (
+                        _md_code(item.id),
+                        _md_cell(gaps_by_check.get(item.check_id, item.missing_fact)),
+                        "—",
+                        "是" if item.blocking else "否",
+                    )
+                )
+                + " |"
+            )
+    else:
+        lines.append("没有未决证明缺口。")
+
+    lines.extend(
+        [
+            "",
+            "## 第五章 原始材料附录说明",
+            "",
+            "PDF renderer 会在本正文后追加“原始材料附录（仅供人工核对，不构成系统结论；"
+            "以正文 canonical Proof 为准）”。",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _business_gap_text(item: ConsumerLeafFinding) -> str:
+    if item.gap_code == "BINDING_MISSING" and "stated_components" in item.facet_refs:
+        return "税费、折扣或调整的适用税率或计算基数缺失，无法完整核验。"
+    return item.missing_fact or item.gap_code or "所需事实尚未取得"
+
+
+def _negative_component_keys(packet: CanonicalConsumerPacket) -> set[tuple[str, str, str]]:
+    return {
+        (claim.subject, claim.source_id, claim.locator)
+        for claim in packet.claims
+        if claim.predicate.casefold() == "sign"
+        and str(claim.value).strip().casefold() == "negative"
+    }
+
+
+def _consumer_numeric_rows(packet: CanonicalConsumerPacket) -> list[tuple[str, str, str, str, str]]:
+    rows: list[tuple[str, str, str, str, str]] = []
+    negative_components = _negative_component_keys(packet)
+    for claim in packet.claims:
+        if not _canonical_value_numbers(claim.value, currency_hint=claim.currency):
+            continue
+        value = str(claim.value)
+        if (
+            (claim.subject, claim.source_id, claim.locator) in negative_components
+            and not value.lstrip().startswith("-")
+        ):
+            value = f"-{value}"
+        if claim.currency:
+            value = f"{claim.currency} {value}"
+        elif claim.unit and claim.unit != "%":
+            value = f"{value} {claim.unit}"
+        rows.append(("Claim", claim.id, claim.predicate, value, f"{claim.source_id} {claim.locator}".strip()))
+    for witness in packet.calculation_witnesses:
+        if isinstance(witness.result, bool):
+            continue
+        value = _report_decimal(witness.result, monetary=bool(witness.currency))
+        if witness.currency:
+            value = f"{value} {witness.currency}"
+        elif witness.unit:
+            value = f"{value} {witness.unit}"
+        label = _witness_business_label(witness.facet_ref, witness.operation)
+        rows.append(("Witness", witness.id, label, value, "decimal-proof-engine"))
+    return rows
+
+
+def _consumer_report_summary(packet: CanonicalConsumerPacket) -> str:
+    final = next(
+        (
+            item
+            for item in packet.leaf_findings
+            if "final_total" in item.facet_refs
+            and item.status in {"SUPPORTED", "CONTRADICTED"}
+        ),
+        None,
+    )
+    if final is not None:
+        claims = {item.id: item for item in packet.claims}
+        printed = next(
+            (
+                claims[claim_id]
+                for claim_id in final.claim_ids
+                if claim_id in claims and _is_printed_total_claim(claims[claim_id])
+            ),
+            None,
+        )
+        witnesses = [
+            item for item in packet.calculation_witnesses if item.check_id == final.check_id
+        ]
+        recomputed = next(
+            (item for item in witnesses if item.operation in {"SUM", "SUBTRACT"}),
+            None,
+        )
+        difference = next(
+            (item for item in witnesses if item.operation == "ABS_DIFF"),
+            None,
+        )
+        if printed is not None and recomputed is not None and difference is not None:
+            relation = "不一致" if final.status == "CONTRADICTED" else "一致"
+            return (
+                f"最终总金额{relation}：票面总额 {_report_amount(printed.value, printed.currency)}，"
+                f"重算总额 {_report_amount(recomputed.result, recomputed.currency)}，"
+                f"差额 {_report_amount(difference.result, difference.currency)}。"
+            )
+    statuses = {item.status for item in packet.root_decisions}
+    if "CONTRADICTED" in statuses:
+        return "核定结论：目标要求存在已证实冲突。"
+    if statuses and statuses <= {"SUPPORTED"}:
+        return "核定结论：目标要求已获得证据支持。"
+    return "核定结论：存在未决证据缺口，尚不能形成强结论。"
+
+
+def _is_printed_total_claim(claim: ConsumerClaim) -> bool:
+    predicate = re.sub(r"[^a-z0-9]+", " ", claim.predicate.casefold()).strip()
+    return "total" in predicate.split() and "subtotal" not in predicate.split()
+
+
+def _report_amount(value: Any, currency: str) -> str:
+    return f"{_report_decimal(value, monetary=bool(currency))} {currency}".strip()
+
+
+def _report_decimal(value: Any, *, monetary: bool) -> str:
+    try:
+        text = format(Decimal(str(value)), "f")
+    except (InvalidOperation, ValueError):
+        return str(value)
+    if "." not in text:
+        return f"{text}.00" if monetary else text
+    whole, fraction = text.split(".", 1)
+    fraction = fraction.rstrip("0")
+    if monetary:
+        fraction = fraction.ljust(2, "0")
+    return f"{whole}.{fraction}" if fraction else whole
+
+
+def _witness_business_label(facet_ref: str, operation: str) -> str:
+    labels = {
+        ("line_extensions", "MULTIPLY"): "行项目重算金额（MULTIPLY）",
+        ("line_extensions", "ABS_DIFF"): "行项目差额（ABS_DIFF）",
+        ("subtotal_aggregation", "SUM"): "重算小计（SUM）",
+        ("subtotal_aggregation", "ABS_DIFF"): "小计差额（ABS_DIFF）",
+        ("stated_components", "MULTIPLY"): "税费或折扣重算金额（MULTIPLY）",
+        ("stated_components", "ABS_DIFF"): "税费或折扣差额（ABS_DIFF）",
+        ("final_total", "SUM"): "重算总额（SUM）",
+        ("final_total", "SUBTRACT"): "重算总额（SUBTRACT）",
+        ("final_total", "ABS_DIFF"): "总额差额（ABS_DIFF）",
+    }
+    return labels.get((facet_ref, operation), operation)
+
+
+def _md_cell(value: Any) -> str:
+    return str(value or "").replace("|", "/").replace("\r", " ").replace("\n", " ").strip()
+
+
+def _md_code(value: Any) -> str:
+    return f"`{_md_cell(value).replace('`', '')}`"
+
+
+def _md_ids(values: list[str]) -> str:
+    return "、".join(_md_code(value) for value in values) or "—"
 
 
 def finalize_consumer_report(markdown: str, packet: CanonicalConsumerPacket) -> str:
@@ -943,13 +1221,15 @@ def _packet_numeric_values(
     packet: CanonicalConsumerPacket,
 ) -> set[tuple[Decimal, frozenset[str]]]:
     values: set[tuple[Decimal, frozenset[str]]] = set()
+    negative_components = _negative_component_keys(packet)
     for claim in packet.claims:
-        values.update(
-            _canonical_value_numbers(
-                claim.value,
-                currency_hint=claim.currency,
-            )
+        claim_values = _canonical_value_numbers(
+            claim.value,
+            currency_hint=claim.currency,
         )
+        values.update(claim_values)
+        if (claim.subject, claim.source_id, claim.locator) in negative_components:
+            values.update((-abs(value), currencies) for value, currencies in claim_values)
     for witness in packet.calculation_witnesses:
         if not isinstance(witness.result, bool):
             values.add(
@@ -1314,22 +1594,19 @@ def _integrity_rejected(artifact: Any, proof: Any) -> bool:
 
 
 def _reachable_check_ids(root_node_id: str, nodes: dict[str, Any]) -> list[str]:
-    result: set[str] = set()
-    pending = [root_node_id]
-    visited: set[str] = set()
-    while pending:
-        node_id = pending.pop()
-        if not node_id or node_id in visited:
-            continue
-        visited.add(node_id)
-        node = nodes.get(node_id)
-        if node is None:
-            continue
-        if str(getattr(node, "kind", "") or "") == "CHECK":
-            result.add(node_id)
-            continue
-        pending.extend(str(item) for item in list(getattr(node, "depends_on", []) or []))
-    return sorted(result)
+    reachable = reachable_ids(
+        root_node_id,
+        lambda node_id: (
+            list(getattr(nodes[node_id], "depends_on", []) or [])
+            if node_id in nodes and str(getattr(nodes[node_id], "kind", "") or "") != "CHECK"
+            else ()
+        ),
+    )
+    return sorted(
+        node_id
+        for node_id in reachable
+        if node_id in nodes and str(getattr(nodes[node_id], "kind", "") or "") == "CHECK"
+    )
 
 
 def _decisive_check_ids(decision: Any) -> set[str]:
@@ -1471,5 +1748,6 @@ __all__ = [
     "derive_consumer_packet",
     "finalize_consumer_report",
     "partial_report_appendix",
+    "render_consumer_report",
     "validate_canonical_report_projection",
 ]

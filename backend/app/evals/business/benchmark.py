@@ -438,8 +438,8 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             "",
             "## 案例结果",
             "",
-            "| 案例 | 套件 | 结果 | 业务分 | 框架 | 首个失败阶段 | Veto | Provider Calls | Tokens | 模型 TTFT p50 ms | 耗时 ms |",
-            "|---|---|---|---:|---|---|---|---:|---:|---:|---:|",
+            "| 案例 | 套件 | 结果 | 业务分 | 框架 | 首个失败阶段 | Veto | Provider Calls | Tokens | Cost USD | 模型 TTFT p50 ms | 耗时 ms |",
+            "|---|---|---|---:|---|---|---|---:|---:|---:|---:|---:|",
         ]
     )
     for row in summary["case_runs"]:
@@ -447,7 +447,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
         lines.append(
             (
                 "| {case} | {suite} | {status} | {score:.2f} | {framework} | {stage} | {veto} | "
-                "{calls} | {tokens} | {ttft} | {duration} |"
+                "{calls} | {tokens} | {cost} | {ttft} | {duration} |"
             ).format(
                 case=_escape(row["case_id"]),
                 suite=_escape(row["suite"]),
@@ -463,6 +463,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
                 veto=_escape(", ".join(row["veto_codes"]) or "-"),
                 calls=metrics["execution"]["provider_calls"],
                 tokens=metrics["tokens"]["total_tokens"],
+                cost=_metric_text(metrics["cost"]["total_usd"]),
                 ttft=_metric_text(metrics["latency"]["ttft_ms"]),
                 duration=_metric_text(metrics["latency"]["e2e_duration_ms"]),
             )
@@ -502,6 +503,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             f"- 业务通过次数：`{efficiency['business_pass_count']}`",
             f"- Tokens / business pass：`{_metric_text(efficiency['tokens_per_business_pass'])}`",
             f"- Latency ms / business pass：`{_metric_text(efficiency['latency_ms_per_business_pass'])}`",
+            f"- Cost USD / business pass：`{_metric_text(efficiency['cost_usd_per_business_pass'])}`",
             (
                 "- E2E latency p50/p95 ms："
                 f"`{_metric_text(summary['engineering_distribution']['e2e_duration_ms']['p50'])}` / "
@@ -511,8 +513,8 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             "### 分层模型指标",
             "",
             "| 层/角色 | Provider Calls | Logical Calls | Input | Output | Reasoning | Cached | "
-            "Total | Latency p50/p95 ms | TTFT p50/p95 ms |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "Total | Cost USD | Latency p50/p95 ms | TTFT p50/p95 ms |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for role, values in summary["engineering_by_role"].items():
@@ -522,6 +524,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
             f"{_metric_text(values['input_tokens'])} | {_metric_text(values['output_tokens'])} | "
             f"{_metric_text(values['reasoning_tokens'])} | {_metric_text(values['cached_tokens'])} | "
             f"{_metric_text(values['total_tokens'])} | "
+            f"{_metric_text(values['cost_usd'])} | "
             f"{_metric_text(values['latency_p50_ms'])}/{_metric_text(values['latency_p95_ms'])} | "
             f"{_metric_text(values['ttft_p50_ms'])}/{_metric_text(values['ttft_p95_ms'])} |"
         )
@@ -529,6 +532,7 @@ def render_business_benchmark(summary: Mapping[str, Any]) -> str:
     for row in summary["case_runs"]:
         lines.append(
             f"- `{row['case_id']}`：revision=`{row['revision_id']}`；"
+            f"pricing=`{_metric_text(row['efficiency']['cost']['pricing_version'])}`；"
             f"manifest=`{row['revision_manifest_path']}`；score=`{row['score_path']}`；"
             f"报告=`{row['eval_report_path']}`；snapshot=`{row['snapshot_path']}`"
         )
@@ -566,7 +570,7 @@ def _run_efficiency(snapshot: EvalSnapshot, result: EvalResult) -> dict[str, Any
     }
     if tokens["total_tokens"] is None and None not in (tokens["input_tokens"], tokens["output_tokens"]):
         tokens["total_tokens"] = tokens["input_tokens"] + tokens["output_tokens"]
-    role_metrics = _role_metrics(provider_rows, model_rows)
+    role_metrics = _role_metrics(provider_rows, model_rows, snapshot.pricing)
     latencies = [_num(item.get("latency_ms")) for item in model_rows]
     latencies = [item for item in latencies if item is not None]
     ttfts = [_num(item.get("ttft_ms")) for item in model_rows]
@@ -597,6 +601,7 @@ def _run_efficiency(snapshot: EvalSnapshot, result: EvalResult) -> dict[str, Any
         "provider": snapshot.provider or None,
         "model": snapshot.model or None,
         "tokens": tokens,
+        "cost": _cost_metrics(tokens, snapshot.pricing),
         "execution": {
             "provider_calls": len(provider_rows) if provider_rows else None,
             "model_role_calls": (
@@ -652,7 +657,51 @@ def _run_efficiency(snapshot: EvalSnapshot, result: EvalResult) -> dict[str, Any
     }
 
 
-def _role_metrics(provider_rows: list[Mapping[str, Any]], model_rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _cost_metrics(tokens: Mapping[str, Any], pricing: Mapping[str, Any]) -> dict[str, Any]:
+    version = str(pricing.get("version") or "")
+    rates = {
+        "input_miss": _num(pricing.get("input_miss_per_1m")),
+        "cached_input": _num(pricing.get("cached_input_per_1m")),
+        "output": _num(pricing.get("output_per_1m")),
+    }
+    result = {
+        "pricing_version": version or None,
+        "currency": str(pricing.get("currency") or "USD") if version else None,
+        "rates_per_1m": rates,
+        "input_miss_usd": None,
+        "cached_input_usd": None,
+        "output_usd": None,
+        "total_usd": None,
+    }
+    input_tokens = _num(tokens.get("input_tokens"))
+    output_tokens = _num(tokens.get("output_tokens"))
+    cached_tokens = _num(tokens.get("cached_tokens"))
+    if (
+        not version
+        or any(value is None for value in rates.values())
+        or input_tokens is None
+        or output_tokens is None
+        or cached_tokens is None
+        or cached_tokens > input_tokens
+    ):
+        return result
+    input_miss = (input_tokens - cached_tokens) * rates["input_miss"] / 1_000_000
+    cached_input = cached_tokens * rates["cached_input"] / 1_000_000
+    output = output_tokens * rates["output"] / 1_000_000
+    result.update(
+        input_miss_usd=round(input_miss, 10),
+        cached_input_usd=round(cached_input, 10),
+        output_usd=round(output, 10),
+        total_usd=round(input_miss + cached_input + output, 10),
+    )
+    return result
+
+
+def _role_metrics(
+    provider_rows: list[Mapping[str, Any]],
+    model_rows: list[Mapping[str, Any]],
+    pricing: Mapping[str, Any],
+) -> dict[str, Any]:
     grouped: dict[str, dict[str, Any]] = {}
     token_pairs = (
         ("prompt_tokens", "input_tokens"),
@@ -718,6 +767,7 @@ def _role_metrics(provider_rows: list[Mapping[str, Any]], model_rows: list[Mappi
             "provider_calls": provider_calls,
             "model_role_calls": item["model_role_calls"],
             **tokens,
+            "cost_usd": _cost_metrics(tokens, pricing)["total_usd"],
             "latency_p50_ms": _pctl(item["_latency"], 0.50),
             "latency_p95_ms": _pctl(item["_latency"], 0.95),
             "ttft_p50_ms": _pctl(item["_ttft"], 0.50),
@@ -738,15 +788,18 @@ def _role_metrics(provider_rows: list[Mapping[str, Any]], model_rows: list[Mappi
 
 def _summarize_efficiency(rows: list[dict[str, Any]]) -> dict[str, Any]:
     totals = [row["efficiency"]["tokens"]["total_tokens"] for row in rows]
+    costs = [row["efficiency"]["cost"]["total_usd"] for row in rows]
     durations = [row["efficiency"]["latency"]["e2e_duration_ms"] for row in rows]
     call_latencies = [value for row in rows for value in row["efficiency"]["_model_latency_samples_ms"]]
     ttfts = [value for row in rows for value in row["efficiency"]["_ttft_samples_ms"]]
     pass_count = sum(row["business_passed"] is True for row in rows)
     observed_tokens = [item for item in totals if item is not None]
+    observed_costs = [item for item in costs if item is not None]
     observed_durations = [item for item in durations if item is not None]
     return {
         "engineering_distribution": {
             "total_tokens": _dist(observed_tokens, len(rows), "runs"),
+            "total_cost_usd": _dist(observed_costs, len(rows), "runs"),
             "e2e_duration_ms": _dist(observed_durations, len(rows), "runs"),
             "model_call_latency_ms": _dist(
                 call_latencies,
@@ -772,6 +825,11 @@ def _summarize_efficiency(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 if pass_count and len(observed_durations) == len(rows)
                 else None
             ),
+            "cost_usd_per_business_pass": (
+                round(sum(observed_costs) / pass_count, 10)
+                if pass_count and len(observed_costs) == len(rows)
+                else None
+            ),
         },
     }
 
@@ -793,6 +851,7 @@ def _aggregate_roles(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     "provider_calls": [],
                     "model_role_calls": 0,
                     **{key: [] for key in token_keys},
+                    "cost_usd": [],
                 },
             )
             item.setdefault("_latency", []).extend(values["_latency_samples_ms"])
@@ -801,6 +860,7 @@ def _aggregate_roles(rows: list[dict[str, Any]]) -> dict[str, Any]:
             item["model_role_calls"] += values["model_role_calls"]
             for key in token_keys:
                 item[key].append(values[key])
+            item["cost_usd"].append(values["cost_usd"])
     return {
         role: {
             "provider_calls": (
@@ -814,6 +874,11 @@ def _aggregate_roles(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 key: sum(values[key]) if all(item is not None for item in values[key]) else None
                 for key in token_keys
             },
+            "cost_usd": (
+                round(sum(values["cost_usd"]), 10)
+                if all(item is not None for item in values["cost_usd"])
+                else None
+            ),
             "latency_p50_ms": _pctl(values["_latency"], 0.50),
             "latency_p95_ms": _pctl(values["_latency"], 0.95),
             "ttft_p50_ms": _pctl(values["_ttft"], 0.50),

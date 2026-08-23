@@ -8,15 +8,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.compiler_runtime.graph_walk import reachable_ids
+from app.proof_schema import SemanticRole
+
 
 NodeKind = Literal["CHECK", "ALL", "ANY"]
 AssessmentStatus = Literal["SUPPORTED", "CONTRADICTED", "NOT_FOUND"]
 ExecutionStatus = Literal["COMPLETED", "PARTIAL", "FAILED"]
-SemanticRole = Literal[
-    "COMPONENT_OBSERVATION",
-    "COMPONENT_APPLICABILITY",
-    "COMPONENT_RECONCILIATION",
-]
 BusinessGapCode = Literal[
     "SOURCE_MISSING",
     "SOURCE_AMBIGUOUS",
@@ -200,7 +198,7 @@ class ProofPlan(_CompilerModel):
                 raise ValueError(f"CHECK node {node.id!r} references undeclared policies: {unknown_policies}")
 
         reachable_by_requirement = {
-            requirement_id: self._reachable_from(root_id, nodes)
+            requirement_id: reachable_ids(root_id, lambda node_id: nodes[node_id].depends_on)
             for requirement_id, root_id in self.roots.items()
         }
         reachable = set().union(*reachable_by_requirement.values())
@@ -208,10 +206,10 @@ class ProofPlan(_CompilerModel):
         if disconnected:
             raise ValueError(f"ProofPlan contains nodes that do not lead to a requirement root: {disconnected}")
 
-        for requirement_id, reachable_ids in reachable_by_requirement.items():
+        for requirement_id, requirement_node_ids in reachable_by_requirement.items():
             covered = any(
                 requirement_id in nodes[node_id].requirement_refs
-                for node_id in reachable_ids
+                for node_id in requirement_node_ids
                 if nodes[node_id].kind == "CHECK"
             )
             if not covered:
@@ -232,18 +230,6 @@ class ProofPlan(_CompilerModel):
         if missing_policies:
             raise ValueError(f"Declared policy refs are not covered by a CHECK: {missing_policies}")
         return self
-
-    @staticmethod
-    def _reachable_from(root_id: str, nodes: dict[str, ProofNode]) -> set[str]:
-        result: set[str] = set()
-        pending = [root_id]
-        while pending:
-            node_id = pending.pop()
-            if node_id in result:
-                continue
-            result.add(node_id)
-            pending.extend(nodes[node_id].depends_on)
-        return result
 
     def content_hash(self) -> str:
         payload = self.model_dump(mode="json")

@@ -17,8 +17,10 @@ from app.compiler_runtime import (
 from app.compiler_runtime.consumer import (
     derive_consumer_packet,
     finalize_consumer_report,
+    render_consumer_report,
 )
 from app.compiler_runtime.proof_terms import ProofTermRef, SemanticBindingProposal
+from app.compiler_runtime.proof_terms import CalculationWitness
 from app.compiler_runtime.signatures import proof_signature_hash_for
 from app.context import ContextManager
 from app.harness import HarnessRuntime
@@ -258,6 +260,124 @@ def test_contradicted_root_is_full_when_execution_completed() -> None:
     assert packet.review_complete is True
     assert packet.decision_ready is True
     assert packet.reportability == "FULL"
+
+
+def test_deterministic_report_renders_packet_status_amount_and_gap_tables() -> None:
+    packet = derive_consumer_packet(_case(["SUPPORTED", "NOT_FOUND"]))
+
+    markdown = render_consumer_report(packet)
+
+    assert "## 第二章 状态表" in markdown
+    assert "## 第三章 金额与计算表" in markdown
+    assert "## 第四章 缺口表" in markdown
+    assert "`check.0`" in markdown and "SUPPORTED" in markdown
+    assert "`check.1`" in markdown and "NOT_FOUND" in markdown
+    assert "component basis" in markdown
+    assert "## 系统核定的部分审查边界" not in markdown
+    finalized = finalize_consumer_report(markdown, packet)
+    assert finalized.count("## 系统核定的部分审查边界") == 1
+
+
+def test_deterministic_report_explains_missing_component_basis_in_business_chinese() -> None:
+    packet = derive_consumer_packet(_case(["SUPPORTED", "NOT_FOUND"]))
+    unresolved = next(item for item in packet.leaf_findings if item.status == "NOT_FOUND")
+    unresolved = unresolved.model_copy(
+        update={
+            "facet_refs": ["stated_components"],
+            "gap_code": "BINDING_MISSING",
+            "missing_fact": "PRIVATE KERNEL GAP",
+        }
+    )
+    packet = packet.model_copy(update={"leaf_findings": [packet.leaf_findings[0], unresolved]})
+
+    markdown = finalize_consumer_report(render_consumer_report(packet), packet)
+
+    assert "税费、折扣或调整的适用税率或计算基数缺失，无法完整核验" in markdown
+    assert "PRIVATE KERNEL GAP" not in markdown
+
+
+def test_deterministic_report_applies_grounded_component_sign_to_amount() -> None:
+    packet = derive_consumer_packet(_case(["SUPPORTED"]))
+    amount = packet.claims[0].model_copy(
+        update={
+            "subject": "contract adjustment",
+            "predicate": "amount",
+            "value": "2817.38",
+            "source_id": "invoice",
+            "locator": "page 1 block adjustment",
+            "currency": "EUR",
+        }
+    )
+    sign = amount.model_copy(
+        update={
+            "id": "claim.sign",
+            "predicate": "sign",
+            "value": "negative",
+            "currency": "",
+        }
+    )
+    packet = packet.model_copy(update={"claims": [amount, sign]})
+
+    markdown = finalize_consumer_report(render_consumer_report(packet), packet)
+
+    assert "EUR -2817.38" in markdown
+    assert "EUR 2817.38" not in markdown
+
+
+def test_deterministic_report_names_final_total_business_amounts() -> None:
+    packet = derive_consumer_packet(_case(["CONTRADICTED"]))
+    printed = packet.claims[0].model_copy(
+        update={"id": "claim.total", "predicate": "total_amount", "value": "13156.92", "currency": "EUR"}
+    )
+    operands = [
+        {
+            "ref": {"kind": "CLAIM", "ref_id": printed.id},
+            "value": "13156.92",
+            "currency": "EUR",
+            "claim_content_hash": "sha256:claim",
+        },
+        {
+            "ref": {"kind": "CLAIM", "ref_id": printed.id},
+            "value": "406.92",
+            "currency": "EUR",
+            "claim_content_hash": "sha256:claim",
+        },
+    ]
+    common = {
+        "check_id": "check.0",
+        "facet_ref": "final_total",
+        "currency": "EUR",
+        "evidence_snapshot_hash": "sha256:evidence",
+        "policy_snapshot_hash": "sha256:policy",
+        "lineage_hash": "sha256:lineage",
+    }
+    total = CalculationWitness.model_validate(
+        {"id": "witness.total", "operation": "SUM", "operands": operands, "result": "13563.84", **common}
+    )
+    difference = CalculationWitness.model_validate(
+        {"id": "witness.diff", "operation": "ABS_DIFF", "operands": operands, "result": "406.92", **common}
+    )
+    finding = packet.leaf_findings[0].model_copy(
+        update={
+            "facet_refs": ["final_total"],
+            "claim_ids": [printed.id],
+            "witness_ids": [total.id, difference.id],
+        }
+    )
+    packet = packet.model_copy(
+        update={
+            "claims": [printed],
+            "calculation_witnesses": [total, difference],
+            "leaf_findings": [finding],
+        }
+    )
+
+    markdown = render_consumer_report(packet)
+
+    assert "### 摘要结论" in markdown
+    assert "最终总金额不一致：票面总额 13156.92 EUR，重算总额 13563.84 EUR，差额 406.92 EUR" in markdown
+    assert "重算总额（SUM）" in markdown
+    assert "总额差额（ABS_DIFF）" in markdown
 
 
 def test_contradicted_root_with_unresolved_required_sibling_is_partial_but_decision_ready() -> None:

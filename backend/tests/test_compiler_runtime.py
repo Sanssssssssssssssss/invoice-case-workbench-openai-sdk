@@ -204,10 +204,9 @@ def test_stated_component_semantic_roles_prevent_amount_presence_shortcuts() -> 
     executor = (prompt_root / "executor.md").read_text(encoding="utf-8")
     verifier = (prompt_root / "verifier.md").read_text(encoding="utf-8")
 
-    assert "must collectively cover all required roles" in compiler
-    assert "each CHECK declares only the roles it actually tests" in compiler
-    assert "Mere component-amount presence covers only COMPONENT_OBSERVATION" in compiler
-    assert "The number of CHECKs remains free" in compiler
+    assert "Every CHECK carrying a facet with required_semantic_roles" in compiler
+    assert "must declare and test all of those roles" in compiler
+    assert "Mere component-amount presence never completes stated-component validity" in compiler
     assert "If a declared role cannot be grounded, submit that exact gap" in executor
     assert "never substitute a weaker role such as amount presence" in executor
     assert "Independently verify every semantic_role_ref" in verifier
@@ -340,11 +339,11 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "A ProofSignature is a type constraint, not a plan template" in compiler
     assert "The number, wording, sharing, and ALL/ANY arrangement of CHECKs remain your decision" in compiler
     assert "never reduce calculation validity to field presence" in compiler.lower()
-    assert PROMPT_VERSIONS["task_compiler"] == "typed_task_compiler_v17"
+    assert PROMPT_VERSIONS["task_compiler"] == "typed_task_compiler_v18"
     assert "A component rate/base gap does not erase its narrower grounded amount/sign" in compiler
     assert "Claims are append-only and existing Claim content is immutable" in executor
     assert "later unrelated Claims are allowed" in executor
-    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v16"
+    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v17"
     assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v17"
     assert "never bind a cross-Claim semantic relationship" in executor
     assert "only check_id, a facet_ref declared on that CHECK, an operation, and typed refs" in executor
@@ -361,6 +360,7 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "never flip `status` or `true_status` merely to silence the diagnostic" in verifier
     assert "A replayable multiplication with an unsupported business base remains NOT_FOUND" in verifier
     assert "Observation alone is never completion" in executor
+    assert "lower bounds for the current CHECK whenever it declares that facet" in executor
     assert "the base need not be repeated in the applicability sentence" in executor
     assert "include the actual Binding and reconciliation Witness lineage in the same submission" in executor
     assert "does not invalidate each accepted term in its frontier" in executor
@@ -1737,7 +1737,7 @@ def test_compiler_stages_emit_public_progress_before_and_after_work(tmp_path, mo
         if name == "task_compiler":
             return _plan()
         if name == "executor":
-            assert kwargs["max_turns"] == EXECUTOR_MAX_TURNS == 10
+            assert kwargs["max_turns"] == EXECUTOR_MAX_TURNS == 24
             submit = next(tool for tool in kwargs["tools"] if tool.name == "submit_check")
             submitted = json.loads(
                 asyncio.run(
@@ -2901,6 +2901,14 @@ def test_verifier_receives_full_sources_and_only_per_check_submitted_claims(
         sandbox=sandbox,
         policy_excerpt=policy_excerpt_for(["vendor_identity"]),
         focus_check_id="check.vendor",
+        upstream_frontier_results=[
+            {
+                "check_id": "check.upstream",
+                "committed": True,
+                "status": "NOT_FOUND",
+                "accepted_terms": {"claim_ids": [vendor_claim["id"]]},
+            }
+        ],
     )
 
     assert "claims" not in captured
@@ -2920,6 +2928,13 @@ def test_verifier_receives_full_sources_and_only_per_check_submitted_claims(
     ]["true_status"]
     assert "not the current classification" in captured["strong_status_link_protocol"][
         "true_status"
+    ]
+    assert captured["upstream_frontier_results"] == [
+        {
+            "check_id": "check.upstream",
+            "committed": True,
+            "accepted_terms": {"claim_ids": [vendor_claim["id"]]},
+        }
     ]
 
 

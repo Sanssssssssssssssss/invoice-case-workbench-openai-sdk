@@ -24,6 +24,7 @@ from app.compiler_runtime.runtime import (
     compiler_trace_metadata,
     prepare_sources,
 )
+from app.compiler_runtime.consumer import derive_consumer_packet, render_consumer_report
 from app.compiler_runtime.transcript import ModelTranscriptHooks
 from app.config import Settings, get_settings
 from app.context import ContextManager
@@ -1562,10 +1563,34 @@ class TurnRunner:
             return _manager_success("role", role, observation=observation)
         if role == "evidence_reviewer":
             return self._call_evidence_compiler(state, request, payload, decision)
+        if role == "report_writer":
+            try:
+                packet = derive_consumer_packet(self.store.load(state.case_id))
+                role_input = {
+                    "canonical_consumer_packet": packet.model_dump(mode="json"),
+                    "user_request": request.message,
+                }
+                result = {"title": "final_report", "markdown": render_consumer_report(packet)}
+                capability = self.roles.trace_metadata(role)
+                capability.update(
+                    runtime="deterministic_report_renderer",
+                    agent_as_tool=False,
+                    prompt_version="canonical_report_renderer_v1",
+                    prompt_file="",
+                    fallback_policy="fail_closed",
+                )
+                self.harness.record_role_call(state, role, role_input, result, capability=capability)
+                observation = self.context.record_result(state, kind="role", name=role, result=result)
+                self.harness.record_observation(state, observation)
+                self._update_phase_after_role(state, role, result)
+                return _manager_success("role", role, observation=observation)
+            except Exception as exc:
+                self.harness.record_role_call(state, role, {}, {}, error=f"{type(exc).__name__}: {exc}")
+                self.harness.record_observation(state, self.context.record_error(kind="role", name=role, exc=exc))
+                return {"status": "error", "role": role, "error": {"type": type(exc).__name__, "message": str(exc)}}
         role_capability = self.roles.trace_metadata(role)
         role_input = self.context_assembler.hydrate_role_input(state, role, payload, request.message)
-        if role != "report_writer":
-            role_input["supervisor_task"] = supervisor_task(decision, state)
+        role_input["supervisor_task"] = supervisor_task(decision, state)
         role_prompt_version = self.roles.prompt_version(role)
         role_packet = build_context_packet(
             role=role,

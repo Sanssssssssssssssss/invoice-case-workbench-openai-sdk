@@ -139,7 +139,14 @@ class _FakeRuntime:
         self.resume_calls = 0
         self.repository = SessionRepository(store)
         self.runner = SimpleNamespace(
-            settings=SimpleNamespace(llm_provider="fake", llm_model="fake-model"),
+            settings=SimpleNamespace(
+                llm_provider="fake",
+                llm_model="fake-model",
+                llm_pricing_version="fake-pricing-v1",
+                llm_input_cost_per_1m=1.0,
+                llm_cached_input_cost_per_1m=0.25,
+                llm_output_cost_per_1m=2.0,
+            ),
         )
 
     async def run_turn_streamed(self, request: Any, *, run_id: str, event_sink: Any) -> AgentTurnResponse:
@@ -244,6 +251,13 @@ async def test_runner_captures_isolated_streamed_run_and_two_allowed_approvals(
     assert snapshot.runtime_error == ""
     assert snapshot.provider == "fake"
     assert snapshot.model == "fake-model"
+    assert snapshot.pricing == {
+        "version": "fake-pricing-v1",
+        "currency": "USD",
+        "input_miss_per_1m": 1.0,
+        "cached_input_per_1m": 0.25,
+        "output_per_1m": 2.0,
+    }
     assert snapshot.policy_version == "policy_test_v1"
     assert snapshot.conversation[0]["role"] == "user"
     assert snapshot.conversation[0]["content"].startswith("请审核")
@@ -274,6 +288,7 @@ async def test_runner_captures_isolated_streamed_run_and_two_allowed_approvals(
     assert manifest["code"]["git_head"] == snapshot.agent_commit
     assert manifest["code"]["scope"] == ["backend/app", "policies"]
     assert len(manifest["code"]["fingerprint"]) == 64
+    assert manifest["pricing"] == snapshot.pricing
     assert manifest["provider_prompts"] == [
         {
             "calls": 1,

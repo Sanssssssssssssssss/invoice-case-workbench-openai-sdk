@@ -41,6 +41,7 @@ from app.evals.business.scorer import (
     _boundary_output_assertions,
     _canonical_projection_violations,
     _claim_matches_source_fact,
+    _claim_semantics_match_source_fact,
     _equation_witnesses,
     _invalid_equation_claims,
     _claim_is_grounded,
@@ -54,6 +55,7 @@ from app.evals.business.scorer import (
     _target_outcome,
     _text_has_decimal,
     _typed_witness_matches_relation,
+    _upstream_check_closure,
     score_business_eval,
 )
 
@@ -1349,6 +1351,24 @@ def test_missing_report_fails_without_inventing_a_veto() -> None:
     assert result.first_failed_stage == "report"
 
 
+def test_linked_canonical_report_can_carry_communication_facts() -> None:
+    snapshot = _snapshot().model_copy(deep=True)
+    snapshot.conversation[-1]["content"] = (
+        f"中文审核报告已生成：{snapshot.reports[0].path}"
+    )
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    assert next(
+        item for item in result.checks if item.id == "communication.required_meanings"
+    ).passed is True
+    assert all(
+        item.passed
+        for item in result.checks
+        if item.id.startswith("communication.fact.")
+    )
+
+
 def test_plan_ids_and_order_do_not_change_score() -> None:
     original = score_business_eval(_case(), _oracle(), _snapshot())
     snapshot = _snapshot().model_copy(deep=True)
@@ -1517,6 +1537,45 @@ def test_source_fact_matching_normalizes_snake_case_percent_and_quote_alternativ
         source_roles={"invoice": "invoice"},
         source_content={"invoice": fact.source_quote},
     )
+    tax_oracle = BusinessEvalOracle.model_validate_json(
+        (
+            Path(__file__).resolve().parents[2]
+            / "evals/business_v1/cases/tax_inclusive_arithmetic_supported_0053/oracle.json"
+        ).read_text(encoding="utf-8")
+    )
+    tax_fact = next(item for item in tax_oracle.facts if item.id == "tax_inclusive")
+    tax_claim = {
+        "subject": "invoice subtotal",
+        "predicate": "subtotal_including_vat",
+        "value": "135234.00",
+        "source_id": "invoice",
+        "quote": tax_fact.source_quote,
+        "attributes": {"currency": "EUR"},
+    }
+    assert _claim_semantics_match_source_fact(tax_fact, tax_claim)
+    assert _claim_matches_source_fact(
+        tax_fact,
+        tax_claim,
+        source_roles={"invoice": "invoice"},
+        source_content={"invoice": tax_fact.source_quote},
+    )
+
+
+def test_v33_milestone_lineage_follows_only_declared_upstream_checks() -> None:
+    nodes = {
+        "final": {"kind": "CHECK", "upstream_check_ids": ["subtotal", "components"]},
+        "subtotal": {"kind": "CHECK", "upstream_check_ids": ["lines"]},
+        "components": {"kind": "CHECK", "upstream_check_ids": []},
+        "lines": {"kind": "CHECK", "upstream_check_ids": []},
+        "foreign": {"kind": "CHECK", "upstream_check_ids": []},
+    }
+
+    assert _upstream_check_closure({"final"}, nodes=nodes) == {
+        "final",
+        "subtotal",
+        "components",
+        "lines",
+    }
 
 
 def test_unique_atomic_numeric_quote_matches_its_source_fact() -> None:
@@ -1551,7 +1610,7 @@ def test_unique_atomic_numeric_quote_matches_its_source_fact() -> None:
         source_roles={"invoice": "invoice"},
         source_content={"invoice": source_quote},
     )
-    assert not _claim_matches_source_fact(
+    assert _claim_matches_source_fact(
         facts["line_3_quantity"],
         {**common, "predicate": "quantity", "value": 20, "quote": "20"},
         source_roles={"invoice": "invoice"},
@@ -1812,6 +1871,24 @@ def test_v26_raw_pdf_appendix_cannot_supply_missing_body_fact() -> None:
     )
     assert difference.passed is False
     assert difference.observed == {"markdown": True, "pdf": False}
+
+
+def test_pdf_appendix_mention_in_toc_does_not_truncate_canonical_body() -> None:
+    snapshot = _strict_snapshot()
+    pdf = next(item for item in snapshot.reports if item.kind == "pdf")
+    pdf.text = (
+        "目录：第五章 原始材料附录说明\n"
+        "审核报告 PDF：票面 188813.24 EUR，重算 183313.83 EUR，差额 5499.41 EUR。\n"
+        f"{_RAW_PDF_APPENDIX_HEADING}\n"
+        "OCR 差额 13.00 EUR。"
+    )
+
+    result = score_business_eval(_case(), _oracle(), snapshot)
+
+    difference = next(
+        item for item in result.checks if item.id == "report.fact.total_difference"
+    )
+    assert difference.passed is True
 
 
 def test_v26_wrong_conclusion_in_canonical_markdown_is_still_vetoed() -> None:

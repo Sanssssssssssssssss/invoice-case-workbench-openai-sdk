@@ -43,7 +43,7 @@ class Settings(BaseModel):
     ocr_dpi: int = 200
     pdf_min_text_chars: int = 80
     docling_enabled: bool = True
-    paddleocr_enabled: bool = True
+    rapidocr_enabled: bool = True
     enable_langfuse: bool = False
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
@@ -52,6 +52,7 @@ class Settings(BaseModel):
     llm_input_cost_per_1m: float = 0.0
     llm_output_cost_per_1m: float = 0.0
     llm_cached_input_cost_per_1m: float = 0.0
+    llm_pricing_version: str = ""
     strict_context_partition: bool = False
 
     def timeout_for_role(self, role: str) -> float:
@@ -172,7 +173,7 @@ def get_settings() -> Settings:
         ocr_dpi=_int_env("INVOICE_AGENT_OCR_DPI", 200),
         pdf_min_text_chars=_int_env("INVOICE_AGENT_PDF_MIN_TEXT_CHARS", 80),
         docling_enabled=_bool_env("INVOICE_AGENT_DOCLING_ENABLED", True),
-        paddleocr_enabled=_bool_env("INVOICE_AGENT_PADDLEOCR_ENABLED", True),
+        rapidocr_enabled=_bool_env("INVOICE_AGENT_RAPIDOCR_ENABLED", True),
         enable_langfuse=_bool_env("INVOICE_AGENT_ENABLE_LANGFUSE", False),
         langfuse_public_key=_first_env("LANGFUSE_PUBLIC_KEY"),
         langfuse_secret_key=_first_env("LANGFUSE_SECRET_KEY"),
@@ -181,5 +182,6 @@ def get_settings() -> Settings:
         llm_input_cost_per_1m=_float_env("INVOICE_AGENT_LLM_INPUT_COST_PER_1M", 0.0),
         llm_output_cost_per_1m=_float_env("INVOICE_AGENT_LLM_OUTPUT_COST_PER_1M", 0.0),
         llm_cached_input_cost_per_1m=_float_env("INVOICE_AGENT_LLM_CACHED_INPUT_COST_PER_1M", 0.0),
+        llm_pricing_version=_first_env("INVOICE_AGENT_LLM_PRICING_VERSION") or "",
         strict_context_partition=_bool_env("INVOICE_AGENT_STRICT_CONTEXT_PARTITION", False),
     )

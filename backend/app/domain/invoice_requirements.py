@@ -5,6 +5,8 @@ from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import Any
 
+from app.proof_schema import ProofSignature
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 POLICY_PATH = PROJECT_ROOT / "policies" / "aurora_ap_policy_v1.json"
@@ -12,23 +14,6 @@ _KINDS = {"document", "field", "cross_check", "visual", "risk_check"}
 _OWNERS = {"evidence", "reviewer", "compiler"}
 _HINT_ACTIVATIONS = {"explicit", "derived"}
 _HINT_FIELDS = {"activation", "activation_requirement_groups", "capability", "target_predicate"}
-_SIGNATURE_FIELDS = {
-    "signature_id",
-    "version",
-    "requirement_id",
-    "root_composition",
-    "required_policy_refs",
-    "facets",
-}
-_FACET_REQUIRED_FIELDS = {"id", "minimum_proof_terms"}
-_FACET_FIELDS = _FACET_REQUIRED_FIELDS | {"semantic_contract", "required_semantic_roles"}
-_ROOT_COMPOSITIONS = {"ALL_REQUIRED", "ANY_SUFFICIENT"}
-_PROOF_TERMS = {"CLAIM", "BINDING", "WITNESS"}
-_SEMANTIC_ROLES = {
-    "COMPONENT_OBSERVATION",
-    "COMPONENT_APPLICABILITY",
-    "COMPONENT_RECONCILIATION",
-}
 
 
 def load_requirement_pack(path: Path = POLICY_PATH) -> dict[str, Any]:
@@ -70,61 +55,21 @@ def load_requirement_pack(path: Path = POLICY_PATH) -> dict[str, Any]:
     raw_signatures = pack.get("proof_signatures") or []
     if not isinstance(raw_signatures, list):
         raise ValueError("Invalid proof signatures")
-    seen_signature_ids: set[str] = set()
-    seen_signature_requirements: set[str] = set()
-    for signature in raw_signatures:
-        if not isinstance(signature, dict) or set(signature) != _SIGNATURE_FIELDS:
-            raise ValueError("Invalid proof signature fields")
-        signature_id = str(signature.get("signature_id") or "").strip()
-        version = str(signature.get("version") or "").strip()
-        requirement_id = str(signature.get("requirement_id") or "").strip()
-        if not signature_id or not version or requirement_id not in requirements:
-            raise ValueError(f"Invalid proof signature: {signature_id or requirement_id}")
-        if signature_id in seen_signature_ids or requirement_id in seen_signature_requirements:
-            raise ValueError(f"Duplicate proof signature: {signature_id or requirement_id}")
-        seen_signature_ids.add(signature_id)
-        seen_signature_requirements.add(requirement_id)
-        if signature.get("root_composition") not in _ROOT_COMPOSITIONS:
-            raise ValueError(f"Invalid proof signature root composition: {signature_id}")
-        policy_refs = signature.get("required_policy_refs")
-        definition_policy_refs = set(requirements[requirement_id].get("required_policy_values") or [])
-        if (
-            not isinstance(policy_refs, list)
-            or any(not str(item).strip() for item in policy_refs)
-            or len({str(item) for item in policy_refs}) != len(policy_refs)
-            or not set(str(item) for item in policy_refs).issubset(definition_policy_refs)
-        ):
-            raise ValueError(f"Invalid proof signature policy refs: {signature_id}")
-        facets = signature.get("facets")
-        if not isinstance(facets, list) or not facets:
-            raise ValueError(f"Invalid proof signature facets: {signature_id}")
-        facet_ids: list[str] = []
-        for facet in facets:
-            if (
-                not isinstance(facet, dict)
-                or not _FACET_REQUIRED_FIELDS.issubset(facet)
-                or set(facet) - _FACET_FIELDS
-            ):
-                raise ValueError(f"Invalid proof signature facet fields: {signature_id}")
-            facet_id = str(facet.get("id") or "").strip()
-            terms = facet.get("minimum_proof_terms")
-            semantic_contract = str(facet.get("semantic_contract") or "").strip()
-            semantic_roles = facet.get("required_semantic_roles") or []
-            if (
-                not facet_id
-                or not isinstance(terms, list)
-                or not terms
-                or any(str(term) not in _PROOF_TERMS for term in terms)
-                or len({str(term) for term in terms}) != len(terms)
-                or not isinstance(semantic_roles, list)
-                or any(str(role) not in _SEMANTIC_ROLES for role in semantic_roles)
-                or len({str(role) for role in semantic_roles}) != len(semantic_roles)
-                or (semantic_roles and not semantic_contract)
-            ):
-                raise ValueError(f"Invalid proof signature facet: {signature_id}")
-            facet_ids.append(facet_id)
-        if len(set(facet_ids)) != len(facet_ids):
-            raise ValueError(f"Duplicate proof signature facet: {signature_id}")
+    signatures = [ProofSignature.model_validate(item) for item in raw_signatures]
+    signature_ids = [item.signature_id for item in signatures]
+    signature_requirements = [item.requirement_id for item in signatures]
+    if len(set(signature_ids)) != len(signature_ids) or len(set(signature_requirements)) != len(
+        signature_requirements
+    ):
+        raise ValueError("Duplicate proof signature")
+    for signature in signatures:
+        if signature.requirement_id not in requirements:
+            raise ValueError(f"Invalid proof signature requirement: {signature.requirement_id}")
+        definition_policy_refs = set(
+            requirements[signature.requirement_id].get("required_policy_values") or []
+        )
+        if not set(signature.required_policy_refs).issubset(definition_policy_refs):
+            raise ValueError(f"Invalid proof signature policy refs: {signature.signature_id}")
     for profile_id, rows in profiles.items():
         if not isinstance(rows, list) or any(not isinstance(row, dict) or row.get("id") not in requirements for row in rows):
             raise ValueError(f"Invalid requirement profile: {profile_id}")

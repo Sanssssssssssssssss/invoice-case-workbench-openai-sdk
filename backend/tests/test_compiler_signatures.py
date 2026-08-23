@@ -217,7 +217,7 @@ def test_component_amount_presence_cannot_bypass_required_semantic_roles(
         PlanConformanceGate([_signature()]).validate(plan)
 
 
-def test_component_semantic_roles_allow_multiple_atomic_component_checks() -> None:
+def test_component_semantic_roles_cannot_be_split_across_checks() -> None:
     plan = _plan()
     root = next(node for node in plan.nodes if node.id == "root.calculation")
     component = next(node for node in plan.nodes if node.id == "check.components")
@@ -240,7 +240,8 @@ def test_component_semantic_roles_allow_multiple_atomic_component_checks() -> No
         )
         root.depends_on.append(node_id)
 
-    PlanConformanceGate([_signature()]).validate(ProofPlan.model_validate(plan.model_dump()))
+    with pytest.raises(ValueError, match="must declare every required semantic role"):
+        PlanConformanceGate([_signature()]).validate(ProofPlan.model_validate(plan.model_dump()))
 
 
 def test_signature_hash_is_order_independent_and_tracks_the_empty_set() -> None:
@@ -257,7 +258,7 @@ def test_requirement_pack_rejects_business_rule_dsl_fields_in_signatures(tmp_pat
     path = tmp_path / "policy.json"
     path.write_text(json.dumps(pack), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="facet fields"):
+    with pytest.raises(ValueError, match="formula|Extra inputs"):
         load_requirement_pack(path)
 
 

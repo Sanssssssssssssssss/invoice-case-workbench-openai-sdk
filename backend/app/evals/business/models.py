@@ -526,6 +526,7 @@ class EvalSnapshot(StrictModel):
     agent_commit: str = ""
     provider: str = ""
     model: str = ""
+    pricing: dict[str, Any] = Field(default_factory=dict)
     policy_version: str = ""
     started_at: str = ""
     completed_at: str = ""

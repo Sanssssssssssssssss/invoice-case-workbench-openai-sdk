@@ -40,7 +40,7 @@ CAPABILITY_CARDS = {
         "materials_advisor": "Generate material-gap tasks, explain rules/templates, and answer what to submit next. It may use RAG guidance internally.",
         "evidence_reviewer": "Compile active requirements into a ProofPlan, inspect evidence in a read-only tool sandbox, and verify every atomic check. Pass the smallest sufficient active_requirement_ids subset for a new, narrowed, or replaced scope; profile lists are candidate bundles, not atomic scopes. For a goal limited to line-item arithmetic, subtotal, stated tax/discount/components, and final amount reconciliation, active_requirement_ids MUST contain EXACTLY [\"invoice_calculation_valid\"]; a requested report adds no scope, and Runtime expands declared premises. Mode is always review.",
         "case_patch_writer": "Convert reviewer/advisor structured results into a CasePatch. It does not re-review evidence.",
-        "report_writer": "Draft Chinese Markdown from the canonical consumer packet and the user's request. It does not write files.",
+        "report_writer": "Generate deterministic Markdown tables from the canonical consumer packet. It does not call a model or write files.",
     },
     "tools": {
         "read_case_state": "Read current case state snapshot.",

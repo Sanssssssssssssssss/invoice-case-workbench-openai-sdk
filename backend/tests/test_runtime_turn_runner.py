@@ -420,21 +420,18 @@ def _runtime_event_pairs(runtime: AgentRuntime, case_id: str, run_id: str) -> se
     }
 
 
-def test_report_writer_discards_manager_side_channel_and_hands_off_canonical_content_ref(tmp_path, monkeypatch) -> None:
+def test_report_writer_is_deterministic_and_discards_manager_side_channel(tmp_path, monkeypatch) -> None:
     runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
     runner = runtime.runner
     case_id = "case_report_context_boundary"
     _seed_ready_case(runner.store, case_id)
     request = AgentTurnRequest(case_id=case_id, message="请根据已核验结论生成报告。")
     state = HarnessRuntime(runner.store).begin_run(case_id, request.message, run_id="run_report_context_boundary")
-    captured: dict[str, Any] = {}
-
-    def fake_call(role: str, role_input: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
-        assert role == "report_writer"
-        captured.update(role_input)
-        return {"title": "审核报告", "markdown": "# 审核报告\n"}
-
-    monkeypatch.setattr(runner.roles, "call", fake_call)
+    monkeypatch.setattr(
+        runner.roles,
+        "call",
+        lambda *_args, **_kwargs: pytest.fail("deterministic report writer must not call a model"),
+    )
     manager_only = "MANAGER_ONLY total=999999.99 verdict=APPROVED"
     result = runner._call_specialist(  # noqa: SLF001
         state,
@@ -451,9 +448,13 @@ def test_report_writer_discards_manager_side_channel_and_hands_off_canonical_con
         ),
     )
 
-    assert set(captured) == {"canonical_consumer_packet", "user_request"}
-    assert captured["user_request"] == request.message
-    assert manager_only not in json.dumps(captured, ensure_ascii=False)
+    role_call = state.role_calls[-1]
+    assert set(role_call["input"]) == {"canonical_consumer_packet", "user_request"}
+    assert role_call["input"]["user_request"] == request.message
+    assert role_call["capability"]["runtime"] == "deterministic_report_renderer"
+    report = runner.context.last_role_result(state, name="report_writer")
+    assert "## 第二章 状态表" in report["markdown"]
+    assert manager_only not in json.dumps(report, ensure_ascii=False)
     assert result["content_ref"] == "last_role:report_writer.markdown"
     assert "artifact_ref" not in result
     assert result["observation"]["content_ref"] == "last_role:report_writer.markdown"
@@ -540,7 +541,6 @@ def test_report_delivery_summary_keeps_key_amounts_from_persisted_markdown(
     ("role", "role_result"),
     [
         ("materials_advisor", {"answer": "请补充采购订单。", "tasks": [], "missing_materials": ["purchase_order"], "next_questions": []}),
-        ("report_writer", {"title": "审核报告", "markdown": "# 审核报告\n"}),
     ],
 )
 def test_nondeterministic_specialist_persists_and_streams_public_progress_around_call(

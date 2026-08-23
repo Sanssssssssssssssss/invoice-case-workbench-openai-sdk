@@ -51,12 +51,12 @@ from .signatures import (
 )
 
 
-COMPILER_VERSION = "typed_evidence_compiler_runtime_v13"
-EXECUTOR_MAX_TURNS = 10
+COMPILER_VERSION = "typed_evidence_compiler_runtime_v14"
+EXECUTOR_MAX_TURNS = 24
 CHECK_FRONTIER_ATTEMPT_CAP = 2
 PROMPT_VERSIONS = {
-    "task_compiler": "typed_task_compiler_v17",
-    "executor": "typed_evidence_executor_v16",
+    "task_compiler": "typed_task_compiler_v18",
+    "executor": "typed_evidence_executor_v17",
     "verifier": "typed_fine_verifier_v17",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
@@ -651,7 +651,13 @@ class EvidenceCompilerRuntime:
             "calculation_operation_protocol": _calculation_operation_protocol(),
             "strong_status_link_protocol": _strong_status_link_protocol(),
             "focus_check_ids": requested_check_ids,
-            "upstream_frontier_results": list(upstream_frontier_results),
+            # Verifier judges the focused CHECK from committed proof terms, not
+            # from another CHECK's classification.  Status topology remains a
+            # Kernel concern and would only anchor the independent review.
+            "upstream_frontier_results": [
+                {key: value for key, value in item.items() if key != "status"}
+                for item in upstream_frontier_results
+            ],
             "repair_feedback": list(repair_feedback),
             "sources": sources,
             "policy": policy_excerpt,

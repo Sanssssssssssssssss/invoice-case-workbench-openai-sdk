@@ -17,7 +17,7 @@ from app.state.attachment_manifest import (
 from app.state.case_store import CaseStore
 from app.state.schemas import Attachment, EvidenceItem
 from app.tools.catalog import ToolCatalog
-from app.tools.document_extraction import _line_items_from_tables
+from app.tools.document_extraction import _docling_tables, _line_items_from_tables, _looks_like_tabular_text
 from app.tools.file_workspace import FileWorkspace
 
 
@@ -465,6 +465,58 @@ def test_line_items_from_tables_preserves_all_structured_rows() -> None:
         "table_id": "p1_t001",
     }
     assert rows[-1]["text"] == "Cost for electrical engineer"
+
+
+def test_docling_cell_grid_preserves_atomic_invoice_columns() -> None:
+    def cell(text: str, column: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "bbox": {"l": column * 10, "t": 20, "r": column * 10 + 8, "b": 28, "coord_origin": "TOPLEFT"},
+        }
+
+    class Document:
+        def export_to_dict(self) -> dict[str, object]:
+            return {
+                "tables": [
+                    {
+                        "prov": [{"page_no": 1, "bbox": {"l": 0, "t": 10, "r": 50, "b": 40}}],
+                        "data": {
+                            "grid": [
+                                [cell("Description", 0), cell("Qty", 1), cell("Unit Price", 2), cell("Amount", 3)],
+                                [
+                                    cell("Penetration testing - scope per SOW 2026-03", 0),
+                                    cell("20", 1),
+                                    cell("562,44", 2),
+                                    cell("11.248,80", 3),
+                                ],
+                            ]
+                        },
+                    }
+                ]
+            }
+
+    tables = _docling_tables(Document())
+    rows = _line_items_from_tables(tables)
+
+    assert tables[0]["source"] == "docling_tableformer"
+    assert tables[0]["cells"][-3]["text"] == "20"
+    assert tables[0]["cells"][-3]["bbox"] == [10, 20, 18, 28]
+    assert rows == [
+        {
+            "position": "",
+            "text": "Penetration testing - scope per SOW 2026-03",
+            "quantity": "20",
+            "unit_price": "562,44",
+            "total_amount": "11.248,80",
+            "page": 1,
+            "table_id": "p1_dt001",
+        }
+    ]
+
+
+def test_collapsed_bold_columns_trigger_strong_layout_extraction() -> None:
+    assert _looks_like_tabular_text("**Description** **Qty** **Unit Price** **Amount**")
+    assert not _looks_like_tabular_text("A normal paragraph with one **bold phrase**.")
 
 
 def test_read_attachment_truncated_tool_preview_does_not_weaken_manifest_or_page_integrity(tmp_path) -> None:

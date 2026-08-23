@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from graphlib import TopologicalSorter
 from typing import Iterable, Mapping
 
+from app.compiler_runtime.graph_walk import reachable_ids
 from app.compiler_runtime.models import (
     AssessmentStatus,
     BusinessGapCode,
@@ -178,7 +179,7 @@ def compile_review_artifact(
         root_status = results[root_id].status
         reachable_checks = sorted(
             node_id
-            for node_id in _reachable_from(root_id, nodes)
+            for node_id in reachable_ids(root_id, lambda current: nodes[current].depends_on)
             if nodes[node_id].kind == "CHECK"
         )
         supporting = [
@@ -1188,18 +1189,6 @@ def _aggregate_reason(
 ) -> str:
     child_states = ", ".join(f"{item.node_id}={item.status}" for item in dependencies)
     return f"{node.kind} evaluated to {status} from {child_states}"
-
-
-def _reachable_from(root_id: str, nodes: dict[str, ProofNode]) -> set[str]:
-    result: set[str] = set()
-    pending = [root_id]
-    while pending:
-        node_id = pending.pop()
-        if node_id in result:
-            continue
-        result.add(node_id)
-        pending.extend(nodes[node_id].depends_on)
-    return result
 
 
 def _unique(items: Iterable[str]) -> list[str]:

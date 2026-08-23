@@ -117,33 +117,43 @@ def build_extraction_dossier(store: Any, case_id: str, item: dict[str, Any]) -> 
     if pdf_markdown:
         extraction_methods.append("pymupdf4llm_markdown")
 
-    strong_extraction_needed = _needs_strong_extraction(content_kind, original_text, item)
-    if strong_extraction_needed:
-        docling_text, docling_notes = _try_docling(source)
-        quality_notes.extend(docling_notes)
-        if docling_text:
-            extraction_methods.append("docling")
-    else:
-        docling_text = ""
-        quality_notes.append("strong_extraction_skipped_fast_text_sufficient")
-
     pages, blocks, tables, pymupdf_notes = _pymupdf_pages(store, case_id, source, preview_paths)
     quality_notes.extend(pymupdf_notes)
     if pages or blocks or tables:
         extraction_methods.append("pymupdf_structured")
 
+    strong_extraction_needed = _needs_strong_extraction(content_kind, original_text, item) or (
+        content_kind == "pdf"
+        and not tables
+        and _looks_like_tabular_text(pdf_markdown or original_text)
+    )
     if strong_extraction_needed:
-        paddle_blocks, paddle_text, paddle_notes = _try_paddleocr(store, case_id, source, preview_paths, content_kind)
-        quality_notes.extend(paddle_notes)
-        if paddle_blocks:
-            extraction_methods.append("paddleocr")
-            blocks.extend(paddle_blocks)
+        docling_text, docling_tables, docling_notes = _try_docling(source)
+        quality_notes.extend(docling_notes)
+        if docling_text or docling_tables:
+            extraction_methods.append("docling_structured")
+            tables.extend(docling_tables)
+            pages_by_number = {int(page.get("page") or 0): page for page in pages}
+            for table in docling_tables:
+                page = pages_by_number.get(int(table.get("page") or 0))
+                if page is not None:
+                    page.setdefault("tables", []).append(str(table.get("id") or ""))
     else:
-        paddle_text = ""
+        docling_text, docling_tables = "", []
+        quality_notes.append("strong_extraction_skipped_fast_layout_sufficient")
+
+    if strong_extraction_needed and not docling_text:
+        rapid_blocks, rapid_text, rapid_notes = _try_rapidocr(store, case_id, source, preview_paths, content_kind)
+        quality_notes.extend(rapid_notes)
+        if rapid_blocks:
+            extraction_methods.append("rapidocr")
+            blocks.extend(rapid_blocks)
+    else:
+        rapid_text = ""
 
     page_text = "\n".join(page.get("text", "") for page in pages)
-    body_markdown = pdf_markdown or _pages_to_markdown(pages, tables)
-    full_text = _merge_texts([pdf_markdown, docling_text, original_text, page_text, paddle_text])
+    body_markdown = docling_text if docling_tables else (pdf_markdown or _pages_to_markdown(pages, tables))
+    full_text = _merge_texts([pdf_markdown, docling_text, original_text, page_text, rapid_text])
     if not pages:
         pages = [
             {
@@ -307,6 +317,17 @@ def _needs_strong_extraction(content_kind: str, text: str, item: dict[str, Any])
     return False
 
 
+def _looks_like_tabular_text(text: str) -> bool:
+    """Detect layout that a flat text extraction is likely to have collapsed."""
+
+    for line in str(text or "").splitlines():
+        if line.count("|") >= 3:
+            return True
+        if len(re.findall(r"\*\*[^*\n]{1,80}\*\*", line)) >= 3:
+            return True
+    return False
+
+
 def _try_pymupdf4llm(source: Path) -> tuple[str, list[str]]:
     """Use PyMuPDF4LLM as a lightweight PDF-to-markdown body extractor when available."""
 
@@ -324,28 +345,75 @@ def _try_pymupdf4llm(source: Path) -> tuple[str, list[str]]:
         return "", [f"pymupdf4llm_failed:{type(exc).__name__}"]
 
 
-def _try_docling(source: Path) -> tuple[str, list[str]]:
+def _try_docling(source: Path) -> tuple[str, list[dict[str, Any]], list[str]]:
     if not getattr(get_settings(), "docling_enabled", True):
-        return "", []
+        return "", [], []
     try:
         from docling.document_converter import DocumentConverter  # type: ignore[import-not-found]
     except Exception:
-        return "", ["docling_not_installed"]
+        return "", [], ["docling_not_installed"]
     try:
         converter = DocumentConverter()
         converted = converter.convert(str(source))
         document = getattr(converted, "document", None)
         if document is None:
-            return "", ["docling_returned_no_document"]
+            return "", [], ["docling_returned_no_document"]
         if hasattr(document, "export_to_markdown"):
             text = str(document.export_to_markdown() or "")
         elif hasattr(document, "export_to_text"):
             text = str(document.export_to_text() or "")
         else:
             text = str(document)
-        return text.strip(), []
+        return text.strip(), _docling_tables(document), []
     except Exception as exc:
-        return "", [f"docling_failed:{type(exc).__name__}"]
+        return "", [], [f"docling_failed:{type(exc).__name__}"]
+
+
+def _docling_tables(document: Any) -> list[dict[str, Any]]:
+    try:
+        payload = document.export_to_dict()
+    except Exception:
+        return []
+    tables: list[dict[str, Any]] = []
+    for index, raw_table in enumerate(list(payload.get("tables") or [])[:40], start=1):
+        data = dict(raw_table.get("data") or {})
+        grid = list(data.get("grid") or [])
+        rows = [
+            [str((cell or {}).get("text") or "").strip() for cell in list(row or [])]
+            for row in grid
+        ]
+        if not rows:
+            continue
+        provenance = list(raw_table.get("prov") or [])
+        page = int((provenance[0] if provenance else {}).get("page_no") or 1)
+        table_id = f"p{page}_dt{index:03d}"
+        cells: list[dict[str, Any]] = []
+        for row_index, row in enumerate(grid):
+            for column_index, cell in enumerate(list(row or [])):
+                cell = dict(cell or {})
+                bbox = dict(cell.get("bbox") or {})
+                cells.append(
+                    {
+                        "row": row_index,
+                        "column": column_index,
+                        "text": str(cell.get("text") or "").strip(),
+                        "bbox": [bbox.get(key) for key in ("l", "t", "r", "b")],
+                        "coordinate_origin": str(bbox.get("coord_origin") or ""),
+                    }
+                )
+        table_bbox = dict((provenance[0] if provenance else {}).get("bbox") or {})
+        tables.append(
+            {
+                "id": table_id,
+                "page": page,
+                "markdown": _rows_to_markdown(rows),
+                "csv": _rows_to_csv(rows),
+                "bbox": [table_bbox.get(key) for key in ("l", "t", "r", "b")],
+                "cells": cells,
+                "source": "docling_tableformer",
+            }
+        )
+    return tables
 
 
 def _pymupdf_pages(
@@ -454,9 +522,12 @@ def _line_items_from_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]
         csv_text = str(table.get("csv") or "")
         if not csv_text.strip():
             continue
-        for row in csv.reader(StringIO(csv_text)):
-            cells = [str(cell or "").strip() for cell in row if str(cell or "").strip()]
-            parsed = _parse_line_item_cells(cells)
+        rows = [[str(cell or "").strip() for cell in row] for row in csv.reader(StringIO(csv_text))]
+        columns = _line_item_columns(rows[0]) if rows else None
+        candidates = rows[1:] if columns else rows
+        for row in candidates:
+            cells = [cell for cell in row if cell]
+            parsed = _parse_line_item_cells(cells, columns=columns, raw_row=row)
             if not parsed:
                 continue
             parsed["page"] = page
@@ -476,7 +547,46 @@ def _line_items_from_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]
     return line_items
 
 
-def _parse_line_item_cells(cells: list[str]) -> dict[str, Any] | None:
+def _line_item_columns(header: list[str]) -> dict[str, int] | None:
+    normalized = [re.sub(r"[^a-z0-9]+", " ", cell.lower()).strip() for cell in header]
+    aliases = {
+        "text": {"description", "item", "product", "service", "details"},
+        "quantity": {"qty", "quantity"},
+        "unit_price": {"unit price", "price", "rate"},
+        "total_amount": {"amount", "total", "line total"},
+    }
+    result: dict[str, int] = {}
+    for field, names in aliases.items():
+        for index, value in enumerate(normalized):
+            if value in names:
+                result[field] = index
+                break
+    return result if set(result) == set(aliases) else None
+
+
+def _parse_line_item_cells(
+    cells: list[str],
+    *,
+    columns: dict[str, int] | None = None,
+    raw_row: list[str] | None = None,
+) -> dict[str, Any] | None:
+    if columns:
+        row = raw_row or cells
+        if max(columns.values()) >= len(row):
+            return None
+        text = row[columns["text"]]
+        quantity = row[columns["quantity"]]
+        unit_price = row[columns["unit_price"]]
+        total_amount = row[columns["total_amount"]]
+        if not text or not all(_number_value(value) is not None for value in (quantity, unit_price, total_amount)):
+            return None
+        return {
+            "position": "",
+            "text": text,
+            "quantity": quantity,
+            "unit_price": unit_price,
+            "total_amount": total_amount,
+        }
     if len(cells) < 4:
         return None
     position = cells[0]
@@ -526,14 +636,14 @@ def _line_item_field_candidates(line_items: list[dict[str, Any]], pages: list[in
     ]
 
 
-def _try_paddleocr(
+def _try_rapidocr(
     store: Any,
     case_id: str,
     source: Path,
     preview_paths: list[str],
     content_kind: str,
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
-    if not getattr(get_settings(), "paddleocr_enabled", True):
+    if not getattr(get_settings(), "rapidocr_enabled", True):
         return [], "", []
     image_paths: list[Path] = []
     if content_kind == "image":
@@ -546,31 +656,36 @@ def _try_paddleocr(
     if not image_paths:
         return [], "", []
     try:
-        from paddleocr import PaddleOCR  # type: ignore[import-not-found]
+        from rapidocr import RapidOCR  # type: ignore[import-not-found]
+        from rapidocr.utils.typings import EngineType  # type: ignore[import-not-found]
     except Exception:
-        return [], "", ["paddleocr_not_installed"]
+        return [], "", ["rapidocr_not_installed"]
     try:
-        try:
-            ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
-        except TypeError:
-            ocr = PaddleOCR(lang="en")
+        params = {f"{part}.engine_type": EngineType.TORCH for part in ("Det", "Cls", "Rec")}
+        ocr = RapidOCR(params=params)
     except Exception as exc:
-        return [], "", [f"paddleocr_init_failed:{type(exc).__name__}"]
+        return [], "", [f"rapidocr_init_failed:{type(exc).__name__}"]
     blocks: list[dict[str, Any]] = []
     texts: list[str] = []
     notes: list[str] = []
     for page_no, image_path in enumerate(image_paths, start=1):
         try:
-            result = ocr.ocr(str(image_path), cls=True)
-        except TypeError:
-            result = ocr.ocr(str(image_path))
+            result = ocr(str(image_path))
         except Exception as exc:
-            notes.append(f"paddleocr_failed:{image_path.name}:{type(exc).__name__}")
+            notes.append(f"rapidocr_failed:{image_path.name}:{type(exc).__name__}")
             continue
-        for line_index, line in enumerate(_iter_ocr_lines(result), start=1):
-            text = str(line.get("text") or "").strip()
+        raw_texts = getattr(result, "txts", None)
+        raw_boxes = getattr(result, "boxes", None)
+        raw_scores = getattr(result, "scores", None)
+        result_texts = list(raw_texts) if raw_texts is not None else []
+        result_boxes = list(raw_boxes) if raw_boxes is not None else []
+        result_scores = list(raw_scores) if raw_scores is not None else []
+        for line_index, text_value in enumerate(result_texts, start=1):
+            text = str(text_value or "").strip()
             if not text:
                 continue
+            raw_box = result_boxes[line_index - 1] if line_index <= len(result_boxes) else []
+            bbox = raw_box.tolist() if hasattr(raw_box, "tolist") else raw_box
             texts.append(text)
             blocks.append(
                 {
@@ -578,52 +693,12 @@ def _try_paddleocr(
                     "page": page_no,
                     "type": "ocr_line",
                     "text": _brief(text, 800),
-                    "bbox": line.get("bbox") or [],
-                    "confidence": line.get("confidence", ""),
-                    "source": "paddleocr",
+                    "bbox": bbox or [],
+                    "confidence": result_scores[line_index - 1] if line_index <= len(result_scores) else "",
+                    "source": "rapidocr",
                 }
             )
     return blocks, "\n".join(texts), notes
-
-
-def _iter_ocr_lines(value: Any) -> list[dict[str, Any]]:
-    lines: list[dict[str, Any]] = []
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            text = node.get("text") or node.get("rec_text") or node.get("label")
-            if text:
-                lines.append(
-                    {
-                        "text": text,
-                        "bbox": node.get("box") or node.get("bbox") or node.get("poly") or [],
-                        "confidence": node.get("score") or node.get("confidence") or "",
-                    }
-                )
-                return
-            for child in node.values():
-                walk(child)
-            return
-        if isinstance(node, (list, tuple)):
-            if (
-                len(node) >= 2
-                and isinstance(node[1], (list, tuple))
-                and node[1]
-                and isinstance(node[1][0], str)
-            ):
-                lines.append(
-                    {
-                        "text": node[1][0],
-                        "bbox": node[0] if isinstance(node[0], (list, tuple)) else [],
-                        "confidence": node[1][1] if len(node[1]) > 1 else "",
-                    }
-                )
-                return
-            for child in node:
-                walk(child)
-
-    walk(value)
-    return lines
 
 
 def _key_value_candidates(text: str) -> list[dict[str, Any]]:

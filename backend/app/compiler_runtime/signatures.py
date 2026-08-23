@@ -3,97 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 from functools import lru_cache
-from typing import Iterable, Literal
+from typing import Iterable
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from app.compiler_runtime.models import ProofNode, ProofPlan, SemanticRole
+from app.compiler_runtime.graph_walk import reachable_ids
+from app.compiler_runtime.models import ProofNode, ProofPlan
 from app.domain.invoice_requirements import REQUIREMENT_PROOF_SIGNATURES
-
-
-ProofTerm = Literal["CLAIM", "BINDING", "WITNESS"]
-RootComposition = Literal["ALL_REQUIRED", "ANY_SUFFICIENT"]
-
-
-def _non_empty(value: str, field_name: str) -> str:
-    result = value.strip()
-    if not result:
-        raise ValueError(f"{field_name} must not be empty")
-    return result
-
-
-class _SignatureModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class ProofFacet(_SignatureModel):
-    id: str
-    minimum_proof_terms: list[ProofTerm]
-    semantic_contract: str = ""
-    required_semantic_roles: list[SemanticRole] = Field(default_factory=list)
-
-    @field_validator("id")
-    @classmethod
-    def validate_id(cls, value: str) -> str:
-        return _non_empty(value, "facet id")
-
-    @field_validator("minimum_proof_terms")
-    @classmethod
-    def validate_terms(cls, value: list[ProofTerm]) -> list[ProofTerm]:
-        if not value:
-            raise ValueError("minimum_proof_terms must not be empty")
-        if len(set(value)) != len(value):
-            raise ValueError("minimum_proof_terms must not contain duplicates")
-        return value
-
-    @field_validator("semantic_contract")
-    @classmethod
-    def validate_semantic_contract(cls, value: str) -> str:
-        return value.strip()
-
-    @field_validator("required_semantic_roles")
-    @classmethod
-    def validate_semantic_roles(cls, value: list[SemanticRole]) -> list[SemanticRole]:
-        if len(set(value)) != len(value):
-            raise ValueError("required_semantic_roles must not contain duplicates")
-        return value
-
-    @model_validator(mode="after")
-    def validate_semantic_shape(self) -> ProofFacet:
-        if self.required_semantic_roles and not self.semantic_contract:
-            raise ValueError("required_semantic_roles require a semantic_contract")
-        return self
-
-
-class ProofSignature(_SignatureModel):
-    signature_id: str
-    version: str
-    requirement_id: str
-    root_composition: RootComposition
-    required_policy_refs: list[str] = Field(default_factory=list)
-    facets: list[ProofFacet]
-
-    @field_validator("signature_id", "version", "requirement_id")
-    @classmethod
-    def validate_text(cls, value: str, info) -> str:
-        return _non_empty(value, info.field_name)
-
-    @field_validator("required_policy_refs")
-    @classmethod
-    def validate_policy_refs(cls, value: list[str]) -> list[str]:
-        result = [_non_empty(item, "required_policy_refs") for item in value]
-        if len(set(result)) != len(result):
-            raise ValueError("required_policy_refs must not contain duplicates")
-        return result
-
-    @model_validator(mode="after")
-    def validate_facets(self) -> ProofSignature:
-        if not self.facets:
-            raise ValueError("facets must not be empty")
-        facet_ids = [facet.id for facet in self.facets]
-        if len(set(facet_ids)) != len(facet_ids):
-            raise ValueError("facet ids must be unique")
-        return self
+from app.proof_schema import ProofFacet, ProofSignature, ProofTerm, RootComposition
 
 
 @lru_cache(maxsize=1)
@@ -155,7 +70,7 @@ class PlanConformanceGate:
             raise ValueError(
                 f"ProofPlan has no root for signature requirement {signature.requirement_id!r}"
             )
-        reachable = self._reachable(root_id, nodes)
+        reachable = reachable_ids(root_id, lambda node_id: nodes[node_id].depends_on)
         checks = [nodes[node_id] for node_id in reachable if nodes[node_id].kind == "CHECK"]
 
         allowed_roles_by_check: dict[str, set[str]] = {node.id: set() for node in checks}
@@ -180,17 +95,15 @@ class PlanConformanceGate:
                     f"Required facet {facet.id!r} is not reachable from "
                     f"requirement root {signature.requirement_id!r}"
                 )
-            declared_roles = {
-                role
-                for node in facet_checks
-                for role in node.semantic_role_refs
-            }
-            missing_roles = sorted(set(facet.required_semantic_roles) - declared_roles)
-            if missing_roles:
-                raise ValueError(
-                    f"Required facet {facet.id!r} must cover every required semantic role "
-                    f"across its CHECKs: {missing_roles}"
+            for node in facet_checks:
+                missing_roles = sorted(
+                    set(facet.required_semantic_roles) - set(node.semantic_role_refs)
                 )
+                if missing_roles:
+                    raise ValueError(
+                        f"Required facet {facet.id!r} CHECK {node.id!r} must declare every "
+                        f"required semantic role: {missing_roles}"
+                    )
 
             if "WITNESS" in facet.minimum_proof_terms:
                 for node in facet_checks:
@@ -252,18 +165,6 @@ class PlanConformanceGate:
                 raise ValueError(
                     f"Requirement root can bypass required policy ref {policy_ref!r}"
                 )
-
-    @staticmethod
-    def _reachable(root_id: str, nodes: dict[str, ProofNode]) -> set[str]:
-        reachable: set[str] = set()
-        pending = [root_id]
-        while pending:
-            node_id = pending.pop()
-            if node_id in reachable:
-                continue
-            reachable.add(node_id)
-            pending.extend(nodes[node_id].depends_on)
-        return reachable
 
     @classmethod
     def _can_succeed(

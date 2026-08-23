@@ -112,6 +112,7 @@ async def run_business_eval(
         transcript_path = _relative_artifact_path(run_dir, transcript_file) if transcript_file.is_file() else ""
         reports = _load_reports(run_dir, store, case.case_id)
         provider, model = _provider_and_model(response, runtime)
+        pricing = _pricing_snapshot(runtime)
 
     snapshot = EvalSnapshot(
         case_id=case.case_id,
@@ -120,6 +121,7 @@ async def run_business_eval(
         agent_commit=str(code_state["git_head"]),
         provider=provider,
         model=model,
+        pricing=pricing,
         policy_version=case.policy_version,
         started_at=started_at,
         completed_at=_utc_now(),
@@ -425,6 +427,22 @@ def _provider_and_model(response: Any, runtime: Any | None) -> tuple[str, str]:
     return provider, model
 
 
+def _pricing_snapshot(runtime: Any | None) -> dict[str, Any]:
+    settings = getattr(getattr(runtime, "runner", None), "settings", None)
+    version = str(getattr(settings, "llm_pricing_version", "") or "")
+    if not version:
+        return {}
+    return {
+        "version": version,
+        "currency": "USD",
+        "input_miss_per_1m": float(getattr(settings, "llm_input_cost_per_1m", 0.0) or 0.0),
+        "cached_input_per_1m": float(
+            getattr(settings, "llm_cached_input_cost_per_1m", 0.0) or 0.0
+        ),
+        "output_per_1m": float(getattr(settings, "llm_output_cost_per_1m", 0.0) or 0.0),
+    }
+
+
 def _production_runtime(store: CaseStore) -> Any:
     from app.runtime.turn_runner import AgentRuntime
 
@@ -462,6 +480,7 @@ def _write_run_manifest(
         "code": code_state,
         "provider": snapshot.provider,
         "model": snapshot.model,
+        "pricing": snapshot.pricing,
         "provider_prompts": _provider_prompt_summary(snapshot),
     }
     text = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

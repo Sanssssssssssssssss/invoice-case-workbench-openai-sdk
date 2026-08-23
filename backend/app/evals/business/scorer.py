@@ -6,6 +6,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any
 
+from app.compiler_runtime.graph_walk import reachable_ids as walk_reachable_ids
 from app.compiler_runtime.kernel import compile_review_artifact
 from app.compiler_runtime.models import CompiledProof, EvidenceIR, ProofPlan, ReviewArtifact
 from app.domain.invoice_requirements import requirement_owner
@@ -24,7 +25,7 @@ from .models import (
 )
 
 
-SCORER_VERSION = "business_eval_scorer_v3.2"
+SCORER_VERSION = "business_eval_scorer_v3.3"
 
 STAGE_WEIGHTS: dict[str, Decimal] = {
     "understanding": Decimal("10"),
@@ -120,7 +121,16 @@ def score_business_eval(
     }
     roots = _mapping(plan.get("roots"))
     root_id = str(roots.get(requirement_id) or "")
-    reachable_ids = _reachable_ids(root_id, nodes)
+    reachable_ids = (
+        walk_reachable_ids(
+            root_id,
+            lambda node_id: (
+                _list(nodes[node_id].get("depends_on")) if node_id in nodes else ()
+            ),
+        )
+        if root_id and root_id in nodes
+        else set()
+    )
     assessments = {
         str(item.get("check_id") or ""): item
         for item in _dict_items(artifact.get("assessments"))
@@ -409,12 +419,20 @@ def score_business_eval(
         source_content=source_content,
         subtracted_claim_ids=subtracted_claim_ids,
     )
+    subtracted_fact_ids = {
+        fact_id
+        for fact_id, claim_ids in fact_claim_ids.items()
+        if claim_ids & subtracted_claim_ids
+    }
     fact_owner_claim_ids = {
         fact.id: {
             str(claim_id)
             for milestone in required_milestones
             if fact.id in milestone.fact_ids
-            for check_id in milestone_matches.get(milestone.id, set())
+            for check_id in _upstream_check_closure(
+                set(milestone_matches.get(milestone.id, set())),
+                nodes=nodes,
+            )
             for claim_id in _list(
                 _mapping(admitted_node_results.get(check_id)).get("claim_ids")
             )
@@ -480,9 +498,10 @@ def score_business_eval(
         _split_points(Decimal("8"), len(required_milestones)),
     ):
         check_ids = sorted(scoring_milestone_matches.get(milestone.id, set()))
+        lineage_check_ids = _upstream_check_closure(set(check_ids), nodes=nodes)
         accepted_claim_ids = {
             str(claim_id)
-            for check_id in check_ids
+            for check_id in lineage_check_ids
             for claim_id in _list(
                 _mapping(admitted_node_results.get(check_id)).get("claim_ids")
             )
@@ -490,7 +509,7 @@ def score_business_eval(
         }
         milestone_witness_ids = {
             str(witness_id)
-            for check_id in check_ids
+            for check_id in lineage_check_ids
             for witness_id in _list(
                 _mapping(admitted_node_results.get(check_id)).get("witness_ids")
             )
@@ -879,7 +898,11 @@ def score_business_eval(
         report_facts = [fact for fact in oracle.facts if "report" in fact.required_in]
         for fact, points in zip(report_facts, _split_points(Decimal("6"), len(report_facts))):
             matches = {
-                kind: _fact_matches(fact, report_text_by_kind[kind])
+                kind: _fact_matches(
+                    fact,
+                    report_text_by_kind[kind],
+                    allow_subtracted_value=fact.id in subtracted_fact_ids,
+                )
                 for kind in ("markdown", "pdf")
             }
             matched = all(matches.values())
@@ -938,9 +961,19 @@ def score_business_eval(
     else:
         add("report.not_required", "report", 15, True)
 
+    linked_report = (
+        canonical_markdown_text
+        if _reply_references_report(reply_text, snapshot)
+        else ""
+    )
+    communication_text = f"{reply_text}\n{linked_report}".strip()
     reply_facts = [fact for fact in oracle.facts if "reply" in fact.required_in]
     for fact, points in zip(reply_facts, _split_points(Decimal("4"), len(reply_facts))):
-        matched = _fact_matches(fact, reply_text)
+        matched = _fact_matches(
+            fact,
+            communication_text,
+            allow_subtracted_value=fact.id in subtracted_fact_ids,
+        )
         add(
             f"communication.fact.{fact.id}",
             "communication",
@@ -953,7 +986,7 @@ def score_business_eval(
     if not reply_facts:
         add("communication.no_required_facts", "communication", 4, True)
     meanings_ok = _required_business_meanings_match(
-        reply_text,
+        communication_text,
         oracle=oracle,
         facts_by_id=facts_by_id,
     )
@@ -1125,7 +1158,7 @@ def score_business_eval(
         (
             stage
             for stage in STAGE_ORDER
-            if any(not item.passed for item in checks if item.stage == stage)
+            if any(item.core and not item.passed for item in checks if item.stage == stage)
         ),
         "",
     )
@@ -1243,6 +1276,8 @@ def _identifier_terms(value: Any) -> set[str]:
     """Normalize structural ids without introducing a business alias table."""
     terms: set[str] = set()
     for raw in re.findall(r"[a-z]+|\d+", str(value or "").casefold()):
+        if raw == "including":
+            raw = "inclusive"
         if raw.endswith("ies") and len(raw) > 4:
             raw = f"{raw[:-3]}y"
         elif raw.endswith("s") and not raw.endswith("ss") and len(raw) > 3:
@@ -1623,6 +1658,8 @@ def _claim_semantics_match_source_fact(
         return False
     for option in fact.predicate_options:
         expected = _identifier_terms(option)
+        if "inclusive" in expected:
+            expected -= {"price", "treatment"}
         if not expected:
             continue
         # Multi-token roles may be composed from subject + predicate
@@ -1709,7 +1746,13 @@ def _claim_matches_source_fact(
         not quote_matches
         and expected_decimal is not None
         and actual_quote in expected_quote
-        and expected_quote.count(actual_quote) == 1
+        and len(
+            re.findall(
+                rf"(?<!\d){re.escape(actual_quote)}(?!\d)",
+                expected_quote,
+            )
+        )
+        == 1
         and _text_has_decimal(actual_quote, expected_decimal, fact.tolerance)
     )
     percentage_alternative = bool(
@@ -1729,7 +1772,7 @@ def _claim_matches_source_fact(
         return False
     if fact.kind == "text":
         expected_text = _normalized(fact.value)
-        return expected_text in _normalized(text) and expected_text in actual_quote
+        return expected_text in actual_quote
     expected = expected_decimal
     return bool(
         expected is not None
@@ -1804,7 +1847,12 @@ def _unique_fact_assignments(
     return assigned
 
 
-def _fact_matches(fact: ExpectedFact, text: str) -> bool:
+def _fact_matches(
+    fact: ExpectedFact,
+    text: str,
+    *,
+    allow_subtracted_value: bool = False,
+) -> bool:
     if fact.kind == "text":
         return _normalized(fact.value) in _normalized(text)
     try:
@@ -1814,7 +1862,10 @@ def _fact_matches(fact: ExpectedFact, text: str) -> bool:
     currency = fact.currency.casefold().strip()
     if currency and currency not in text.casefold():
         return False
-    return _text_has_decimal(text, expected, fact.tolerance)
+    return _text_has_decimal(text, expected, fact.tolerance) or (
+        allow_subtracted_value
+        and _text_has_decimal(text, -expected, fact.tolerance)
+    )
 
 
 def _decimal_value(fact: ExpectedFact) -> Decimal | None:
@@ -2252,6 +2303,24 @@ def _accepted_witness_lineage(
             elif str(ref.get("kind") or "") == "WITNESS" and ref_id in accepted_witness_ids:
                 pending.append(ref_id)
     return visited, claims
+
+
+def _upstream_check_closure(
+    check_ids: set[str],
+    *,
+    nodes: dict[str, dict[str, Any]],
+) -> set[str]:
+    """Return CHECKs whose committed frontier is declared as upstream dataflow."""
+    result = set(check_ids)
+    pending = list(check_ids)
+    while pending:
+        check_id = pending.pop()
+        for upstream_id in _list(_mapping(nodes.get(check_id)).get("upstream_check_ids")):
+            upstream_id = str(upstream_id or "")
+            if upstream_id and upstream_id not in result:
+                result.add(upstream_id)
+                pending.append(upstream_id)
+    return result
 
 
 def _operand_fact_candidates(
@@ -2863,20 +2932,6 @@ def _relevant_claims_are_grounded(
     return bool(relevant_claim_ids) and relevant_claim_ids.issubset(grounded_claim_ids)
 
 
-def _reachable_ids(root_id: str, nodes: dict[str, dict[str, Any]]) -> set[str]:
-    if not root_id or root_id not in nodes:
-        return set()
-    result: set[str] = set()
-    pending = [root_id]
-    while pending:
-        node_id = pending.pop()
-        if node_id in result or node_id not in nodes:
-            continue
-        result.add(node_id)
-        pending.extend(str(item) for item in _list(nodes[node_id].get("depends_on")))
-    return result
-
-
 def _visible_content(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -2915,8 +2970,11 @@ _RAW_PDF_APPENDIX_HEADING = "原始材料附录"
 
 def _canonical_pdf_body(text: str) -> str:
     """Exclude the renderer's explicit raw-material appendix boundary."""
-    index = text.find(_RAW_PDF_APPENDIX_HEADING)
-    return text[:index].rstrip() if index >= 0 else text
+    match = re.search(
+        rf"(?m)^\s*(?:#+\s*)?{re.escape(_RAW_PDF_APPENDIX_HEADING)}\s*$",
+        text,
+    )
+    return text[: match.start()].rstrip() if match else text
 
 
 def _meaning_groups_match(text: str, groups: list[list[str]]) -> bool:

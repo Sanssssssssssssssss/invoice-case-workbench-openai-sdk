@@ -18,6 +18,22 @@ python backend/scripts/run_business_benchmark.py <case-id> [<case-id> ...]
 
 Offline rescoring must point at an existing canonical snapshot and write only a score revision. It must not be presented as a fresh model run.
 
+## Baseline telemetry
+
+Before a live baseline, freeze the provider's published rates together with a human-readable pricing version. Rates are USD per one million tokens; use zero only for a provider that is explicitly free.
+
+```powershell
+$env:INVOICE_AGENT_LLM_PRICING_VERSION='provider-model-YYYY-MM-DD'
+$env:INVOICE_AGENT_LLM_INPUT_COST_PER_1M='0'
+$env:INVOICE_AGENT_LLM_CACHED_INPUT_COST_PER_1M='0'
+$env:INVOICE_AGENT_LLM_OUTPUT_COST_PER_1M='0'
+python backend/scripts/run_business_benchmark.py --all
+```
+
+Every run snapshot and run manifest freeze those rates. The benchmark derives cost from physical provider usage, not logical Agent calls. It records provider/model calls, input/output/reasoning/cached tokens, cache-hit ratio, end-to-end latency, per-role latency and TTFT coverage, retries, MaxTurns, tool calls/errors, and per-role/aggregate cost. Missing provider telemetry remains `null`; never substitute zero. TTFT is reported only for calls where the runtime observed first output.
+
+Engineering metrics remain separate from the Business Eval score. Compare efficiency only between runs using the same scorer, Oracle set, model configuration, reasoning mode, pricing version, and code fingerprint.
+
 ## Disposable test data
 
 The following directories are local, reproducible test workspaces and must never be treated as Eval evidence:
