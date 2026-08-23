@@ -220,21 +220,22 @@ def test_component_amount_presence_cannot_bypass_required_semantic_roles(
 def test_component_semantic_roles_allow_multiple_atomic_component_checks() -> None:
     plan = _plan()
     root = next(node for node in plan.nodes if node.id == "root.calculation")
-    for suffix in ("tax", "discount"):
+    component = next(node for node in plan.nodes if node.id == "check.components")
+    component.semantic_role_refs = ["COMPONENT_OBSERVATION"]
+    for suffix, role in (
+        ("applicability", "COMPONENT_APPLICABILITY"),
+        ("reconciliation", "COMPONENT_RECONCILIATION"),
+    ):
         node_id = f"check.components.{suffix}"
         plan.nodes.append(
             ProofNode(
                 id=node_id,
                 kind="CHECK",
-                statement=f"The stated {suffix} component is independently verified.",
+                statement=f"The stated component {suffix} is independently verified.",
                 requirement_refs=[REQUIREMENT_ID],
                 policy_refs=[POLICY_REF],
                 facet_refs=["stated_components"],
-                semantic_role_refs=[
-                    "COMPONENT_OBSERVATION",
-                    "COMPONENT_APPLICABILITY",
-                    "COMPONENT_RECONCILIATION",
-                ],
+                semantic_role_refs=[role],
             )
         )
         root.depends_on.append(node_id)

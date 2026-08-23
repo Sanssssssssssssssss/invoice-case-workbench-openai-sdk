@@ -166,14 +166,6 @@ class PlanConformanceGate:
                 for facet in declared_signature.facets:
                     if facet.id in node.facet_refs:
                         allowed_roles_by_check[node.id].update(facet.required_semantic_roles)
-                        missing_roles = sorted(
-                            set(facet.required_semantic_roles) - set(node.semantic_role_refs)
-                        )
-                        if missing_roles:
-                            raise ValueError(
-                                f"CHECK {node.id!r} must declare every required semantic role "
-                                f"for facet {facet.id!r}: {missing_roles}"
-                            )
             unexpected = sorted(set(node.semantic_role_refs) - allowed_roles_by_check[node.id])
             if unexpected:
                 raise ValueError(
@@ -182,16 +174,26 @@ class PlanConformanceGate:
                 )
 
         for facet in signature.facets:
-            if not any(facet.id in node.facet_refs for node in checks):
+            facet_checks = [node for node in checks if facet.id in node.facet_refs]
+            if not facet_checks:
                 raise ValueError(
                     f"Required facet {facet.id!r} is not reachable from "
                     f"requirement root {signature.requirement_id!r}"
                 )
+            declared_roles = {
+                role
+                for node in facet_checks
+                for role in node.semantic_role_refs
+            }
+            missing_roles = sorted(set(facet.required_semantic_roles) - declared_roles)
+            if missing_roles:
+                raise ValueError(
+                    f"Required facet {facet.id!r} must cover every required semantic role "
+                    f"across its CHECKs: {missing_roles}"
+                )
 
             if "WITNESS" in facet.minimum_proof_terms:
-                for node in checks:
-                    if facet.id not in node.facet_refs:
-                        continue
+                for node in facet_checks:
                     missing = sorted(
                         set(signature.required_policy_refs) - set(node.policy_refs)
                     )
