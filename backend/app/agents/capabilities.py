@@ -78,7 +78,7 @@ ROLE_CAPABILITIES: dict[str, RoleCapability] = {
             "user_request",
         ),
         output_model=ReportWriterResult,
-        prompt_version="report_writer_v8+global_policy_v1.2+canonical_consumer_v1+pdf_skill_v4",
+        prompt_version="report_writer_v9+global_policy_v1.2+canonical_consumer_v1+pdf_skill_v4",
         prompt_file="backend/app/agents/report_writer/prompt.md",
         context_policy=("canonical_consumer_packet", "user_request"),
         max_retries=1,

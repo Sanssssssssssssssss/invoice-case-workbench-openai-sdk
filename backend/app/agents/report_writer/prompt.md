@@ -1,6 +1,6 @@
 ---
 name: report_writer
-version: report_writer_v8
+version: report_writer_v9
 owner: invoice_payment_review_agent
 last_updated: 2026-08-22
 input_contract: canonical_consumer_packet, user_request
@@ -61,7 +61,6 @@ scope 是否都有强结论。这两个字段都不是付款、过账、提交�
 4. `## 第二章 证明结果`
    - 根结论
    - 叶结果
-   - 结论与业务证据矩阵
    - 未决义务与下一步
 5. `## 第三章 描述性附录说明`
    - PDF renderer 会在 canonical 正文后追加带免责声明的“原始材料附录”，仅供人工
@@ -70,11 +69,17 @@ scope 是否都有强结论。这两个字段都不是付款、过账、提交�
 
 正文面向业务用户，不输出内部 Claim、Binding、Witness 或 Finding ID，也不要给它们
 创造可读别名。使用叶检查的业务含义、已核定三态、packet 中的业务事实和来源定位即可。
-Requirement ID 可以保留，以便对应审核范围。
+Requirement ID 只在根结论表中保留，以便对应审核范围。叶结果不要重复 Requirement ID；
+只使用 packet 中原始 Check ID，使 validator 能独立核对局部三态。
 
-矩阵建议表头：
+根结论表头：
 
 | 要求编号 | 审核项 | 三态结论 | 已核定业务事实 | 来源定位 | 限制 |
+|---|---|---|---|---|---|
+
+叶结果表头：
+
+| 叶检查 | 审核项 | 三态结论 | 已核定业务事实 | 来源定位 | 限制 |
 |---|---|---|---|---|---|
 
 每个强结论仍必须能回到 packet 中的 Claim、Binding 或 Witness，但正文只呈现它们

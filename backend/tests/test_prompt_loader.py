@@ -59,6 +59,10 @@ def test_report_writer_prompt_enforces_the_canonical_consumer_boundary() -> None
     assert "PARTIAL 报告后会由程序追加不可更改的系统边界段" in REPORT_WRITER_PROMPT
     assert "任何等级都不得写" in REPORT_WRITER_PROMPT
     assert "只有三章" in REPORT_WRITER_PROMPT
+    assert "Requirement ID 只在根结论表中保留" in REPORT_WRITER_PROMPT
+    assert "叶结果不要重复 Requirement ID" in REPORT_WRITER_PROMPT
+    assert "只使用 packet 中原始 Check ID" in REPORT_WRITER_PROMPT
+    assert "结论与业务证据矩阵" not in REPORT_WRITER_PROMPT
     assert "没有 packet 引用的" in REPORT_WRITER_PROMPT
     assert "内容只能写“未提供”" in REPORT_WRITER_PROMPT
     assert "原始材料附录" in REPORT_WRITER_PROMPT
