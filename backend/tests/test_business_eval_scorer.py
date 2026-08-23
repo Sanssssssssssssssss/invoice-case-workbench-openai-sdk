@@ -1496,6 +1496,46 @@ def test_source_fact_matching_normalizes_snake_case_percent_and_quote_alternativ
     assert _predicate_matches_options("unit_price", ["unit price"])
 
 
+def test_unique_atomic_numeric_quote_matches_its_source_fact() -> None:
+    oracle_path = (
+        Path(__file__).resolve().parents[2]
+        / "evals/business_v1/cases/tax_inclusive_arithmetic_supported_0053/oracle.json"
+    )
+    oracle = BusinessEvalOracle.model_validate_json(oracle_path.read_text(encoding="utf-8"))
+    facts = {item.id: item for item in oracle.facts}
+    source_quote = facts["line_3_quantity"].source_quote
+    common = {
+        "source_id": "invoice",
+        "locator": "page 1 block p1_b010",
+        "confidence": "medium",
+    }
+
+    assert _claim_matches_source_fact(
+        facts["line_3_quantity"],
+        {**common, "predicate": "quantity", "value": 20, "quote": "SOW 2026-03 20"},
+        source_roles={"invoice": "invoice"},
+        source_content={"invoice": source_quote},
+    )
+    assert _claim_matches_source_fact(
+        facts["line_3_unit_price"],
+        {
+            **common,
+            "predicate": "unit_price",
+            "value": "562.44",
+            "quote": "562,44 11.248,80",
+            "attributes": {"currency": "EUR"},
+        },
+        source_roles={"invoice": "invoice"},
+        source_content={"invoice": source_quote},
+    )
+    assert not _claim_matches_source_fact(
+        facts["line_3_quantity"],
+        {**common, "predicate": "quantity", "value": 20, "quote": "20"},
+        source_roles={"invoice": "invoice"},
+        source_content={"invoice": source_quote},
+    )
+
+
 def test_runtime_page_locator_alias_is_grounded_by_the_locator_resolver() -> None:
     content = "[page 1 text]\nInvoice\nTOTAL: 188813.24 EUR"
     assert _claim_is_grounded(
@@ -1915,6 +1955,12 @@ def test_v29_relation_syntax_requires_two_distinct_business_meanings() -> None:
     assert (
         _relational_statement_matches(
             "所有行项目金额之和等于小计。", chinese_meaning
+        )
+        is True
+    )
+    assert (
+        _relational_statement_matches(
+            "发票中列明的小计金额等于所有行项目行扩展金额之和。", subtotal_meaning
         )
         is True
     )

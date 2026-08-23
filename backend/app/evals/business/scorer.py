@@ -24,7 +24,7 @@ from .models import (
 )
 
 
-SCORER_VERSION = "business_eval_scorer_v3.0"
+SCORER_VERSION = "business_eval_scorer_v3.1"
 
 STAGE_WEIGHTS: dict[str, Decimal] = {
     "understanding": Decimal("10"),
@@ -1161,6 +1161,7 @@ def _normalized(value: Any) -> str:
 
 def _semantic_normalized(value: Any) -> str:
     text = re.sub(r"[’']s\b", "", str(value or "").casefold())
+    text = text.replace("行扩展金额", "行金额")
     return " ".join(re.sub(r"[-‐‑‒–—_/]+", " ", text).split())
 
 
@@ -1689,6 +1690,13 @@ def _claim_matches_source_fact(
         return False
     quote_matches = not expected_quote or _quote_matches_expected(actual_quote, expected_quote)
     expected_decimal = _decimal_value(fact)
+    atomic_numeric_alternative = bool(
+        not quote_matches
+        and expected_decimal is not None
+        and actual_quote in expected_quote
+        and expected_quote.count(actual_quote) == 1
+        and _text_has_decimal(actual_quote, expected_decimal, fact.tolerance)
+    )
     percentage_alternative = bool(
         not quote_matches
         and fact.kind == "decimal"
@@ -1698,7 +1706,7 @@ def _claim_matches_source_fact(
         and _text_has_decimal(actual_quote, expected_decimal, fact.tolerance)
         and _text_has_decimal(expected_quote, expected_decimal, fact.tolerance)
     )
-    if not quote_matches and not percentage_alternative:
+    if not quote_matches and not percentage_alternative and not atomic_numeric_alternative:
         return False
     value = claim.get("value")
     text = value if isinstance(value, str) else _json_text(value)
