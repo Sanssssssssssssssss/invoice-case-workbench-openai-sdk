@@ -620,12 +620,12 @@ class TurnRunner:
         }
 
     def _run_until_final(self, request: AgentTurnRequest, state: HarnessRunState) -> AgentTurnResponse:
-        while not state.completed_at and (
-            state.step_count < state.max_steps or bool(state.observability.get("_manager_final_rewrite_pending"))
-        ):
+        while not state.completed_at:
             manager_rewrite_pending = bool(state.observability.pop("_manager_final_rewrite_pending", False))
-            planner_context = self.context_assembler.build_planner_context(request, state)
             forced = None if manager_rewrite_pending else self._deterministic_policy_continuation(request, state)
+            if state.step_count >= state.max_steps and not manager_rewrite_pending and not forced:
+                break
+            planner_context = self.context_assembler.build_planner_context(request, state)
             if forced:
                 name, payload = forced
                 self.harness.append_debug_event(
@@ -643,6 +643,7 @@ class TurnRunner:
                     planner_context=planner_context,
                     name=name,
                     payload=payload,
+                    runtime_policy=True,
                 )
                 if result.get("status") == "approval_required":
                     return self._waiting_approval_response(request, state, "", [result])
@@ -693,14 +694,14 @@ class TurnRunner:
         return self.trace_recorder.finalize_turn(state)
 
     async def _run_until_final_streamed(self, request: AgentTurnRequest, state: HarnessRunState) -> AgentTurnResponse:
-        while not state.completed_at and (
-            state.step_count < state.max_steps or bool(state.observability.get("_manager_final_rewrite_pending"))
-        ):
+        while not state.completed_at:
             manager_rewrite_pending = bool(state.observability.pop("_manager_final_rewrite_pending", False))
+            forced = None if manager_rewrite_pending else self._deterministic_policy_continuation(request, state)
+            if state.step_count >= state.max_steps and not manager_rewrite_pending and not forced:
+                break
             started = time.perf_counter()
             planner_context = await asyncio.to_thread(self.context_assembler.build_planner_context, request, state)
             self._record_timing(state, "planner_context", started)
-            forced = None if manager_rewrite_pending else self._deterministic_policy_continuation(request, state)
             if forced:
                 name, payload = forced
                 self.harness.append_debug_event(
@@ -718,6 +719,7 @@ class TurnRunner:
                     planner_context=planner_context,
                     name=name,
                     payload=payload,
+                    runtime_policy=True,
                 )
                 if result.get("status") == "approval_required":
                     return self._waiting_approval_response(request, state, "", [result])
@@ -1150,6 +1152,7 @@ class TurnRunner:
         planner_context: dict[str, Any],
         name: str,
         payload: dict[str, Any],
+        runtime_policy: bool = False,
     ) -> dict[str, Any]:
         started = time.perf_counter()
         self.emit_stream_event(
@@ -1157,7 +1160,7 @@ class TurnRunner:
             {"tool": name, "step_count": state.step_count, "phase": state.phase},
             summary=f"{name} started.",
         )
-        if state.step_count >= state.max_steps:
+        if state.step_count >= state.max_steps and not runtime_policy:
             result = {"status": "blocked", "reason": "step_limit", "message": self.harness.step_limit_answer(state)}
             self._emit_tool_finished(state, name, result, started)
             return result

@@ -1390,6 +1390,40 @@ def test_existing_partial_report_continues_to_file_write_without_ready_status(tm
     assert runtime.runner._deterministic_policy_continuation(request, state) == ("write_case_file", {})
 
 
+def test_approved_partial_report_finishes_beyond_manager_step_budget(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ReportSdkStateMustNotResumeManager())
+    runner = runtime.runner
+    request = AgentTurnRequest(case_id="case_partial_report_at_limit", message="生成最终报告并渲染 PDF")
+    _seed_ready_case(runner.store, request.case_id)
+    case_state = runner.store.load(request.case_id)
+    case_state.status = "collecting_materials"
+    runner.store.save(case_state)
+    state = runner.harness.begin_run(request.case_id, request.message)
+    report = _fake_report_writer(
+        "report_writer",
+        {"canonical_consumer_packet": {"reportability": "FULL"}, "user_request": request.message},
+    )
+    runner.harness.record_observation(
+        state,
+        runner.context.record_result(state, kind="role", name="report_writer", result=report),
+    )
+    runner.harness.record_observation(
+        state,
+        {"kind": "approval", "name": "approved", "key_facts": ["tool=write_case_file"]},
+    )
+    state.step_count = state.max_steps
+
+    render_waiting = runner._run_until_final(request, state)
+    assert render_waiting.trace["status"] == "waiting_approval"
+    assert render_waiting.trace["interrupts"][0]["tool"] == "render_pdf"
+
+    final = runtime.resume_approval(request.case_id, state.run_id, approved=True, reason="ok")
+    assert final.trace["phase"] == "finalized"
+    assert "报告已生成" in final.reply
+    assert list((tmp_path / "cases" / request.case_id / "reports").glob("*.md"))
+    assert list((tmp_path / "cases" / request.case_id / "reports").glob("*.pdf"))
+
+
 @pytest.mark.parametrize(
     ("compiler_status", "case_status", "requirement_status"),
     [
