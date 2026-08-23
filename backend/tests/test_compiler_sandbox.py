@@ -475,6 +475,8 @@ def test_compute_witness_reconciles_localized_quote_and_document_currency_policy
     [
         ("Total 1234.56.", "1234.56", True),
         ("Credit (1.234,56).", "-1234.56", True),
+        ("Discount: -EUR 645.94", "-645.94", True),
+        ("Discount: -EUR 645.94", "645.94", False),
         ("Discount 20%.", "0.20", True),
         ("Discount 20%.", "20", False),
         ("Discount 20%.", "20%", False),

@@ -339,10 +339,11 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "A ProofSignature is a type constraint, not a plan template" in compiler
     assert "The number, wording, sharing, and ALL/ANY arrangement of CHECKs remain your decision" in compiler
     assert "never reduce calculation validity to field presence" in compiler.lower()
-    assert PROMPT_VERSIONS["task_compiler"] == "typed_task_compiler_v15"
+    assert PROMPT_VERSIONS["task_compiler"] == "typed_task_compiler_v16"
+    assert "A component rate/base gap does not erase its narrower grounded amount/sign" in compiler
     assert "Claims are append-only and existing Claim content is immutable" in executor
     assert "later unrelated Claims are allowed" in executor
-    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v14"
+    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v16"
     assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v17"
     assert "never bind a cross-Claim semantic relationship" in executor
     assert "only check_id, a facet_ref declared on that CHECK, an operation, and typed refs" in executor
@@ -361,6 +362,10 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "Observation alone is never completion" in executor
     assert "the base need not be repeated in the applicability sentence" in executor
     assert "include the actual Binding and reconciliation Witness lineage in the same submission" in executor
+    assert "does not invalidate each accepted term in its frontier" in executor
+    assert "a component rate/base validity gap may still expose a grounded component amount" in executor
+    assert "its numeric Claim value must carry the sign" in executor
+    assert "never upgrade it into the missing rate/base relationship" in executor
 
 
 def test_invoice_arithmetic_plan_contract_keeps_recomputations_atomic(

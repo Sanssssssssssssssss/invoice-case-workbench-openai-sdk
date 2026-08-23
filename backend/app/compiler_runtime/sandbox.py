@@ -25,7 +25,7 @@ from .proof_terms import (
 _LINE_LOCATOR = re.compile(r"\blines?\s+(\d+)(?:\s*[-:]\s*(\d+))?\b", re.IGNORECASE)
 _NUMERIC_VALUE = re.compile(r"^[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)\s*%?$")
 _QUOTE_NUMBER = re.compile(
-    r"(?<![\w])(?:[-+]?\s*)?(?:\(\s*)?"
+    r"(?<![\w])(?:[-+]\s*(?:(?:[A-Z]{3}|[$€£¥])\s*)?)?(?:\(\s*)?"
     r"(?:\d{1,3}(?:[ '’]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)*)"
     r"(?:\s*\))?\s*%?(?![\w])",
     re.UNICODE,
@@ -990,6 +990,7 @@ class EvidenceSandbox:
             if text[0] == "-":
                 sign *= Decimal("-1")
             text = text[1:].strip()
+            text = re.sub(r"^(?:[A-Z]{3}|[$€£¥])\s*", "", text)
 
         normalized = ""
         if any(mark in text for mark in (" ", "'", "’")):
