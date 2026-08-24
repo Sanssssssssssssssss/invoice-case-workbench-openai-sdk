@@ -538,6 +538,47 @@ def test_report_delivery_summary_keeps_key_amounts_from_persisted_markdown(
 
 
 @pytest.mark.parametrize(
+    ("message", "render_pdf", "expected_path"),
+    [
+        ("生成报告，只要 Markdown", False, "Markdown：reports/final_report_"),
+        ("生成最终报告并渲染 PDF", True, "PDF（主要交付）：reports/final_report_"),
+    ],
+)
+def test_completed_report_delivery_overrides_manager_final_in_same_turn(
+    tmp_path,
+    monkeypatch,
+    message: str,
+    render_pdf: bool,
+    expected_path: str,
+) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    runner = runtime.runner
+    case_id = "case_same_turn_report_delivery"
+    _seed_ready_case(runner.store, case_id)
+    request = AgentTurnRequest(case_id=case_id, message=message)
+    state = runner.harness.begin_run(case_id, request.message)
+    _persist_test_report(
+        runner,
+        state,
+        "# 审核报告\n\n### 摘要结论\n\n票面总额 10.00 EUR，重算总额 11.00 EUR，差额 1.00 EUR。\n",
+    )
+    if render_pdf:
+        state.observations.append({"kind": "tool", "name": "render_pdf"})
+
+    response = runner._handle_manager_outcome(  # noqa: SLF001
+        request,
+        state,
+        ManagerRunOutcome(final_output="案件处理完成。"),
+    )
+
+    assert response is not None
+    assert "报告已生成" in response.reply
+    assert expected_path in response.reply
+    assert "报告摘要：票面总额 10.00 EUR，重算总额 11.00 EUR，差额 1.00 EUR。" in response.reply
+    assert "案件处理完成" not in response.reply
+
+
+@pytest.mark.parametrize(
     ("role", "role_result"),
     [
         ("materials_advisor", {"answer": "请补充采购订单。", "tasks": [], "missing_materials": ["purchase_order"], "next_questions": []}),

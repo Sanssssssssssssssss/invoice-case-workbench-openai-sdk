@@ -25,7 +25,7 @@ from .models import (
 )
 
 
-SCORER_VERSION = "business_eval_scorer_v3.5"
+SCORER_VERSION = "business_eval_scorer_v3.6"
 
 STAGE_WEIGHTS: dict[str, Decimal] = {
     "understanding": Decimal("10"),
@@ -1681,7 +1681,7 @@ def _claim_semantics_match_source_fact(
 def _locator_supports_quote(content: str, *, locator: str, quote: str) -> bool:
     """Require the locator and quote to resolve to the same local source neighborhood."""
     page_text = re.search(
-        r"\bpage\s+(\d+)\s+(?:text|body(?:\s+text)?)\b",
+        r"\bpage\s+(\d+)(?:\s+(?:text|body(?:\s+text)?))?\s*$",
         locator,
         re.IGNORECASE,
     )
@@ -1695,8 +1695,7 @@ def _locator_supports_quote(content: str, *, locator: str, quote: str) -> bool:
         if marker:
             next_page = re.search(r"\[page\s+\d+\s+text\]", content[marker.end() :], re.IGNORECASE)
             end = marker.end() + next_page.start() if next_page else len(content)
-            if quote in content[marker.end() : end]:
-                return True
+            return quote in content[marker.end() : end]
     locator_positions = [match.start() for match in re.finditer(re.escape(locator), content)]
     quote_positions = [match.start() for match in re.finditer(re.escape(quote), content)]
     for locator_pos in locator_positions:

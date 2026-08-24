@@ -911,6 +911,9 @@ class TurnRunner:
             return self._waiting_approval_response(request, state, outcome.sdk_state, interruptions)
         final_text = str(outcome.final_output or "").strip()
         if final_text:
+            report_delivery = self._deterministic_final_after_report(request, state)
+            if report_delivery:
+                return self._finalize_runtime_policy_answer(request, state, report_delivery)
             return self._finalize_manager_answer(request, state, final_text)
         if not state.final_answer:
             self.harness.finalize_run(state, self.harness.step_limit_answer(state))

@@ -729,6 +729,11 @@ def _consumer_numeric_rows(packet: CanonicalConsumerPacket) -> list[tuple[str, s
 
 
 def _consumer_report_summary(packet: CanonicalConsumerPacket) -> str:
+    contradicted = [
+        item for item in packet.leaf_findings if item.status == "CONTRADICTED"
+    ]
+    candidates = [item for item in contradicted if item.decisive_for_root]
+    candidates.extend(item for item in contradicted if item not in candidates)
     final = next(
         (
             item
@@ -738,36 +743,13 @@ def _consumer_report_summary(packet: CanonicalConsumerPacket) -> str:
         ),
         None,
     )
+    if final is not None and final not in candidates:
+        candidates.append(final)
+    for finding in candidates:
+        summary = _reconciliation_summary(packet, finding)
+        if summary:
+            return summary
     if final is not None:
-        claims = {item.id: item for item in packet.claims}
-        printed = next(
-            (
-                claims[claim_id]
-                for claim_id in final.claim_ids
-                if claim_id in claims and _is_printed_total_claim(claims[claim_id])
-            ),
-            None,
-        )
-        witnesses = [
-            item for item in packet.calculation_witnesses if item.check_id == final.check_id
-        ]
-        recomputed = next(
-            (item for item in witnesses if item.operation in {"SUM", "SUBTRACT"}),
-            None,
-        )
-        difference = next(
-            (item for item in witnesses if item.operation == "ABS_DIFF"),
-            None,
-        )
-        if printed is not None and recomputed is not None and difference is not None:
-            relation = "不一致" if final.status == "CONTRADICTED" else "一致"
-            conclusion = "金额核对通过：" if final.status == "SUPPORTED" else ""
-            return (
-                f"{conclusion}最终总金额{relation}："
-                f"票面总额 {_report_amount(printed.value, printed.currency)}，"
-                f"重算总额 {_report_amount(recomputed.result, recomputed.currency)}，"
-                f"差额 {_report_amount(difference.result, difference.currency)}。"
-            )
         if final.status == "SUPPORTED":
             return "核定结论：内部计算验证通过，目标要求已获得证据支持。"
     statuses = {item.status for item in packet.root_decisions}
@@ -778,9 +760,44 @@ def _consumer_report_summary(packet: CanonicalConsumerPacket) -> str:
     return "核定结论：存在未决证据缺口，尚不能形成强结论。"
 
 
-def _is_printed_total_claim(claim: ConsumerClaim) -> bool:
-    predicate = re.sub(r"[^a-z0-9]+", " ", claim.predicate.casefold()).strip()
-    return "total" in predicate.split() and "subtotal" not in predicate.split()
+def _reconciliation_summary(
+    packet: CanonicalConsumerPacket,
+    finding: ConsumerLeafFinding,
+) -> str:
+    differences = [
+        item
+        for item in packet.calculation_witnesses
+        if item.check_id == finding.check_id and item.operation == "ABS_DIFF"
+    ]
+    difference = next(
+        (item for item in differences if finding.status == "CONTRADICTED" and item.result != 0),
+        differences[0] if differences else None,
+    )
+    if difference is None:
+        return ""
+    printed = next((item for item in difference.operands if item.ref.kind == "CLAIM"), None)
+    recomputed = next((item for item in difference.operands if item.ref.kind == "WITNESS"), None)
+    if printed is None or recomputed is None:
+        return ""
+    labels = {
+        "final_total": ("最终总金额", "票面总额", "重算总额"),
+        "subtotal_aggregation": ("小计金额", "票面小计", "重算小计"),
+        "line_extensions": ("行项目金额", "票面行金额", "重算行金额"),
+        "stated_components": ("税费或折扣金额", "票面组件金额", "重算组件金额"),
+    }
+    subject, printed_label, recomputed_label = next(
+        (labels[facet] for facet in finding.facet_refs if facet in labels),
+        ("金额", "票面金额", "重算金额"),
+    )
+    relation = "不一致" if finding.status == "CONTRADICTED" else "一致"
+    conclusion = "金额核对通过：" if finding.status == "SUPPORTED" else ""
+    currency = difference.currency
+    return (
+        f"{conclusion}{subject}{relation}："
+        f"{printed_label} {_report_amount(printed.value, printed.currency or currency)}，"
+        f"{recomputed_label} {_report_amount(recomputed.value, recomputed.currency or currency)}，"
+        f"差额 {_report_amount(difference.result, currency)}。"
+    )
 
 
 def _report_amount(value: Any, currency: str) -> str:

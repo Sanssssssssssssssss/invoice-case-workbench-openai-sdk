@@ -1674,6 +1674,16 @@ def test_runtime_page_locator_alias_is_grounded_by_the_locator_resolver() -> Non
         locator="page 1 text",
         quote="Amount due: 188813.24 EUR",
     )
+    assert _locator_supports_quote(
+        "[page 1 text]\nheader\nAmount due: 188813.24 EUR\n[page 2 text]\nappendix",
+        locator="page 1",
+        quote="Amount due: 188813.24 EUR",
+    )
+    assert not _locator_supports_quote(
+        "[page 1 text]\nheader\nAmount due: 188813.24 EUR\n[page 2 text]\nappendix",
+        locator="page 2",
+        quote="Amount due: 188813.24 EUR",
+    )
 
 
 def test_subtract_witness_preserves_signed_adjustment_semantics() -> None:
