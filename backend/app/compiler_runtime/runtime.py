@@ -1692,7 +1692,6 @@ def _upstream_frontier_results(
                 "facet_refs": list(nodes[upstream_id].facet_refs),
                 "semantic_role_refs": list(nodes[upstream_id].semantic_role_refs),
                 "committed": committed,
-                "status": node_result.status if committed and node_result is not None else "UNAVAILABLE",
                 "accepted_terms": terms,
             }
         )

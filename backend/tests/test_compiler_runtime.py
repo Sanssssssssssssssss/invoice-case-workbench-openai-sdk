@@ -1031,7 +1031,6 @@ def test_runtime_orders_declared_upstream_check_and_hands_off_only_its_committed
             "facet_refs": [],
             "semantic_role_refs": [],
             "committed": True,
-            "status": "NOT_FOUND",
             "accepted_terms": {
                 "claim_ids": [],
                 "claims": [],
