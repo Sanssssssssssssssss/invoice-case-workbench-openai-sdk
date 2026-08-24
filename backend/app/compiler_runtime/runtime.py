@@ -57,7 +57,7 @@ EXECUTOR_MAX_TURNS = 24
 CHECK_FRONTIER_ATTEMPT_CAP = 2
 CHECK_MODEL_CALL_BUDGET = 4
 PROMPT_VERSIONS = {
-    "task_compiler": "typed_task_compiler_v18",
+    "task_compiler": "typed_task_compiler_v19",
     "executor": "typed_evidence_executor_v21",
     "verifier": "typed_fine_verifier_v21",
 }
