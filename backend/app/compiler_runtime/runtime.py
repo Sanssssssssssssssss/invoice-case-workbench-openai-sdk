@@ -315,6 +315,30 @@ class EvidenceCompilerRuntime:
                 failed_call.recovered_by = "task_compiler_validation_retry_success"
             if self.llm.calls:
                 self.llm.calls[-1].retry_of = "task_compiler:validation_attempt_1"
+        plan = self._normalize_and_validate_task_plan(
+            plan,
+            requirement_ids=requirement_ids,
+            task_objective=task_objective,
+        )
+        self._progress(
+            "model_thinking",
+            stage="task_compiler",
+            status="completed",
+            action="Proof Plan 已通过结构校验",
+            public_reason="活动 Requirement、Policy 引用和无环结构均已覆盖。",
+            requirement_count=len(requirement_ids),
+            root_count=len(plan.roots),
+            check_count=sum(1 for node in plan.nodes if node.kind == "CHECK"),
+        )
+        return plan
+
+    def _normalize_and_validate_task_plan(
+        self,
+        plan: ProofPlan,
+        *,
+        requirement_ids: Sequence[str],
+        task_objective: str = "",
+    ) -> ProofPlan:
         if task_objective:
             plan = plan.model_copy(update={"objective": task_objective})
         if plan.active_requirement_ids != requirement_ids:
@@ -356,16 +380,6 @@ class EvidenceCompilerRuntime:
                 "Proof Plan 没有满足 Requirement 的最小 ProofSignature。",
             )
             raise
-        self._progress(
-            "model_thinking",
-            stage="task_compiler",
-            status="completed",
-            action="Proof Plan 已通过结构校验",
-            public_reason="活动 Requirement、Policy 引用和无环结构均已覆盖。",
-            requirement_count=len(requirement_ids),
-            root_count=len(plan.roots),
-            check_count=sum(1 for node in plan.nodes if node.kind == "CHECK"),
-        )
         return plan
 
     def execute_plan(
