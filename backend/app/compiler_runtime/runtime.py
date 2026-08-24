@@ -62,7 +62,7 @@ CHECK_FRONTIER_ATTEMPT_CAP = 2
 CHECK_MODEL_CALL_BUDGET = 4
 PROMPT_VERSIONS = {
     "task_compiler": "typed_task_compiler_v27",
-    "executor": "typed_evidence_executor_v29_no_list_sources",
+    "executor": "typed_evidence_executor_v28_batch_witnesses",
     "verifier": "typed_fine_verifier_v27",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
@@ -80,6 +80,7 @@ _TRACE_METADATA = {
     ],
     "max_retries": 1,
     "allowed_tools": [
+        "list_sources",
         "read_source",
         "bind_claim",
         "compute_witnesses",
@@ -168,6 +169,10 @@ class ExecutorSummary(_RuntimeModel):
 
 class VerificationBatch(_RuntimeModel):
     assessments: list[CheckAssessment]
+
+
+class _ListSourcesInput(_RuntimeModel):
+    pass
 
 
 class _ReadSourceInput(_RuntimeModel):
@@ -2219,6 +2224,10 @@ def _sandbox_tools(
     progress_sink: Callable[[str, dict[str, Any] | None], None] | None = None,
     submission_review_by_check: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[FunctionTool]:
+    async def list_sources(_context: Any, raw: str) -> str:
+        _ListSourcesInput.model_validate_json(raw or "{}")
+        return _observed_tool("list_sources", sandbox.list_sources)
+
     async def read_source(_context: Any, raw: str) -> str:
         data = _ReadSourceInput.model_validate_json(raw)
         return _observed_tool("read_source", lambda: sandbox.read_source(data.source_id))
@@ -2281,6 +2290,7 @@ def _sandbox_tools(
         return _tool_json(result)
 
     return [
+        _function_tool("list_sources", "List the evidence sources available in this run.", _ListSourcesInput, list_sources),
         _function_tool("read_source", "Read one source by source_id before binding claims.", _ReadSourceInput, read_source),
         _function_tool(
             "bind_claim",
