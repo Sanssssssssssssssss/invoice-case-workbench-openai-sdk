@@ -62,7 +62,7 @@ CHECK_FRONTIER_ATTEMPT_CAP = 2
 CHECK_MODEL_CALL_BUDGET = 4
 PROMPT_VERSIONS = {
     "task_compiler": "typed_task_compiler_v27",
-    "executor": "typed_evidence_executor_v28_batch_witnesses",
+    "executor": "typed_evidence_executor_v27",
     "verifier": "typed_fine_verifier_v27",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
@@ -83,7 +83,7 @@ _TRACE_METADATA = {
         "list_sources",
         "read_source",
         "bind_claim",
-        "compute_witnesses",
+        "compute_witness",
         "submit_check",
     ],
     "side_effects": "none",
@@ -196,10 +196,6 @@ class _ComputeWitnessInput(_RuntimeModel):
     facet_ref: str
     operation: CalculationOperation
     refs: list[ProofTermRef]
-
-
-class _ComputeWitnessesInput(_RuntimeModel):
-    witnesses: list[_ComputeWitnessInput] = Field(min_length=1, max_length=64)
 
 
 class _SubmitCheckInput(_RuntimeModel):
@@ -2236,25 +2232,11 @@ def _sandbox_tools(
         data = _BindClaimInput.model_validate_json(raw)
         return _observed_tool("bind_claim", lambda: sandbox.bind_claim(**data.model_dump()))
 
-    async def compute_witnesses(_context: Any, raw: str) -> str:
-        data = _ComputeWitnessesInput.model_validate_json(raw)
-        results = [
-            json.loads(
-                _observed_tool(
-                    "compute_witness",
-                    lambda item=item: sandbox.compute_witness(**item.model_dump()),
-                )
-            )
-            for item in data.witnesses
-        ]
-        succeeded = sum(result.get("ok") is True for result in results)
-        return _tool_json(
-            {
-                "ok": succeeded == len(results),
-                "succeeded": succeeded,
-                "failed": len(results) - succeeded,
-                "results": results,
-            }
+    async def compute_witness_tool(_context: Any, raw: str) -> str:
+        data = _ComputeWitnessInput.model_validate_json(raw)
+        return _observed_tool(
+            "compute_witness",
+            lambda: sandbox.compute_witness(**data.model_dump()),
         )
 
     async def submit_check(_context: Any, raw: str) -> str:
@@ -2299,10 +2281,10 @@ def _sandbox_tools(
             bind_claim,
         ),
         _function_tool(
-            "compute_witnesses",
-            "Compute one or more independent deterministic Decimal witnesses from ordered typed refs. Every item returns its own result; use a later call for a witness that depends on another new witness. No values or results are accepted.",
-            _ComputeWitnessesInput,
-            compute_witnesses,
+            "compute_witness",
+            "Compute a deterministic Decimal witness from ordered typed refs; no values or results are accepted. GREATER_THAN means refs[0] > refs[1], is not symmetric, and returns false at equality.",
+            _ComputeWitnessInput,
+            compute_witness_tool,
         ),
         _function_tool(
             "submit_check",
