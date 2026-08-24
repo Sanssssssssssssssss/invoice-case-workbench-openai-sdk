@@ -150,7 +150,7 @@
         {
           "id": "final_total",
           "minimum_proof_terms": ["WITNESS"],
-          "semantic_contract": "Reconcile the stated final total from independently established upstream amounts while preserving every source-stated sign. When the source states a transaction-document type or subtype that determines sign semantics, ground that document type and include it in the final-total proof; never infer polarity from convention alone."
+          "semantic_contract": "Reconcile the stated final total from independently established upstream amounts while preserving every source-stated sign. When the source explicitly says an upstream amount includes or excludes a component, ground that treatment separately and consume it in the final-total proof so the component is not silently added or removed twice. When the source states a transaction-document type or subtype that determines sign semantics, ground that document type and include it in the final-total proof; never infer polarity from convention alone."
         }
       ]
     },

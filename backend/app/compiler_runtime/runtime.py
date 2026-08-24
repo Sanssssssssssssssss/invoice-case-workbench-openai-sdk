@@ -1112,6 +1112,25 @@ class EvidenceCompilerRuntime:
                 )
                 raise
 
+            rejected_terms = _verifier_rejected_latest_submission(
+                candidate_sandbox,
+                focused_assessments[0],
+            )
+            if rejected_terms is not None:
+                feedback = [rejected_terms]
+                repair_owner = "executor"
+                self._progress(
+                    "model_thinking",
+                    stage="fine_verifier",
+                    status="frontier_rejected",
+                    action="Verifier 拒绝了当前 CHECK 的提交项",
+                    public_reason="候选仍未提交；Executor 可在同一会话和固定预算内更正或明确证据缺口。",
+                    focused_check_ids=[check_id],
+                    frontier_attempt=attempt,
+                    diagnostic_codes=[rejected_terms["diagnostic_code"]],
+                )
+                continue
+
             candidate_assessments = _upsert_focused_assessment(
                 plan,
                 committed_assessments,
@@ -1980,6 +1999,38 @@ def _frontier_feedback(
         feedback["node_id"] = node_id
     if previous_assessment is not None:
         feedback["previous_assessment"] = previous_assessment.model_dump(mode="json")
+    return feedback
+
+
+def _verifier_rejected_latest_submission(
+    sandbox: EvidenceSandbox,
+    assessment: CheckAssessment,
+) -> dict[str, Any] | None:
+    """Return exact repair feedback when NOT_FOUND masks a rejected typed attempt."""
+
+    if assessment.status != "NOT_FOUND":
+        return None
+    submission = next(
+        (item for item in reversed(sandbox.submissions) if item.check_id == assessment.check_id),
+        None,
+    )
+    if submission is None:
+        return None
+    rejected_bindings = sorted(set(submission.binding_ids) - set(assessment.accepted_binding_ids))
+    rejected_witnesses = sorted(set(submission.witness_ids) - set(assessment.accepted_witness_ids))
+    if not rejected_bindings and not rejected_witnesses:
+        return None
+    feedback = _frontier_feedback(
+        assessment.check_id,
+        code="VERIFIER_REJECTED_SUBMITTED_PROOF_TERM",
+        message=(
+            "Verifier rejected typed terms in the latest submission. Correct the proof attempt, "
+            "or submit a clean NOT_FOUND result if the stated premise is genuinely absent."
+        ),
+        previous_assessment=assessment,
+    )
+    feedback["rejected_binding_ids"] = rejected_bindings
+    feedback["rejected_witness_ids"] = rejected_witnesses
     return feedback
 
 

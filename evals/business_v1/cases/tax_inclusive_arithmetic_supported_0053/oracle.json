@@ -1,7 +1,7 @@
 {
   "schema_version": "2",
   "case_id": "tax_inclusive_arithmetic_supported_0053",
-  "oracle_version": "5",
+  "oracle_version": "6",
   "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::tax_inclusive_arithmetic_supported_0053",
   "facts": [
     {
@@ -264,6 +264,7 @@
       "source_role": "invoice",
       "source_quote": "The subtotal including VAT is 135.234,00 EUR.",
       "predicate_options": [
+        "includes VAT",
         "tax inclusive treatment",
         "VAT inclusive prices",
         "含税口径",

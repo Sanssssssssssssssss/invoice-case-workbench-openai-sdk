@@ -1559,6 +1559,13 @@ def test_source_fact_matching_normalizes_snake_case_percent_and_quote_alternativ
         source_roles={"invoice": "invoice"},
         source_content={"invoice": tax_fact.source_quote},
     )
+    tax_claim.update(predicate="includes_vat", value=True)
+    assert _claim_matches_source_fact(
+        tax_fact,
+        tax_claim,
+        source_roles={"invoice": "invoice"},
+        source_content={"invoice": tax_fact.source_quote},
+    )
     total_oracle = BusinessEvalOracle.model_validate_json(
         (
             Path(__file__).resolve().parents[2]

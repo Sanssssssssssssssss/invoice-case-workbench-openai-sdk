@@ -1270,6 +1270,90 @@ def test_frontier_second_diagnostic_exhausts_cap_without_third_call(
     assert result.retry_count == 1
 
 
+def test_frontier_returns_rejected_typed_submission_to_same_executor(tmp_path, monkeypatch) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    plan = ProofPlan(
+        plan_id="plan.binding-repair",
+        objective="Verify one proposed source relationship.",
+        active_requirement_ids=["vendor_identity"],
+        roots={"vendor_identity": "check.vendor"},
+        nodes=[
+            ProofNode(
+                id="check.vendor",
+                kind="CHECK",
+                statement="The proposed vendor relationship is grounded.",
+                requirement_refs=["vendor_identity"],
+                facet_refs=["identity"],
+            )
+        ],
+    )
+    prepared = _sources()
+    observations: list[list[dict]] = []
+    verify_calls = 0
+    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: plan)
+
+    def fake_execute(**kwargs):
+        observations.append(list(kwargs["runtime_observations"]))
+        candidate = copy.deepcopy(kwargs["sandbox"])
+        if not candidate.evidence_ir.claims:
+            source = prepared[0].record
+            candidate.read_source(source.source_id)
+            claim = candidate.bind_claim(
+                subject="vendor:V-100",
+                predicate="status",
+                value="ACTIVE",
+                source_id=source.source_id,
+                quote="Vendor V-100 is ACTIVE.",
+                locator="line 1",
+            )["claim"]
+            candidate.submit_check(
+                check_id="check.vendor",
+                claim_ids=[claim["id"]],
+                binding_proposals=[
+                    {
+                        "id": "binding.vendor.status",
+                        "check_id": "check.vendor",
+                        "facet_ref": "identity",
+                        "relation": "status_establishes_identity",
+                        "term_refs": [{"kind": "CLAIM", "ref_id": claim["id"]}],
+                        "reason": "Candidate relationship for independent verification.",
+                    }
+                ],
+            )
+        else:
+            candidate.submit_check(check_id="check.vendor", note="grounding is absent")
+        return ExecutorSummary(completed_check_ids=["check.vendor"]), candidate
+
+    def fake_verify(**kwargs):
+        nonlocal verify_calls
+        verify_calls += 1
+        claim_id = kwargs["sandbox"].evidence_ir.claims[0].id
+        return [
+            CheckAssessment(
+                check_id="check.vendor",
+                claim_ids=[claim_id],
+                missing_fact="The proposed relationship is not directly stated.",
+                gap_code="BINDING_MISSING",
+                status="NOT_FOUND",
+            )
+        ]
+
+    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
+    monkeypatch.setattr(runtime, "verify", fake_verify)
+
+    result = runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=prepared,
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+    )
+
+    assert verify_calls == 2
+    assert observations[0] == []
+    assert observations[1][0]["diagnostic_code"] == "VERIFIER_REJECTED_SUBMITTED_PROOF_TERM"
+    assert observations[1][0]["rejected_binding_ids"] == ["binding.vendor.status"]
+    assert result.proof.decision_for("vendor_identity").status == "NOT_FOUND"
+
+
 def test_frontier_does_not_ask_model_to_repair_runtime_exception(tmp_path, monkeypatch) -> None:
     runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
     calls = 0

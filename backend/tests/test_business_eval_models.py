@@ -160,19 +160,20 @@ def test_0053_adjustment_rate_preserves_source_sign() -> None:
     oracle = load_oracle(ALL_CASES_ROOT / "tax_inclusive_arithmetic_supported_0053")
     rate = next(fact for fact in oracle.facts if fact.id == "adjustment_1_rate_factor")
 
-    assert oracle.oracle_version == "5"
+    assert oracle.oracle_version == "6"
     assert rate.value == "-0.025"
     version_five = {
         "invoice_subtotal_conflict_0006",
         "mixed_vat_subtotal_conflict_0044",
-        "tax_inclusive_arithmetic_supported_0053",
     }
     assert {
         path.name: load_oracle(path).oracle_version
         for path in ALL_CASES_ROOT.iterdir()
         if path.is_dir()
     } == {
-        path.name: "5" if path.name in version_five else "4"
+        path.name: "6" if path.name == "tax_inclusive_arithmetic_supported_0053" else (
+            "5" if path.name in version_five else "4"
+        )
         for path in ALL_CASES_ROOT.iterdir()
         if path.is_dir()
     }

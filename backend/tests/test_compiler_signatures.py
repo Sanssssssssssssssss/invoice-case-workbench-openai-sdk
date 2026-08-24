@@ -86,7 +86,10 @@ def _signature() -> ProofSignature:
                 minimum_proof_terms=["WITNESS"],
                 semantic_contract=(
                     "Reconcile the stated final total from independently established upstream "
-                    "amounts while preserving every source-stated sign. When the source states a "
+                    "amounts while preserving every source-stated sign. When the source explicitly "
+                    "says an upstream amount includes or excludes a component, ground that treatment "
+                    "separately and consume it in the final-total proof so the component is not "
+                    "silently added or removed twice. When the source states a "
                     "transaction-document type or subtype that determines sign semantics, ground "
                     "that document type and include it in the final-total proof; never infer "
                     "polarity from convention alone."
@@ -216,6 +219,7 @@ def test_pack_exposes_the_minimal_invoice_calculation_signature() -> None:
     assert "one grounded extension Claim per source-listed entry" in lines.semantic_contract
     assert "belongs to the subtotal_aggregation facet" in lines.semantic_contract
     assert "coverage gap, not evidence" in subtotal.semantic_contract
+    assert "includes or excludes a component" in final_total.semantic_contract
     assert "transaction-document type or subtype" in final_total.semantic_contract
 
 
