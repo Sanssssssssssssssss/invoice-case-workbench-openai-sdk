@@ -14,7 +14,9 @@ def manager_tool_loop_thinking_type(model_name: str, configured: str | None) -> 
 
 
 def role_thinking_type(role: str, payload: dict[str, Any] | None, configured: str | None) -> str:
-    _ = (role, payload)
+    _ = payload
+    if role == "fine_verifier":
+        return "high"
     return _normalized_thinking_type(configured)
 
 

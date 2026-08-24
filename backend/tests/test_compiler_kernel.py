@@ -166,12 +166,14 @@ _TYPED_POLICY = "invoice_calculation_rounding_tolerance"
 
 def _typed_artifact(*, status: str = "SUPPORTED") -> ReviewArtifact:
     check_id = "check.typed"
+    treatment_check_id = "check.component_treatment"
+    treatment_other_id = "check.treatment_other_facets"
     plan = ProofPlan(
         plan_id="plan.typed",
         objective="Compile the declared typed proof facets.",
         active_requirement_ids=["invoice_calculation_valid"],
         policy_refs=[_TYPED_POLICY],
-        roots={"invoice_calculation_valid": check_id},
+        roots={"invoice_calculation_valid": "root.typed"},
         nodes=[
             ProofNode(
                 id=check_id,
@@ -185,7 +187,33 @@ def _typed_artifact(*, status: str = "SUPPORTED") -> ReviewArtifact:
                     "COMPONENT_APPLICABILITY",
                     "COMPONENT_RECONCILIATION",
                 ],
-            )
+            ),
+            ProofNode(
+                id=treatment_check_id,
+                kind="CHECK",
+                statement="A non-calculated component treatment is explicitly stated.",
+                requirement_refs=["invoice_calculation_valid"],
+                facet_refs=["stated_components"],
+                semantic_role_refs=["COMPONENT_TREATMENT"],
+            ),
+            ProofNode(
+                id=treatment_other_id,
+                kind="CHECK",
+                statement="The non-component arithmetic facets are established.",
+                requirement_refs=["invoice_calculation_valid"],
+                policy_refs=[_TYPED_POLICY],
+                facet_refs=["line_extensions", "subtotal_aggregation", "final_total"],
+            ),
+            ProofNode(
+                id="path.treatment",
+                kind="ALL",
+                depends_on=[treatment_check_id, treatment_other_id],
+            ),
+            ProofNode(
+                id="root.typed",
+                kind="ANY",
+                depends_on=[check_id, "path.treatment"],
+            ),
         ],
     )
     claim = Claim(
@@ -199,10 +227,20 @@ def _typed_artifact(*, status: str = "SUPPORTED") -> ReviewArtifact:
         confidence="high",
         attributes={"currency": "EUR"},
     )
+    treatment_claim = Claim(
+        id="claim.treatment",
+        subject="record:1",
+        predicate="component_treatment",
+        value="explicit",
+        source_id="source.record",
+        quote="Component treatment is explicit.",
+        locator="page 1",
+        confidence="high",
+    )
     evidence_ir = EvidenceIR(
         source_ids=[claim.source_id],
         source_fingerprints={claim.source_id: "sha256:record-v1"},
-        claims=[claim],
+        claims=[claim, treatment_claim],
     )
     policy_hash = "sha256:typed-policy"
     resolved_policy_terms = {
@@ -245,7 +283,49 @@ def _typed_artifact(*, status: str = "SUPPORTED") -> ReviewArtifact:
         )
         for facet_ref in _TYPED_FACETS
     ]
-    witnesses = [*intermediate_witnesses, *terminal_witnesses]
+    treatment_branch_witnesses = [
+        compute_witness(
+            CalculationRequest(
+                id=f"witness.treatment_branch.{facet_ref}",
+                check_id=treatment_other_id,
+                facet_ref=facet_ref,
+                operation="SUM",
+                operands=[ProofTermRef(kind="POLICY", ref_id=_TYPED_POLICY)],
+            ),
+            claims={claim.id: claim},
+            witnesses={},
+            policy_values=resolved_policy_terms,
+            evidence_snapshot_hash=evidence_ir.source_snapshot_hash(),
+            policy_snapshot_hash=policy_hash,
+        )
+        for facet_ref in ("line_extensions", "subtotal_aggregation", "final_total")
+    ]
+    treatment_branch_terminals = [
+        compute_witness(
+            CalculationRequest(
+                id=f"{item.id}.terminal",
+                check_id=treatment_other_id,
+                facet_ref=item.facet_ref,
+                operation="GREATER_THAN",
+                operands=[
+                    ProofTermRef(kind="WITNESS", ref_id=item.id),
+                    ProofTermRef(kind="POLICY", ref_id=_TYPED_POLICY),
+                ],
+            ),
+            claims={claim.id: claim},
+            witnesses={item.id: item},
+            policy_values=resolved_policy_terms,
+            evidence_snapshot_hash=evidence_ir.source_snapshot_hash(),
+            policy_snapshot_hash=policy_hash,
+        )
+        for item in treatment_branch_witnesses
+    ]
+    witnesses = [
+        *intermediate_witnesses,
+        *terminal_witnesses,
+        *treatment_branch_witnesses,
+        *treatment_branch_terminals,
+    ]
     binding = SemanticBindingProposal(
         id="binding.stated_components",
         check_id=check_id,
@@ -258,7 +338,7 @@ def _typed_artifact(*, status: str = "SUPPORTED") -> ReviewArtifact:
         check_id=check_id,
         claim_ids=[claim.id],
         accepted_binding_ids=[binding.id],
-        accepted_witness_ids=[item.id for item in witnesses],
+        accepted_witness_ids=[item.id for item in witnesses if item.check_id == check_id],
         strong_status_links=[
             StrongStatusLink(
                 witness_id=item.id,
@@ -271,18 +351,50 @@ def _typed_artifact(*, status: str = "SUPPORTED") -> ReviewArtifact:
         reason=f"verifier returned {status}",
         status=status,
     )
+    treatment_assessment = CheckAssessment(
+        check_id=treatment_check_id,
+        claim_ids=[treatment_claim.id],
+        source_ids=[treatment_claim.source_id],
+        examined_source_ids=[treatment_claim.source_id],
+        reason="The numeric component directly contradicts the treatment-only path.",
+        status="CONTRADICTED",
+    )
+    treatment_other_assessment = CheckAssessment(
+        check_id=treatment_other_id,
+        claim_ids=[treatment_claim.id],
+        accepted_witness_ids=[
+            item.id for item in [*treatment_branch_witnesses, *treatment_branch_terminals]
+        ],
+        strong_status_links=[
+            StrongStatusLink(witness_id=item.id, true_status="CONTRADICTED")
+            for item in treatment_branch_terminals
+        ],
+        source_ids=[treatment_claim.source_id],
+        examined_source_ids=[treatment_claim.source_id],
+        reason="The non-component facets close on the alternate branch.",
+        status="SUPPORTED",
+    )
     artifact = ReviewArtifact(
         plan=plan,
         plan_hash=plan.content_hash(),
         proof_signature_hash=proof_signature_hash_for(plan.active_requirement_ids),
         evidence_ir=evidence_ir,
         evidence_snapshot_hash=evidence_ir.content_hash(),
-        assessments=[assessment],
+        assessments=[assessment, treatment_assessment, treatment_other_assessment],
         binding_proposals=[binding],
         calculation_witnesses=witnesses,
-        submitted_claim_refs={check_id: [claim.id]},
+        submitted_claim_refs={
+            check_id: [claim.id],
+            treatment_check_id: [treatment_claim.id],
+            treatment_other_id: [treatment_claim.id],
+        },
         submitted_binding_refs={check_id: [binding.id]},
-        submitted_witness_refs={check_id: [item.id for item in witnesses]},
+        submitted_witness_refs={
+            check_id: [item.id for item in witnesses if item.check_id == check_id],
+            treatment_other_id: [
+                item.id for item in witnesses if item.check_id == treatment_other_id
+            ],
+        },
         policy_hash=policy_hash,
         resolved_policy_terms=resolved_policy_terms,
         compiler_version="test-typed-1",
@@ -1047,7 +1159,7 @@ def _replace_typed_assessment(
     **updates: object,
 ) -> ReviewArtifact:
     assessment = artifact.assessments[0].model_copy(update=updates, deep=True)
-    return _reseal(artifact, assessments=[assessment])
+    return _reseal(artifact, assessments=[assessment, *artifact.assessments[1:]])
 
 
 def test_typed_supported_closes_every_declared_facet_and_projects_terms() -> None:
@@ -1060,7 +1172,9 @@ def test_typed_supported_closes_every_declared_facet_and_projects_terms() -> Non
     result = proof.node_results[0]
     assert result.claim_ids == ["claim.amount"]
     assert result.binding_ids == ["binding.stated_components"]
-    assert result.witness_ids == sorted(item.id for item in artifact.calculation_witnesses)
+    assert result.witness_ids == sorted(
+        item.id for item in artifact.calculation_witnesses if item.check_id == "check.typed"
+    )
     assert result.source_ids == ["source.record"]
 
 
@@ -1110,7 +1224,7 @@ def test_changed_source_fingerprint_stales_existing_witness() -> None:
     proof = compile_review_artifact(artifact)
 
     assert proof.decision_for("invoice_calculation_valid").status == "NOT_FOUND"
-    assert [item.code for item in proof.diagnostics] == ["STALE_WITNESS_EVIDENCE"]
+    assert {item.code for item in proof.diagnostics} == {"STALE_WITNESS_EVIDENCE"}
 
 
 def test_changed_evidence_schema_stales_existing_witness() -> None:
@@ -1125,7 +1239,7 @@ def test_changed_evidence_schema_stales_existing_witness() -> None:
     proof = compile_review_artifact(artifact)
 
     assert proof.decision_for("invoice_calculation_valid").status == "NOT_FOUND"
-    assert [item.code for item in proof.diagnostics] == ["STALE_WITNESS_EVIDENCE"]
+    assert {item.code for item in proof.diagnostics} == {"STALE_WITNESS_EVIDENCE"}
 
 
 @pytest.mark.parametrize(
@@ -1150,7 +1264,10 @@ def test_changed_claim_content_fails_existing_witness_replay(
         update={field: replacement},
         deep=True,
     )
-    changed_ir = artifact.evidence_ir.model_copy(update={"claims": [changed_claim]}, deep=True)
+    changed_ir = artifact.evidence_ir.model_copy(
+        update={"claims": [changed_claim, *artifact.evidence_ir.claims[1:]]},
+        deep=True,
+    )
     artifact = _reseal(
         artifact,
         evidence_ir=changed_ir,
@@ -1191,6 +1308,25 @@ def test_typed_supported_rejects_a_missing_minimum_term(omitted_field: str) -> N
 
     assert proof.decision_for("invoice_calculation_valid").status == "NOT_FOUND"
     assert [item.code for item in proof.diagnostics] == ["TYPED_PROOF_INCOMPLETE"]
+
+
+def test_treatment_path_closes_with_a_grounded_claim_without_fake_arithmetic() -> None:
+    artifact = _typed_artifact(status="CONTRADICTED")
+    treatment = artifact.assessments[1].model_copy(
+        update={
+            "status": "SUPPORTED",
+            "reason": "The explicit non-calculated treatment is grounded.",
+        }
+    )
+    artifact = _reseal(
+        artifact,
+        assessments=[artifact.assessments[0], treatment, artifact.assessments[2]],
+    )
+
+    proof = compile_review_artifact(artifact)
+
+    assert proof.decision_for("invoice_calculation_valid").status == "SUPPORTED"
+    assert proof.diagnostics == []
 
 
 def test_typed_contradiction_needs_only_one_closed_declared_facet() -> None:
@@ -1273,6 +1409,7 @@ def test_unsubmitted_terminal_witness_fails_before_status_projection() -> None:
     artifact = _reseal(
         artifact,
         submitted_witness_refs={
+            **artifact.submitted_witness_refs,
             "check.typed": [
                 item
                 for item in artifact.submitted_witness_refs["check.typed"]
@@ -1309,8 +1446,11 @@ def test_false_boolean_terminal_maps_to_the_opposite_strong_status() -> None:
     intermediates = {
         item.id: item
         for item in artifact.calculation_witnesses
-        if not item.id.endswith(".terminal")
+        if item.check_id == "check.typed" and not item.id.endswith(".terminal")
     }
+    branch_witnesses = [
+        item for item in artifact.calculation_witnesses if item.check_id != "check.typed"
+    ]
     terminals = [
         compute_witness(
             CalculationRequest(
@@ -1346,8 +1486,8 @@ def test_false_boolean_terminal_maps_to_the_opposite_strong_status() -> None:
     )
     artifact = _reseal(
         artifact,
-        assessments=[assessment],
-        calculation_witnesses=[*intermediates.values(), *terminals],
+        assessments=[assessment, *artifact.assessments[1:]],
+        calculation_witnesses=[*intermediates.values(), *terminals, *branch_witnesses],
     )
 
     proof = compile_review_artifact(artifact)
@@ -1362,7 +1502,10 @@ def test_false_boolean_terminal_maps_to_the_opposite_strong_status() -> None:
         },
         deep=True,
     )
-    mismatched = _reseal(artifact, assessments=[copied_current_status])
+    mismatched = _reseal(
+        artifact,
+        assessments=[copied_current_status, *artifact.assessments[1:]],
+    )
     mismatched_proof = compile_review_artifact(mismatched)
 
     assert mismatched_proof.decision_for("invoice_calculation_valid").status == "NOT_FOUND"
@@ -1426,7 +1569,10 @@ def test_terminal_boolean_must_consume_a_declared_artifact_policy() -> None:
     ]
     artifact = _reseal(
         artifact,
-        assessments=[artifact.assessments[0].model_copy(update={"strong_status_links": links})],
+        assessments=[
+            artifact.assessments[0].model_copy(update={"strong_status_links": links}),
+            *artifact.assessments[1:],
+        ],
         calculation_witnesses=witnesses,
     )
 
@@ -1470,6 +1616,7 @@ def test_verifier_cannot_accept_an_unsubmitted_typed_term(
         artifact = _reseal(
             artifact,
             submitted_witness_refs={
+                **artifact.submitted_witness_refs,
                 "check.typed": [
                     item
                     for item in artifact.submitted_witness_refs["check.typed"]
@@ -1607,11 +1754,11 @@ def _typed_artifact_with_parent_witness() -> ReviewArtifact:
             if not item.id.startswith("witness.line_extensions")
         ],
     ]
-    submitted = [item.id for item in witnesses]
+    submitted = [item.id for item in witnesses if item.check_id == "check.typed"]
     return _reseal(
         artifact,
         calculation_witnesses=witnesses,
-        submitted_witness_refs={"check.typed": submitted},
+        submitted_witness_refs={**artifact.submitted_witness_refs, "check.typed": submitted},
     )
 
 
@@ -1789,9 +1936,23 @@ def _typed_artifact_with_cross_check_parent_witness() -> ReviewArtifact:
                 ],
             ),
             ProofNode(
-                id="root.typed",
+                id="path.calculated",
                 kind="ALL",
                 depends_on=["check.lines", "check.typed"],
+            ),
+            *[
+                node
+                for node in artifact.plan.nodes
+                if node.id in {
+                    "check.component_treatment",
+                    "check.treatment_other_facets",
+                    "path.treatment",
+                }
+            ],
+            ProofNode(
+                id="root.typed",
+                kind="ANY",
+                depends_on=["path.calculated", "path.treatment"],
             ),
         ],
     )
@@ -1824,6 +1985,10 @@ def _typed_artifact_with_cross_check_parent_witness() -> ReviewArtifact:
             reason="The dependent calculations replay from the submitted parent.",
             status="SUPPORTED",
         ),
+        *artifact.assessments[1:],
+    ]
+    branch_witnesses = [
+        item for item in artifact.calculation_witnesses if item.check_id != "check.typed"
     ]
     return _reseal(
         artifact,
@@ -1831,10 +1996,25 @@ def _typed_artifact_with_cross_check_parent_witness() -> ReviewArtifact:
         plan_hash=plan.content_hash(),
         assessments=assessments,
         binding_proposals=[binding],
-        calculation_witnesses=[parent, line_difference, line_terminal, *children, *terminals],
-        submitted_claim_refs={"check.lines": [claim.id], "check.typed": []},
-        submitted_binding_refs={"check.typed": [binding.id]},
+        calculation_witnesses=[
+            parent,
+            line_difference,
+            line_terminal,
+            *children,
+            *terminals,
+            *branch_witnesses,
+        ],
+        submitted_claim_refs={
+            **artifact.submitted_claim_refs,
+            "check.lines": [claim.id],
+            "check.typed": [],
+        },
+        submitted_binding_refs={
+            **artifact.submitted_binding_refs,
+            "check.typed": [binding.id],
+        },
         submitted_witness_refs={
+            **artifact.submitted_witness_refs,
             "check.lines": [parent.id, line_difference.id, line_terminal.id],
             "check.typed": [item.id for item in [*children, *terminals]],
         },
@@ -2110,7 +2290,15 @@ def test_kernel_rechecks_plan_conformance_even_when_plan_hash_is_current() -> No
             ]
         }
     )
-    plan = artifact.plan.model_copy(update={"nodes": [node]}, deep=True)
+    plan = artifact.plan.model_copy(
+        update={
+            "nodes": [
+                node if item.id == node.id else item
+                for item in artifact.plan.nodes
+            ]
+        },
+        deep=True,
+    )
     artifact = _reseal(artifact, plan=plan, plan_hash=plan.content_hash())
 
     proof = compile_review_artifact(artifact)
@@ -2143,7 +2331,7 @@ def test_changed_resolved_policy_term_invalidates_replay() -> None:
     proof = compile_review_artifact(artifact)
 
     assert proof.decision_for("invoice_calculation_valid").status == "NOT_FOUND"
-    assert [item.code for item in proof.diagnostics] == ["INVALID_WITNESS_REPLAY"]
+    assert {item.code for item in proof.diagnostics} == {"INVALID_WITNESS_REPLAY"}
 
 
 def test_kernel_source_contains_no_invoice_business_rule_vocabulary() -> None:

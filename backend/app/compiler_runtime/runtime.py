@@ -56,14 +56,14 @@ from .signatures import (
 )
 
 
-COMPILER_VERSION = "typed_evidence_compiler_runtime_v15"
+COMPILER_VERSION = "typed_evidence_compiler_runtime_v16"
 EXECUTOR_MAX_TURNS = 24
 CHECK_FRONTIER_ATTEMPT_CAP = 2
 CHECK_MODEL_CALL_BUDGET = 4
 PROMPT_VERSIONS = {
-    "task_compiler": "typed_task_compiler_v19",
-    "executor": "typed_evidence_executor_v22",
-    "verifier": "typed_fine_verifier_v22",
+    "task_compiler": "typed_task_compiler_v27",
+    "executor": "typed_evidence_executor_v27",
+    "verifier": "typed_fine_verifier_v27",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
 _TRACE_METADATA = {
@@ -75,6 +75,7 @@ _TRACE_METADATA = {
         "active_requirement_ids",
         "source_catalog",
         "extraction_summary",
+        "source_documents",
         "supervisor_task",
     ],
     "max_retries": 1,
@@ -265,6 +266,7 @@ class EvidenceCompilerRuntime:
         policy_excerpt: dict[str, Any],
         source_catalog: Sequence[dict[str, Any]],
         extraction_summary: Sequence[dict[str, Any]] = (),
+        source_documents: Sequence[dict[str, Any]] = (),
         task_objective: str = "",
     ) -> ProofPlan:
         task_objective = task_objective.strip()
@@ -290,6 +292,7 @@ class EvidenceCompilerRuntime:
             "policy": policy_excerpt,
             "source_catalog": _planning_source_catalog(source_catalog),
             "extraction_summary": _planning_extraction_summary(extraction_summary),
+            "source_documents": _planning_source_documents(source_documents),
             "required_output": required_output,
         }
         plan: ProofPlan | None = None
@@ -366,7 +369,11 @@ class EvidenceCompilerRuntime:
                 for signature in signatures
                 if signature.requirement_id in node.requirement_refs
                 for facet in signature.facets
-                if "WITNESS" in facet.minimum_proof_terms and facet.id in node.facet_refs
+                if facet.id in node.facet_refs
+                and (
+                    (path := facet.path_for_roles(node.semantic_role_refs)) is None
+                    or "WITNESS" in path.minimum_proof_terms
+                )
                 for policy_ref in signature.required_policy_refs
             }
             policy_refs = sorted(set(node.policy_refs) | required_local_policies)
@@ -501,6 +508,17 @@ class EvidenceCompilerRuntime:
             check_id: sum(1 for item in sandbox.submissions if item.check_id == check_id)
             for check_id in target_check_ids
         }
+        submission_review_by_check = {
+            node.id: {
+                "check_id": node.id,
+                "statement": node.statement,
+                "facet_refs": list(node.facet_refs),
+                "semantic_role_refs": list(node.semantic_role_refs),
+                "policy_refs": list(node.policy_refs),
+            }
+            for node in plan.nodes
+            if node.kind == "CHECK" and node.id in target_check_ids
+        }
         try:
             run_results: list[Any] = []
             with sandbox.focused_writes(requested_focus):
@@ -509,12 +527,17 @@ class EvidenceCompilerRuntime:
                     prompt_file="executor.md",
                     payload=payload,
                     output_type=ExecutorSummary,
-                    tools=_sandbox_tools(sandbox, progress_sink=self._sandbox_progress),
+                    tools=_sandbox_tools(
+                        sandbox,
+                        progress_sink=self._sandbox_progress,
+                        submission_review_by_check=submission_review_by_check,
+                    ),
                     max_turns=EXECUTOR_MAX_TURNS,
                     tool_use_behavior=_completion_hook(
                         sandbox,
                         target_check_ids,
                         prior_submission_counts=submission_counts,
+                        require_final_review=True,
                     ),
                     input_override=model_input,
                     result_sink=run_results.append if conversation is not None else None,
@@ -880,6 +903,10 @@ class EvidenceCompilerRuntime:
                 for item in prepared_sources
             ],
             extraction_summary=extraction_summary,
+            source_documents=[
+                {"kind": item.record.kind, "content": item.record.content}
+                for item in prepared_sources
+            ],
             task_objective=task_objective,
         )
 
@@ -1283,12 +1310,17 @@ class EvidenceCompilerRuntime:
         input_override: str | list[Any] | None = None,
         result_sink: Callable[[Any], None] | None = None,
         model_budget: _CheckModelBudget | None = None,
+        thinking_override: str | None = None,
     ) -> Any:
         if not self.llm.available:
             raise RuntimeError("LLM_API_KEY is required for Evidence Compiler execution")
         prompt = (_PROMPT_ROOT / prompt_file).read_text(encoding="utf-8")
         model = self.settings.llm_model
-        thinking_type = role_thinking_type(name, payload, self.settings.llm_thinking_type)
+        thinking_type = thinking_override or role_thinking_type(
+            name,
+            payload,
+            self.settings.llm_thinking_type,
+        )
         agent = Agent(
             name=name,
             instructions=prompt,
@@ -2183,6 +2215,7 @@ def _sandbox_tools(
     sandbox: EvidenceSandbox,
     *,
     progress_sink: Callable[[str, dict[str, Any] | None], None] | None = None,
+    submission_review_by_check: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[FunctionTool]:
     async def list_sources(_context: Any, raw: str) -> str:
         _ListSourcesInput.model_validate_json(raw or "{}")
@@ -2205,7 +2238,27 @@ def _sandbox_tools(
 
     async def submit_check(_context: Any, raw: str) -> str:
         data = _SubmitCheckInput.model_validate_json(raw)
-        return _observed_tool("submit_check", lambda: sandbox.submit_check(**data.model_dump()))
+        if progress_sink is not None:
+            progress_sink("submit_check", None)
+        result = sandbox.submit_check(**data.model_dump())
+        review = dict((submission_review_by_check or {}).get(data.check_id) or {})
+        if result.get("ok") and review:
+            result["pre_commit_review"] = {
+                **review,
+                "candidate_committed": False,
+                "instruction": (
+                    "Before Runtime may stop this CHECK, re-read its full boundary and every "
+                    "relevant source statement. Confirm that each distinct observation, "
+                    "qualifier, treatment, inclusion, or exclusion needed by the CHECK has its "
+                    "own grounded Claim; every declared semantic role has the required submitted "
+                    "Claim, Binding, or Witness; and every referenced term is included. Do not "
+                    "invent missing evidence. Add anything omitted, then call submit_check again "
+                    "even when the candidate remains unchanged."
+                ),
+            }
+        if progress_sink is not None:
+            progress_sink("submit_check", result)
+        return _tool_json(result)
 
     def _observed_tool(name: str, invoke: Callable[[], dict[str, Any]]) -> str:
         if progress_sink is not None:
@@ -2232,7 +2285,7 @@ def _sandbox_tools(
         ),
         _function_tool(
             "submit_check",
-            "Submit candidate Claim refs, semantic binding proposals, Witness refs, and remaining questions for one CHECK; this is not a verdict.",
+            "Submit candidate Claim refs, semantic binding proposals, Witness refs, and remaining questions for one CHECK; this is not a verdict. Runtime treats the first successful call as a private draft and returns a pre-commit coverage review; call submit_check again after that review.",
             _SubmitCheckInput,
             submit_check,
         ),
@@ -2244,11 +2297,32 @@ def _completion_hook(
     check_ids: Sequence[str],
     *,
     prior_submission_counts: Mapping[str, int] | None = None,
+    require_final_review: bool = False,
 ) -> Any:
     expected = set(check_ids)
     baseline = dict(prior_submission_counts or {})
+    review_rounds = {check_id: 0 for check_id in expected}
 
-    def complete(_context: Any, _tool_results: Any) -> ToolsToFinalOutputResult:
+    def complete(_context: Any, tool_results: Any) -> ToolsToFinalOutputResult:
+        if require_final_review:
+            submitted_this_round: set[str] = set()
+            for tool_result in list(tool_results or []):
+                tool = getattr(tool_result, "tool", None)
+                if str(getattr(tool, "name", "") or "") != "submit_check":
+                    continue
+                output = getattr(tool_result, "output", None)
+                try:
+                    payload = json.loads(output) if isinstance(output, str) else dict(output or {})
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                submission = payload.get("submission") or {}
+                check_id = str(submission.get("check_id") or "")
+                if payload.get("ok") and check_id in expected:
+                    submitted_this_round.add(check_id)
+            for check_id in submitted_this_round:
+                review_rounds[check_id] += 1
+            if any(review_rounds[check_id] < 2 for check_id in expected):
+                return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
         submissions_by_check: dict[str, list[Any]] = {check_id: [] for check_id in expected}
         for item in sandbox.submissions:
             if item.check_id in expected:
@@ -2565,6 +2639,28 @@ def _planning_extraction_summary(items: Sequence[Mapping[str, Any]]) -> list[dic
         }
         for _kind, entry in sorted(grouped.items())
     ]
+
+
+def _planning_source_documents(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Expose complete extracted text without run-local source identity."""
+
+    documents = []
+    for index, item in enumerate(items, start=1):
+        content = str(item.get("content") or item.get("source_content") or "").strip()
+        if content:
+            documents.append(
+                {
+                    "document_index": index,
+                    "kind": str(
+                        item.get("kind")
+                        or item.get("evidence_type")
+                        or item.get("type")
+                        or "unknown"
+                    ),
+                    "content": content,
+                }
+            )
+    return documents
 
 
 def _active_proof_signatures(requirement_ids: Sequence[str]) -> list[dict[str, Any]]:

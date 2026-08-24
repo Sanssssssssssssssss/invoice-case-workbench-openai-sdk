@@ -710,7 +710,12 @@ def _consumer_numeric_rows(packet: CanonicalConsumerPacket) -> list[tuple[str, s
             and not value.lstrip().startswith("-")
         ):
             value = f"-{value}"
-        if claim.currency:
+        number_tokens = list(_NUMBER_TOKEN_RE.finditer(value))
+        if (
+            claim.currency
+            and len(number_tokens) == 1
+            and _adjacent_currency_options(value, number_tokens[0]) is None
+        ):
             value = f"{claim.currency} {value}"
         elif claim.unit and claim.unit != "%":
             value = f"{value} {claim.unit}"

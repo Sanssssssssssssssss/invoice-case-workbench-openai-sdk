@@ -26,7 +26,7 @@ from .models import (
 )
 
 
-SCORER_VERSION = "business_eval_scorer_v3.8"
+SCORER_VERSION = "business_eval_scorer_v3.9"
 
 STAGE_WEIGHTS: dict[str, Decimal] = {
     "understanding": Decimal("10"),
@@ -1320,7 +1320,11 @@ def _match_milestone_facets(
         milestone.id: {
             check_id
             for check_id, node in checks.items()
-            if any(
+            if not (
+                milestone.relation_ids
+                and set(_list(node.get("semantic_role_refs"))) == {"COMPONENT_TREATMENT"}
+            )
+            and any(
                 (
                     _semantic_normalized(facet_ref)
                     == _semantic_normalized(milestone.facet_ref)
@@ -1730,13 +1734,21 @@ def _claim_matches_source_fact(
         not quote_matches
         and expected_decimal is not None
         and actual_quote in expected_quote
-        and len(
-            re.findall(
-                rf"(?<!\d){re.escape(actual_quote)}(?!\d)",
-                expected_quote,
-            )
+        and _locator_supports_quote(
+            source_content.get(source_id, ""),
+            locator=str(claim.get("locator") or ""),
+            quote=fact.source_quote,
         )
-        == 1
+        and (
+            _predicate_matches_options(claim.get("predicate"), fact.predicate_options)
+            or len(
+                re.findall(
+                    rf"(?<!\d){re.escape(actual_quote)}(?!\d)",
+                    expected_quote,
+                )
+            )
+            == 1
+        )
         and _text_has_decimal(actual_quote, expected_decimal, fact.tolerance)
     )
     percentage_alternative = bool(
@@ -2341,17 +2353,11 @@ def _operand_fact_candidates(
         # the Oracle to prescribe that intermediate Witness.
         witness = _mapping(witnesses_by_id.get(ref_id))
         if ref_id not in visiting and str(witness.get("operation") or "") == "SUM":
-            leaves = _flatten_associative_operands(
-                witness,
-                operation="SUM",
-                witnesses_by_id=witnesses_by_id,
-                accepted_witness_ids=accepted_witness_ids,
-                visiting=set(visiting),
-            )
-            if len(leaves) == 1:
+            direct_operands = _dict_items(witness.get("operands"))
+            if len(direct_operands) == 1:
                 candidates.update(
                     _operand_fact_candidates(
-                        leaves[0],
+                        direct_operands[0],
                         facts_by_id=facts_by_id,
                         source_assignments=source_assignments,
                         witness_outputs=witness_outputs,

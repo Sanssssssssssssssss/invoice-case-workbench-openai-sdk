@@ -1,7 +1,7 @@
 {
   "schema_version": "2",
   "case_id": "mixed_vat_subtotal_conflict_0044",
-  "oracle_version": "5",
+  "oracle_version": "6",
   "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::mixed_vat_subtotal_conflict_0044",
   "facts": [
     {
@@ -369,7 +369,7 @@
       "id": "adjustment_1_rate_factor",
       "origin": "source",
       "kind": "decimal",
-      "value": "0.075",
+      "value": "-0.075",
       "required_in": [
         "evidence",
         "reasoning"

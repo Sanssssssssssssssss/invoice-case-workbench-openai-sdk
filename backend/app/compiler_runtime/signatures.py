@@ -8,7 +8,7 @@ from typing import Iterable
 from app.compiler_runtime.graph_walk import reachable_ids
 from app.compiler_runtime.models import ProofNode, ProofPlan
 from app.domain.invoice_requirements import REQUIREMENT_PROOF_SIGNATURES
-from app.proof_schema import ProofFacet, ProofSignature, ProofTerm, RootComposition
+from app.proof_schema import ProofFacet, ProofPath, ProofSignature, ProofTerm, RootComposition
 
 
 @lru_cache(maxsize=1)
@@ -80,7 +80,7 @@ class PlanConformanceGate:
                     continue
                 for facet in declared_signature.facets:
                     if facet.id in node.facet_refs:
-                        allowed_roles_by_check[node.id].update(facet.required_semantic_roles)
+                        allowed_roles_by_check[node.id].update(facet.semantic_roles)
             unexpected = sorted(set(node.semantic_role_refs) - allowed_roles_by_check[node.id])
             if unexpected:
                 raise ValueError(
@@ -95,37 +95,60 @@ class PlanConformanceGate:
                     f"Required facet {facet.id!r} is not reachable from "
                     f"requirement root {signature.requirement_id!r}"
                 )
-            missing_roles_by_check = {
-                node.id: sorted(
-                    set(facet.required_semantic_roles) - set(node.semantic_role_refs)
-                )
+            invalid_paths = {
+                node.id: sorted(set(node.semantic_role_refs).intersection(facet.semantic_roles))
                 for node in facet_checks
+                if facet.path_for_roles(node.semantic_role_refs) is None
             }
-            missing_roles_by_check = {
-                check_id: missing
-                for check_id, missing in missing_roles_by_check.items()
-                if missing
-            }
-            if missing_roles_by_check:
+            if invalid_paths:
                 details = "; ".join(
-                    f"CHECK {check_id!r} missing {missing}"
-                    for check_id, missing in sorted(missing_roles_by_check.items())
+                    f"CHECK {check_id!r} has roles {roles}"
+                    for check_id, roles in sorted(invalid_paths.items())
                 )
                 raise ValueError(
-                    f"Required facet {facet.id!r} CHECKs must declare every required "
-                    f"semantic role on each CHECK: {details}"
+                    f"Required facet {facet.id!r} CHECKs must select one complete proof path: "
+                    f"{details}"
                 )
 
-            if "WITNESS" in facet.minimum_proof_terms:
-                for node in facet_checks:
-                    missing = sorted(
-                        set(signature.required_policy_refs) - set(node.policy_refs)
+            for path in facet.proof_paths:
+                path_roles = frozenset(path.semantic_roles)
+                path_checks = [
+                    node
+                    for node in facet_checks
+                    if facet.path_for_roles(node.semantic_role_refs) == path
+                ]
+                if not path_checks:
+                    raise ValueError(
+                        f"Required facet {facet.id!r} is missing proof path roles "
+                        f"{sorted(path_roles)}"
                     )
-                    if missing:
-                        raise ValueError(
-                            f"WITNESS facet {facet.id!r} CHECK {node.id!r} must declare "
-                            f"required policy refs: {missing}"
+                if not self._can_succeed(
+                    root_id,
+                    nodes,
+                    check_value=lambda node, current=path_roles, selected=facet: (
+                        selected.id not in node.facet_refs
+                        or (
+                            (matched := selected.path_for_roles(node.semantic_role_refs))
+                            is not None
+                            and frozenset(matched.semantic_roles) == current
                         )
+                    ),
+                ):
+                    raise ValueError(
+                        f"Required facet {facet.id!r} proof path roles "
+                        f"{sorted(path_roles)} are not independently sufficient"
+                    )
+
+                if "WITNESS" in path.minimum_proof_terms:
+                    for node in path_checks:
+                        missing = sorted(
+                            set(signature.required_policy_refs) - set(node.policy_refs)
+                        )
+                        if missing:
+                            raise ValueError(
+                                f"WITNESS facet {facet.id!r} CHECK {node.id!r} must declare "
+                                f"required policy refs: {missing}"
+                            )
 
         for policy_ref in signature.required_policy_refs:
             if policy_ref not in plan.policy_refs or not any(
@@ -205,6 +228,7 @@ def validate_plan_conformance(
 __all__ = [
     "PlanConformanceGate",
     "ProofFacet",
+    "ProofPath",
     "ProofSignature",
     "ProofTerm",
     "RootComposition",

@@ -966,7 +966,13 @@ def _required_facet_terms(node: ProofNode) -> dict[str, set[str]]:
             continue
         for facet in signature.facets:
             if facet.id in node.facet_refs:
-                required.setdefault(facet.id, set()).update(facet.minimum_proof_terms)
+                path = facet.path_for_roles(node.semantic_role_refs)
+                terms = (
+                    path.minimum_proof_terms
+                    if path is not None
+                    else [term for candidate in facet.proof_paths for term in candidate.minimum_proof_terms]
+                )
+                required.setdefault(facet.id, set()).update(terms)
     return required
 
 

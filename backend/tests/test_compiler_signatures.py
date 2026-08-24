@@ -9,6 +9,7 @@ from app.compiler_runtime.models import ProofNode, ProofPlan
 from app.compiler_runtime.signatures import (
     PlanConformanceGate,
     ProofFacet,
+    ProofPath,
     ProofSignature,
     proof_signature_for,
     proof_signature_hash_for,
@@ -25,14 +26,14 @@ TEMPLATE_POLICY_REF = "invoice_template_baseline_ref"
 def _signature() -> ProofSignature:
     return ProofSignature(
         signature_id="invoice_arithmetic",
-        version="2",
+        version="3",
         requirement_id=REQUIREMENT_ID,
         root_composition="ALL_REQUIRED",
         required_policy_refs=[POLICY_REF],
         facets=[
             ProofFacet(
                 id="line_extensions",
-                minimum_proof_terms=["WITNESS"],
+                proof_paths=[ProofPath(minimum_proof_terms=["WITNESS"])],
                 semantic_contract=(
                     "Enumerate every source-listed item, service, or detail amount that contributes "
                     "to the subtotal. For every entry that explicitly states quantity, unit price, "
@@ -49,7 +50,7 @@ def _signature() -> ProofSignature:
             ),
             ProofFacet(
                 id="subtotal_aggregation",
-                minimum_proof_terms=["WITNESS"],
+                proof_paths=[ProofPath(minimum_proof_terms=["WITNESS"])],
                 semantic_contract=(
                     "Recompute the subtotal from every source-listed line extension established "
                     "for the document, including grounded lump-sum entries, and compare that "
@@ -60,30 +61,41 @@ def _signature() -> ProofSignature:
             ),
             ProofFacet(
                 id="stated_components",
-                minimum_proof_terms=["BINDING", "WITNESS"],
-                semantic_contract=(
-                    "Verify each source-stated tax, discount, charge, or other adjustment that "
-                    "source context presents as an applied component outside the item, service, "
-                    "or detail listing. Do not reclassify a listed subtotal input as a component "
-                    "merely from its label, and do not classify one source amount as both a line "
-                    "extension and an applied component. The component amount and sign/role must "
-                    "be grounded in the source. When a rate-based calculation is claimed, both the "
-                    "rate and its applicable base relationship must be grounded; numerical "
-                    "coincidence cannot establish the base. COMPONENT_RECONCILIATION means "
-                    "computing the component amount, comparing it with the stated component amount, "
-                    "and applying tolerance; inclusion in the final total belongs to the final_total "
-                    "facet and is not a prerequisite here. If the applicable base or arithmetic role "
-                    "cannot be established, preserve the component-validity outcome as NOT_FOUND."
-                ),
-                required_semantic_roles=[
-                    "COMPONENT_OBSERVATION",
-                    "COMPONENT_APPLICABILITY",
-                    "COMPONENT_RECONCILIATION",
+                proof_paths=[
+                    ProofPath(
+                        minimum_proof_terms=["BINDING", "WITNESS"],
+                        semantic_roles=[
+                            "COMPONENT_OBSERVATION",
+                            "COMPONENT_APPLICABILITY",
+                            "COMPONENT_RECONCILIATION",
+                        ],
+                    ),
+                    ProofPath(
+                        minimum_proof_terms=["CLAIM"],
+                        semantic_roles=["COMPONENT_TREATMENT"],
+                    ),
                 ],
+                semantic_contract=(
+                    "Verify every source-stated tax, discount, charge, adjustment, or non-calculated "
+                    "treatment outside the item, service, or detail listing. The calculated-component "
+                    "path grounds the component amount and sign/role, establishes any claimed "
+                    "rate-to-base relationship without numerical guesswork, recomputes the amount, "
+                    "and applies tolerance. The treatment-only path accepts a grounded explicit "
+                    "treatment or exclusion statement only when exhaustive inspection finds no "
+                    "stated calculated tax, discount, charge, or adjustment amount or rate outside "
+                    "that listing; ordinary line-item quantities, prices, and extensions never "
+                    "count as components for this test. This absence is a source-coverage finding "
+                    "and does not require the "
+                    "document to contain a separate no-other-components sentence. The treatment "
+                    "path must never bypass a numeric component. Do not classify one source amount "
+                    "as both a line extension "
+                    "and a component. If a calculated component's applicable base or arithmetic role "
+                    "cannot be established, preserve the outcome as NOT_FOUND."
+                ),
             ),
             ProofFacet(
                 id="final_total",
-                minimum_proof_terms=["WITNESS"],
+                proof_paths=[ProofPath(minimum_proof_terms=["WITNESS"])],
                 semantic_contract=(
                     "Reconcile the stated final total from independently established upstream "
                     "amounts while preserving every source-stated sign. When the source explicitly "
@@ -145,9 +157,22 @@ def _plan() -> ProofPlan:
                 facet_refs=["final_total"],
             ),
             ProofNode(
+                id="check.component-treatment",
+                kind="CHECK",
+                statement="Any source-stated non-calculated component treatment is explicit.",
+                requirement_refs=[REQUIREMENT_ID],
+                facet_refs=["stated_components"],
+                semantic_role_refs=["COMPONENT_TREATMENT"],
+            ),
+            ProofNode(
+                id="path.components",
+                kind="ANY",
+                depends_on=["check.components", "check.component-treatment"],
+            ),
+            ProofNode(
                 id="root.calculation",
                 kind="ALL",
-                depends_on=["check.lines", "check.subtotal", "check.components", "check.final"],
+                depends_on=["check.lines", "check.subtotal", "path.components", "check.final"],
             ),
         ],
     )
@@ -161,7 +186,10 @@ def _template_signature() -> ProofSignature:
         root_composition="ALL_REQUIRED",
         required_policy_refs=[TEMPLATE_POLICY_REF],
         facets=[
-            ProofFacet(id="baseline_comparison", minimum_proof_terms=["BINDING"]),
+            ProofFacet(
+                id="baseline_comparison",
+                proof_paths=[ProofPath(minimum_proof_terms=["BINDING"])],
+            ),
         ],
     )
 
@@ -201,20 +229,20 @@ def test_pack_exposes_the_minimal_invoice_calculation_signature() -> None:
     }
     assert all(
         set(facet.model_dump())
-        == {"id", "minimum_proof_terms", "semantic_contract", "required_semantic_roles"}
+        == {"id", "proof_paths", "semantic_contract"}
         for facet in signature.facets
     )
     components = next(facet for facet in signature.facets if facet.id == "stated_components")
     lines = next(facet for facet in signature.facets if facet.id == "line_extensions")
     subtotal = next(facet for facet in signature.facets if facet.id == "subtotal_aggregation")
     final_total = next(facet for facet in signature.facets if facet.id == "final_total")
-    assert components.required_semantic_roles == [
-        "COMPONENT_OBSERVATION",
-        "COMPONENT_APPLICABILITY",
-        "COMPONENT_RECONCILIATION",
+    assert [path.minimum_proof_terms for path in components.proof_paths] == [
+        ["BINDING", "WITNESS"],
+        ["CLAIM"],
     ]
-    assert "numerical coincidence cannot establish the base" in components.semantic_contract
-    assert "inclusion in the final total belongs to the final_total facet" in components.semantic_contract
+    assert components.proof_paths[1].semantic_roles == ["COMPONENT_TREATMENT"]
+    assert "without numerical guesswork" in components.semantic_contract
+    assert "must never bypass a numeric component" in components.semantic_contract
     assert "lump-sum entry remains a line extension" in lines.semantic_contract
     assert "one grounded extension Claim per source-listed entry" in lines.semantic_contract
     assert "belongs to the subtotal_aggregation facet" in lines.semantic_contract
@@ -228,7 +256,7 @@ def test_pack_exposes_a_tiny_template_baseline_signature() -> None:
 
     assert signature == _template_signature()
     assert len(signature.facets) == 1
-    assert signature.facets[0].minimum_proof_terms == ["BINDING"]
+    assert signature.facets[0].proof_paths[0].minimum_proof_terms == ["BINDING"]
 
 
 @pytest.mark.parametrize("missing", ["facet", "policy"])
@@ -261,14 +289,14 @@ def test_signature_schema_rejects_business_rule_dsl_fields() -> None:
         "COMPONENT_RECONCILIATION",
     ],
 )
-def test_component_amount_presence_cannot_bypass_required_semantic_roles(
+def test_component_amount_presence_cannot_bypass_calculated_proof_path(
     missing_role: str,
 ) -> None:
     plan = _plan()
     component = next(node for node in plan.nodes if node.id == "check.components")
     component.semantic_role_refs.remove(missing_role)
 
-    with pytest.raises(ValueError, match=missing_role):
+    with pytest.raises(ValueError, match="complete proof path"):
         PlanConformanceGate([_signature()]).validate(plan)
 
 
@@ -295,8 +323,16 @@ def test_component_semantic_roles_cannot_be_split_across_checks() -> None:
         )
         root.depends_on.append(node_id)
 
-    with pytest.raises(ValueError, match="must declare every required semantic role"):
+    with pytest.raises(ValueError, match="complete proof path"):
         PlanConformanceGate([_signature()]).validate(ProofPlan.model_validate(plan.model_dump()))
+
+
+def test_component_proof_paths_must_be_alternatives() -> None:
+    plan = _plan()
+    next(node for node in plan.nodes if node.id == "path.components").kind = "ALL"
+
+    with pytest.raises(ValueError, match="not independently sufficient"):
+        PlanConformanceGate([_signature()]).validate(plan)
 
 
 def test_component_role_error_reports_every_invalid_check() -> None:
@@ -321,8 +357,8 @@ def test_component_role_error_reports_every_invalid_check() -> None:
         PlanConformanceGate([_signature()]).validate(ProofPlan.model_validate(plan.model_dump()))
 
     message = str(exc_info.value)
-    assert "CHECK 'check.components' missing" in message
-    assert "CHECK 'check.components.second' missing" in message
+    assert "CHECK 'check.components' has roles" in message
+    assert "CHECK 'check.components.second' has roles" in message
 
 
 def test_signature_hash_is_order_independent_and_tracks_the_empty_set() -> None:
@@ -437,6 +473,9 @@ def test_conformance_allows_one_check_to_cover_multiple_facets() -> None:
     plan = _plan()
     shared = next(node for node in plan.nodes if node.id == "check.components")
     shared.facet_refs.append("final_total")
+    treatment = next(node for node in plan.nodes if node.id == "check.component-treatment")
+    treatment.facet_refs.append("final_total")
+    treatment.policy_refs = [POLICY_REF]
     plan.nodes = [node for node in plan.nodes if node.id != "check.final"]
     root = next(node for node in plan.nodes if node.id == "root.calculation")
     root.depends_on.remove("check.final")

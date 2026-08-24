@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from app.compiler_runtime.runtime import _planning_source_documents
 from scripts.run_compiler_phase_replay import load_model_call
 
 
@@ -37,3 +38,9 @@ def test_load_model_call_rejects_missing_index(tmp_path) -> None:
 
     with pytest.raises(IndexError, match="found 0"):
         load_model_call(events, role="fine_verifier")
+
+
+def test_snapshot_evidence_items_lower_to_identity_free_compiler_documents() -> None:
+    assert _planning_source_documents(
+        [{"id": "ev-secret", "type": "invoice", "content": "INVOICE\nTOTAL 10 EUR"}]
+    ) == [{"document_index": 1, "kind": "invoice", "content": "INVOICE\nTOTAL 10 EUR"}]

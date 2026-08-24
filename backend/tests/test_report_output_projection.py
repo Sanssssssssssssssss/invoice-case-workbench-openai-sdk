@@ -12,6 +12,7 @@ from app.compiler_runtime.consumer import (
     ConsumerLineage,
     ConsumerRootDecision,
     finalize_consumer_report,
+    render_consumer_report,
     validate_canonical_report_projection,
 )
 from app.compiler_runtime.proof_terms import (
@@ -214,6 +215,24 @@ def test_percent_literal_inside_canonical_claim_text_is_admitted() -> None:
     assert validate_canonical_report_projection("法定增值税率：20%", packet) == "法定增值税率：20%"
     with pytest.raises(ValueError, match="business numeric value.*21%"):
         validate_canonical_report_projection("税率：21%", packet)
+
+
+def test_deterministic_report_does_not_attach_currency_to_embedded_percentage() -> None:
+    packet = _packet()
+    packet.claims = [
+        item.model_copy(
+            update={"value": "-2.5% (2.817,38 EUR)", "currency": "EUR"}
+        )
+        if item.id == "claim_rate"
+        else item
+        for item in packet.claims
+    ]
+
+    markdown = render_consumer_report(packet)
+
+    assert "EUR -2.5%" not in markdown
+    assert "-2.5% (2.817,38 EUR)" in markdown
+    assert validate_canonical_report_projection(markdown, packet) == markdown
 
 
 @pytest.mark.parametrize(

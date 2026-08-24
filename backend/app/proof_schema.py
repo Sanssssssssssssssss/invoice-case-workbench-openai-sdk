@@ -11,6 +11,7 @@ SemanticRole = Literal[
     "COMPONENT_OBSERVATION",
     "COMPONENT_APPLICABILITY",
     "COMPONENT_RECONCILIATION",
+    "COMPONENT_TREATMENT",
 ]
 
 
@@ -25,16 +26,9 @@ class _SignatureModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ProofFacet(_SignatureModel):
-    id: str
+class ProofPath(_SignatureModel):
     minimum_proof_terms: list[ProofTerm]
-    semantic_contract: str = ""
-    required_semantic_roles: list[SemanticRole] = Field(default_factory=list)
-
-    @field_validator("id")
-    @classmethod
-    def validate_id(cls, value: str) -> str:
-        return _non_empty(value, "facet id")
+    semantic_roles: list[SemanticRole] = Field(default_factory=list)
 
     @field_validator("minimum_proof_terms")
     @classmethod
@@ -45,23 +39,50 @@ class ProofFacet(_SignatureModel):
             raise ValueError("minimum_proof_terms must not contain duplicates")
         return value
 
+    @field_validator("semantic_roles")
+    @classmethod
+    def validate_semantic_roles(cls, value: list[SemanticRole]) -> list[SemanticRole]:
+        if len(set(value)) != len(value):
+            raise ValueError("semantic_roles must not contain duplicates")
+        return value
+
+
+class ProofFacet(_SignatureModel):
+    id: str
+    proof_paths: list[ProofPath]
+    semantic_contract: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _non_empty(value, "facet id")
+
     @field_validator("semantic_contract")
     @classmethod
     def validate_semantic_contract(cls, value: str) -> str:
         return value.strip()
 
-    @field_validator("required_semantic_roles")
-    @classmethod
-    def validate_semantic_roles(cls, value: list[SemanticRole]) -> list[SemanticRole]:
-        if len(set(value)) != len(value):
-            raise ValueError("required_semantic_roles must not contain duplicates")
-        return value
-
     @model_validator(mode="after")
     def validate_semantic_shape(self) -> ProofFacet:
-        if self.required_semantic_roles and not self.semantic_contract:
-            raise ValueError("required_semantic_roles require a semantic_contract")
+        if not self.proof_paths:
+            raise ValueError("proof_paths must not be empty")
+        role_sets = [frozenset(path.semantic_roles) for path in self.proof_paths]
+        if len(set(role_sets)) != len(role_sets):
+            raise ValueError("proof_paths must have unique semantic_roles")
+        if any(path.semantic_roles for path in self.proof_paths) and not self.semantic_contract:
+            raise ValueError("semantic_roles require a semantic_contract")
         return self
+
+    @property
+    def semantic_roles(self) -> frozenset[SemanticRole]:
+        return frozenset(role for path in self.proof_paths for role in path.semantic_roles)
+
+    def path_for_roles(self, roles: list[SemanticRole]) -> ProofPath | None:
+        selected = self.semantic_roles.intersection(roles)
+        return next(
+            (path for path in self.proof_paths if frozenset(path.semantic_roles) == selected),
+            None,
+        )
 
 
 class ProofSignature(_SignatureModel):
@@ -97,6 +118,7 @@ class ProofSignature(_SignatureModel):
 
 __all__ = [
     "ProofFacet",
+    "ProofPath",
     "ProofSignature",
     "ProofTerm",
     "RootComposition",

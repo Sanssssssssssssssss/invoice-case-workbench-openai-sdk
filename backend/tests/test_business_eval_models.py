@@ -105,16 +105,22 @@ def test_business_invoice_oracles_have_strict_three_way_distribution() -> None:
 
 
 @pytest.mark.parametrize(
-    "case_id",
-    ["invoice_subtotal_conflict_0006", "mixed_vat_subtotal_conflict_0044"],
+    ("case_id", "oracle_version"),
+    [
+        ("invoice_subtotal_conflict_0006", "5"),
+        ("mixed_vat_subtotal_conflict_0044", "6"),
+    ],
 )
-def test_subtotal_conflicts_require_independent_final_reconstruction_only(case_id: str) -> None:
+def test_subtotal_conflicts_require_independent_final_reconstruction_only(
+    case_id: str,
+    oracle_version: str,
+) -> None:
     oracle = load_oracle(ALL_CASES_ROOT / case_id)
     milestones = {milestone.id: milestone for milestone in oracle.milestones}
     fact_ids = {fact.id for fact in oracle.facts}
     relation_ids = {relation.id for relation in oracle.relations}
 
-    assert oracle.oracle_version == "5"
+    assert oracle.oracle_version == oracle_version
     assert milestones["subtotal_aggregation"].expected_status == "CONTRADICTED"
     assert milestones["line_derived_total_reconciliation"].expected_status == "SUPPORTED"
     assert milestones["line_derived_total_reconciliation"].facet_ref == "final_total"
@@ -162,21 +168,33 @@ def test_0053_adjustment_rate_preserves_source_sign() -> None:
 
     assert oracle.oracle_version == "6"
     assert rate.value == "-0.025"
-    version_five = {
-        "invoice_subtotal_conflict_0006",
+    version_five = {"invoice_subtotal_conflict_0006"}
+    version_six = {
         "mixed_vat_subtotal_conflict_0044",
+        "reverse_charge_arithmetic_supported_0020",
+        "tax_inclusive_arithmetic_supported_0053",
     }
     assert {
         path.name: load_oracle(path).oracle_version
         for path in ALL_CASES_ROOT.iterdir()
         if path.is_dir()
     } == {
-        path.name: "6" if path.name == "tax_inclusive_arithmetic_supported_0053" else (
+        path.name: "6" if path.name in version_six else (
             "5" if path.name in version_five else "4"
         )
         for path in ALL_CASES_ROOT.iterdir()
         if path.is_dir()
     }
+
+
+def test_0020_treatment_and_0044_signed_rate_match_the_source() -> None:
+    treatment_oracle = load_oracle(ALL_CASES_ROOT / "reverse_charge_arithmetic_supported_0020")
+    treatment = next(fact for fact in treatment_oracle.facts if fact.id == "tax_treatment")
+    signed_oracle = load_oracle(ALL_CASES_ROOT / "mixed_vat_subtotal_conflict_0044")
+    signed_rate = next(fact for fact in signed_oracle.facts if fact.id == "adjustment_1_rate_factor")
+
+    assert "reverse charge mechanism applies" in treatment.predicate_options
+    assert signed_rate.value == "-0.075"
 
 
 def test_legacy_eval_result_defaults_unknown_oracle_version() -> None:

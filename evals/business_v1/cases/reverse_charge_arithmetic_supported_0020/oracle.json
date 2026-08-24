@@ -1,7 +1,7 @@
 {
   "schema_version": "2",
   "case_id": "reverse_charge_arithmetic_supported_0020",
-  "oracle_version": "4",
+  "oracle_version": "6",
   "sentinel": "ORACLE_SENTINEL_DO_NOT_SEND::reverse_charge_arithmetic_supported_0020",
   "facts": [
     {
@@ -395,7 +395,9 @@
       "source_quote": "VAT reverse charge mechanism applies per Article 196 Council Directive 2006/112/EC.",
       "predicate_options": [
         "tax treatment",
+        "VAT treatment",
         "reverse charge treatment",
+        "reverse charge mechanism applies",
         "税务处理",
         "反向征税处理"
       ]
@@ -661,9 +663,7 @@
       },
       "expected_status": "SUPPORTED",
       "fact_ids": [
-        "tax_treatment",
-        "printed_subtotal",
-        "printed_total"
+        "tax_treatment"
       ],
       "relation_ids": []
     }

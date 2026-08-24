@@ -56,6 +56,13 @@ def test_configured_thinking_applies_to_every_model_role() -> None:
     assert role_thinking_type("summarizer", {}, configured) == "high"
 
 
+def test_verifier_uses_high_thinking_without_expanding_compiler_or_executor_cost() -> None:
+    assert role_thinking_type("task_compiler", {}, "disabled") == "disabled"
+    assert role_thinking_type("fine_verifier", {}, None) == "high"
+    assert role_thinking_type("executor", {}, None) == "disabled"
+    assert role_thinking_type("fine_verifier", {}, "disabled") == "high"
+
+
 def test_kimi_manager_tool_loop_disables_thinking_but_specialists_follow_configuration() -> None:
     settings = Settings(llm_model="kimi-k2.5", llm_temperature=0.1, llm_thinking_type="enabled")
     manager = CaseManagerAgentFactory(settings).build([])

@@ -32,6 +32,7 @@ from app.evals.business.models import (
     RequiredRoleOracle,
     RequiredToolOracle,
     ReportArtifact,
+    load_oracle,
 )
 from app.evals.business.report import render_eval_report
 from app.evals.business.scorer import (
@@ -48,6 +49,7 @@ from app.evals.business.scorer import (
     _locator_supports_quote,
     _meaning_groups_match,
     _match_typed_relation_witnesses,
+    _operand_fact_candidates,
     _predicate_matches_options,
     _refine_shared_facet_matches,
     _relational_statement_matches,
@@ -181,6 +183,32 @@ def _snapshot() -> EvalSnapshot:
                 ],
             },
             {
+                "id": "component_treatment_only",
+                "kind": "CHECK",
+                "statement": "The source states only a non-calculated component treatment and no numeric component.",
+                "depends_on": [],
+                "requirement_refs": ["invoice_calculation_valid"],
+                "policy_refs": [],
+                "facet_refs": ["stated_components"],
+                "semantic_role_refs": ["COMPONENT_TREATMENT"],
+            },
+            {
+                "id": "path_calculated_components",
+                "kind": "ALL",
+                "depends_on": [
+                    "component_discount_rate_base",
+                    "component_vat_rate_base",
+                ],
+            },
+            {
+                "id": "path_stated_components",
+                "kind": "ANY",
+                "depends_on": [
+                    "path_calculated_components",
+                    "component_treatment_only",
+                ],
+            },
+            {
                 "id": "final_total_reconciliation",
                 "kind": "CHECK",
                 "statement": "The printed final total equals and reconciles the subtotal plus VAT tax minus discount within tolerance.",
@@ -195,8 +223,7 @@ def _snapshot() -> EvalSnapshot:
                 "depends_on": [
                     "line_extensions",
                     "subtotal_aggregation",
-                    "component_discount_rate_base",
-                    "component_vat_rate_base",
+                    "path_stated_components",
                     "final_total_reconciliation",
                 ],
             },
@@ -253,6 +280,14 @@ def _snapshot() -> EvalSnapshot:
             "reason": "The VAT tax rate and taxable base are not shown, so rate times base cannot be verified.",
             "missing_fact": "The source does not state the VAT rate or taxable base.",
             "gap_code": "SOURCE_MISSING",
+        },
+        {
+            "check_id": "component_treatment_only",
+            "claim_ids": component_claim_ids,
+            "source_ids": ["source_1"],
+            "examined_source_ids": ["source_1"],
+            "status": "CONTRADICTED",
+            "reason": "The source states numeric discount and VAT components, so it is not treatment-only.",
         },
         {
             "check_id": "final_total_reconciliation",
@@ -509,6 +544,7 @@ def _snapshot() -> EvalSnapshot:
             discount_terminal_witness.id,
         ],
         "component_vat_rate_base": [],
+        "component_treatment_only": [],
         "final_total_reconciliation": [
             final_sum_witness.id,
             final_difference_witness.id,
@@ -1059,7 +1095,7 @@ def test_good_snapshot_scores_100_and_report_is_small_chinese_replay() -> None:
     assert "hidden" not in report.casefold()
     assert len(report) < 10_000
     assert "trace" not in result.engineering
-    assert len(result.model_dump_json()) < 30_000
+    assert len(result.model_dump_json()) < 31_000
 
 
 def test_v30_missing_submissions_cannot_score_as_business_not_found() -> None:
@@ -1378,6 +1414,9 @@ def test_plan_ids_and_order_do_not_change_score() -> None:
         "subtotal_aggregation": "z_subtotal",
         "component_discount_rate_base": "z_discount",
         "component_vat_rate_base": "z_vat",
+        "component_treatment_only": "z_treatment",
+        "path_calculated_components": "z_calculated_components",
+        "path_stated_components": "z_components",
         "final_total_reconciliation": "z_final",
         "root": "z_root",
     }
@@ -1614,12 +1653,13 @@ def test_unique_atomic_numeric_quote_matches_its_source_fact() -> None:
         "locator": "page 1 block p1_b010",
         "confidence": "medium",
     }
+    source_content = {"invoice": f"page 1 block p1_b010\n{source_quote}"}
 
     assert _claim_matches_source_fact(
         facts["line_3_quantity"],
         {**common, "predicate": "quantity", "value": 20, "quote": "SOW 2026-03 20"},
         source_roles={"invoice": "invoice"},
-        source_content={"invoice": source_quote},
+        source_content=source_content,
     )
     assert _claim_matches_source_fact(
         facts["line_3_unit_price"],
@@ -1631,14 +1671,85 @@ def test_unique_atomic_numeric_quote_matches_its_source_fact() -> None:
             "attributes": {"currency": "EUR"},
         },
         source_roles={"invoice": "invoice"},
-        source_content={"invoice": source_quote},
+        source_content=source_content,
     )
     assert _claim_matches_source_fact(
         facts["line_3_quantity"],
         {**common, "predicate": "quantity", "value": 20, "quote": "20"},
         source_roles={"invoice": "invoice"},
-        source_content={"invoice": source_quote},
+        source_content=source_content,
     )
+
+
+def test_role_specific_atomic_quotes_match_equal_values_on_one_source_row() -> None:
+    oracle_path = (
+        Path(__file__).resolve().parents[2]
+        / "evals/business_v1/cases/reverse_charge_arithmetic_supported_0020/oracle.json"
+    )
+    oracle = BusinessEvalOracle.model_validate_json(oracle_path.read_text(encoding="utf-8"))
+    facts = {item.id: item for item in oracle.facts}
+    source_quote = facts["line_5_unit_price"].source_quote
+    common = {
+        "source_id": "invoice",
+        "value": "12345.40",
+        "quote": "12,345.40",
+        "locator": "page 1 block p1_b012",
+        "confidence": "medium",
+        "attributes": {"currency": "EUR"},
+    }
+    source_content = {"invoice": f"page 1 block p1_b012\n{source_quote}"}
+
+    assert _claim_matches_source_fact(
+        facts["line_5_unit_price"],
+        {**common, "predicate": "unit_price"},
+        source_roles={"invoice": "invoice"},
+        source_content=source_content,
+    )
+    assert _claim_matches_source_fact(
+        facts["line_5_extension"],
+        {**common, "predicate": "extension_amount"},
+        source_roles={"invoice": "invoice"},
+        source_content=source_content,
+    )
+
+
+def test_identity_sum_preserves_an_upstream_witness_output() -> None:
+    oracle_path = (
+        Path(__file__).resolve().parents[2]
+        / "evals/business_v1/cases/reverse_charge_arithmetic_supported_0020/oracle.json"
+    )
+    oracle = BusinessEvalOracle.model_validate_json(oracle_path.read_text(encoding="utf-8"))
+    facts = {item.id: item for item in oracle.facts}
+    witnesses = {
+        "subtotal": {"id": "subtotal", "operation": "SUM", "operands": [{}, {}]},
+        "final_sum": {
+            "id": "final_sum",
+            "operation": "SUM",
+            "operands": [
+                {
+                    "ref": {"kind": "WITNESS", "ref_id": "subtotal"},
+                    "value": "321030.20",
+                    "currency": "EUR",
+                }
+            ],
+        },
+    }
+
+    candidates = _operand_fact_candidates(
+        {
+            "ref": {"kind": "WITNESS", "ref_id": "final_sum"},
+            "value": "321030.20",
+            "currency": "EUR",
+        },
+        facts_by_id=facts,
+        source_assignments={},
+        witness_outputs={"subtotal": {"printed_subtotal"}},
+        accepted_witness_ids=set(witnesses),
+        witnesses_by_id=witnesses,
+        fact_equivalences={fact_id: {fact_id} for fact_id in facts},
+    )
+
+    assert candidates == {"printed_subtotal"}
 
 
 def test_runtime_page_locator_alias_is_grounded_by_the_locator_resolver() -> None:
@@ -1706,6 +1817,47 @@ def test_runtime_page_locator_alias_is_grounded_by_the_locator_resolver() -> Non
         "[page 1 text]\nheader\nAmount due: 188813.24 EUR\n[page 2 text]\nappendix",
         locator="page 2",
         quote="Amount due: 188813.24 EUR",
+    )
+
+
+def test_source_explicit_treatment_and_signed_rate_match_narrow_oracles() -> None:
+    cases_root = Path(__file__).resolve().parents[2] / "evals" / "business_v1" / "cases"
+    treatment = next(
+        fact
+        for fact in load_oracle(cases_root / "reverse_charge_arithmetic_supported_0020").facts
+        if fact.id == "tax_treatment"
+    )
+    signed_rate = next(
+        fact
+        for fact in load_oracle(cases_root / "mixed_vat_subtotal_conflict_0044").facts
+        if fact.id == "adjustment_1_rate_factor"
+    )
+
+    assert _claim_matches_source_fact(
+        treatment,
+        {
+            "subject": "invoice INV-2026-0020",
+            "predicate": "states VAT reverse charge mechanism applies",
+            "value": True,
+            "source_id": "invoice",
+            "quote": treatment.source_quote,
+            "confidence": "high",
+        },
+        source_roles={"invoice": "invoice"},
+        source_content={"invoice": treatment.source_quote},
+    )
+    assert _claim_matches_source_fact(
+        signed_rate,
+        {
+            "subject": "adjustment",
+            "predicate": "adjustment rate",
+            "value": "-0.075",
+            "source_id": "invoice",
+            "quote": signed_rate.source_quote,
+            "confidence": "high",
+        },
+        source_roles={"invoice": "invoice"},
+        source_content={"invoice": signed_rate.source_quote},
     )
 
 

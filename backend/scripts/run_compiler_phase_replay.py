@@ -15,9 +15,11 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.compiler_runtime.models import ProofPlan  # noqa: E402
+from app.agents.thinking import role_thinking_type  # noqa: E402
 from app.compiler_runtime.runtime import (  # noqa: E402
     EvidenceCompilerRuntime,
     VerificationBatch,
+    _planning_source_documents,
     _task_compiler_repair_payload,
     _verifier_contracts,
 )
@@ -42,6 +44,11 @@ def main() -> int:
     parser.add_argument("--thinking", choices=("inherit", "disabled", "high"), default="inherit")
     parser.add_argument("--model", default="")
     parser.add_argument(
+        "--source-snapshot",
+        type=Path,
+        help="For TaskCompiler, add complete source documents from a run snapshot.",
+    )
+    parser.add_argument(
         "--repair-source-draft",
         action="store_true",
         help="For TaskCompiler, replay only the repair of the frozen raw draft and its current Gate error.",
@@ -52,6 +59,15 @@ def main() -> int:
     phase_payload = model_call.get("payload")
     if not isinstance(phase_payload, dict):
         raise ValueError("Selected model call has no complete phase payload")
+    if args.source_snapshot:
+        if args.role != "task_compiler":
+            parser.error("--source-snapshot is only valid for task_compiler")
+        snapshot = json.loads(args.source_snapshot.read_text(encoding="utf-8"))
+        evidence_items = ((snapshot.get("case_state") or {}).get("evidence_items") or [])
+        phase_payload = {
+            **phase_payload,
+            "source_documents": _planning_source_documents(evidence_items),
+        }
 
     settings = get_settings()
     updates: dict[str, Any] = {}
@@ -64,6 +80,11 @@ def main() -> int:
     llm = LlmClient(settings)
     runtime = EvidenceCompilerRuntime(llm, settings=settings)
     name, prompt_file, output_type = ROLE_CONFIG[args.role]
+    effective_thinking = (
+        role_thinking_type(name, phase_payload, settings.llm_thinking_type)
+        if args.thinking == "inherit"
+        else args.thinking
+    )
     if args.repair_source_draft:
         if args.role != "task_compiler":
             parser.error("--repair-source-draft is only valid for task_compiler")
@@ -101,9 +122,10 @@ def main() -> int:
         "configuration": {
             "provider": settings.llm_provider,
             "model": settings.llm_model,
-            "thinking": settings.llm_thinking_type or "disabled",
+            "thinking": effective_thinking,
             "temperature": settings.llm_temperature,
             "repair_source_draft": args.repair_source_draft,
+            "source_snapshot": str(args.source_snapshot or ""),
         },
         "input_payload": phase_payload,
     }
@@ -115,6 +137,7 @@ def main() -> int:
             payload=phase_payload,
             output_type=output_type,
             max_turns=1,
+            thinking_override=None if args.thinking == "inherit" else args.thinking,
         )
         if args.role == "task_compiler":
             required = phase_payload.get("required_output") or {}
