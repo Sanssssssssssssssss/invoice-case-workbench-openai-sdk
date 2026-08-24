@@ -352,7 +352,7 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "A component rate/base gap does not erase its narrower grounded amount/sign" in compiler
     assert "Claims are append-only and existing Claim content is immutable" in executor
     assert "later unrelated Claims are allowed" in executor
-    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v28_batch_witnesses"
+    assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v29_no_list_sources"
     assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v27"
     assert "never bind a cross-Claim semantic relationship" in executor
     assert "only check_id, a facet_ref declared on that CHECK, an operation, and typed refs" in executor
@@ -719,7 +719,14 @@ def test_compute_witness_tool_schema_accepts_refs_but_no_raw_values_or_results()
         allowed_check_ids=["check.total"],
         allowed_check_facets={"check.total": ["final_total"]},
     )
-    tool = next(item for item in _sandbox_tools(sandbox) if item.name == "compute_witnesses")
+    tools = _sandbox_tools(sandbox)
+    assert [item.name for item in tools] == [
+        "read_source",
+        "bind_claim",
+        "compute_witnesses",
+        "submit_check",
+    ]
+    tool = next(item for item in tools if item.name == "compute_witnesses")
     properties = tool.params_json_schema["$defs"]["_ComputeWitnessInput"]["properties"]
 
     assert set(properties) == {"check_id", "facet_ref", "operation", "refs"}
