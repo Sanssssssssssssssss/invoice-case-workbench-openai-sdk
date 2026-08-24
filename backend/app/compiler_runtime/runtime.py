@@ -62,7 +62,7 @@ CHECK_FRONTIER_ATTEMPT_CAP = 2
 CHECK_MODEL_CALL_BUDGET = 4
 PROMPT_VERSIONS = {
     "task_compiler": "typed_task_compiler_v19",
-    "executor": "typed_evidence_executor_v21",
+    "executor": "typed_evidence_executor_v22",
     "verifier": "typed_fine_verifier_v22",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
