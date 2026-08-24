@@ -227,6 +227,7 @@ class _ExecutorConversation:
     sandbox: EvidenceSandbox
     input_items: list[Any] | None = None
     last_runtime_rejection: dict[str, Any] | None = None
+    provider_calls: int = 0
 
 
 class _CheckBudgetExhausted(RuntimeError):
@@ -544,7 +545,9 @@ class EvidenceCompilerRuntime:
                     model_budget=model_budget,
                 )
             if conversation is not None and run_results:
-                conversation.input_items = run_results[-1].to_input_list()
+                run_result = run_results[-1]
+                conversation.input_items = run_result.to_input_list()
+                conversation.provider_calls += len(getattr(run_result, "raw_responses", ()))
         except (ModelBehaviorError, UserError):
             submitted = {
                 check_id

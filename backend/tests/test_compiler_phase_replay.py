@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app.compiler_runtime.runtime import _planning_source_documents
-from scripts.run_compiler_phase_replay import load_model_call
+from scripts.run_compiler_phase_replay import _frozen_source_items, load_model_call
 
 
 def test_load_model_call_selects_complete_phase_payload(tmp_path) -> None:
@@ -38,6 +38,53 @@ def test_load_model_call_rejects_missing_index(tmp_path) -> None:
 
     with pytest.raises(IndexError, match="found 0"):
         load_model_call(events, role="fine_verifier")
+
+
+def test_load_model_call_selects_executor_check(tmp_path) -> None:
+    events = tmp_path / "events.jsonl"
+    rows = [
+        {
+            "kind": "model_call",
+            "name": "executor",
+            "payload": {"payload": {"focus_check_ids": [check_id]}},
+        }
+        for check_id in ("check_a", "check_b")
+    ]
+    events.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    call = load_model_call(events, role="executor", check_id="check_b")
+
+    assert call["payload"]["focus_check_ids"] == ["check_b"]
+
+
+def test_frozen_source_items_restore_persisted_source_identity() -> None:
+    items = _frozen_source_items(
+        {
+            "evidence_items": [
+                {
+                    "type": "invoice",
+                    "title": "invoice.pdf",
+                    "content": "TOTAL 10 EUR",
+                    "metadata": {
+                        "source_doc_id": "src_1",
+                        "source_fingerprint": "sha256:1",
+                    },
+                }
+            ]
+        }
+    )
+
+    assert items == [
+        {
+            "source_doc_id": "src_1",
+            "source_fingerprint": "sha256:1",
+            "already_persisted": True,
+            "source_id": "src_1",
+            "source_content": "TOTAL 10 EUR",
+            "name": "invoice.pdf",
+            "type": "invoice",
+        }
+    ]
 
 
 def test_snapshot_evidence_items_lower_to_identity_free_compiler_documents() -> None:
