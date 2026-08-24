@@ -650,10 +650,10 @@ class TurnRunner:
                     return self._waiting_approval_response(request, state, "", [result])
                 if result.get("status") != "blocked":
                     continue
-            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_patch(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_report(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
-            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_report(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_patch(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
             runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_materials_advice(request, state)
@@ -726,10 +726,10 @@ class TurnRunner:
                     return self._waiting_approval_response(request, state, "", [result])
                 if result.get("status") != "blocked":
                     continue
-            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_patch(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_report(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
-            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_report(request, state)
+            runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_patch(request, state)
             if runtime_final:
                 return self._finalize_runtime_policy_answer(request, state, runtime_final)
             runtime_final = "" if manager_rewrite_pending else self._deterministic_final_after_materials_advice(request, state)

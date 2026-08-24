@@ -578,6 +578,23 @@ def test_completed_report_delivery_overrides_manager_final_in_same_turn(
     assert "案件处理完成" not in response.reply
 
 
+def test_completed_partial_report_delivery_precedes_patch_summary(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    runner = runtime.runner
+    case_id = "case_partial_report_delivery"
+    runner.store.save(CaseState(case_id=case_id, status="collecting_materials"))
+    request = AgentTurnRequest(case_id=case_id, message="生成报告，只要 Markdown")
+    state = runner.harness.begin_run(case_id, request.message)
+    runner.harness.record_observation(state, {"kind": "tool", "name": "write_case_patch"})
+    _persist_test_report(runner, state, "# 审核报告\n\n### 摘要结论\n\n票面总额 10.00 EUR。\n")
+
+    response = runner._run_until_final(request, state)  # noqa: SLF001
+
+    assert "报告已生成" in response.reply
+    assert "Markdown：reports/final_report_" in response.reply
+    assert "本轮 Evidence Compiler 结果已经写入案卷" not in response.reply
+
+
 @pytest.mark.parametrize(
     ("role", "role_result"),
     [
