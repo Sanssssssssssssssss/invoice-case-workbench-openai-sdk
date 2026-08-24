@@ -95,15 +95,26 @@ class PlanConformanceGate:
                     f"Required facet {facet.id!r} is not reachable from "
                     f"requirement root {signature.requirement_id!r}"
                 )
-            for node in facet_checks:
-                missing_roles = sorted(
+            missing_roles_by_check = {
+                node.id: sorted(
                     set(facet.required_semantic_roles) - set(node.semantic_role_refs)
                 )
-                if missing_roles:
-                    raise ValueError(
-                        f"Required facet {facet.id!r} CHECK {node.id!r} must declare every "
-                        f"required semantic role: {missing_roles}"
-                    )
+                for node in facet_checks
+            }
+            missing_roles_by_check = {
+                check_id: missing
+                for check_id, missing in missing_roles_by_check.items()
+                if missing
+            }
+            if missing_roles_by_check:
+                details = "; ".join(
+                    f"CHECK {check_id!r} missing {missing}"
+                    for check_id, missing in sorted(missing_roles_by_check.items())
+                )
+                raise ValueError(
+                    f"Required facet {facet.id!r} CHECKs must declare every required "
+                    f"semantic role on each CHECK: {details}"
+                )
 
             if "WITNESS" in facet.minimum_proof_terms:
                 for node in facet_checks:

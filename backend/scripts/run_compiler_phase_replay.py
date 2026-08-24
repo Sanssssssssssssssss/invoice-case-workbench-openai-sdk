@@ -18,6 +18,7 @@ from app.compiler_runtime.models import ProofPlan  # noqa: E402
 from app.compiler_runtime.runtime import (  # noqa: E402
     EvidenceCompilerRuntime,
     VerificationBatch,
+    _task_compiler_repair_payload,
 )
 from app.config import get_settings  # noqa: E402
 from app.llm import LlmClient  # noqa: E402
@@ -39,6 +40,11 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--thinking", choices=("inherit", "disabled", "high"), default="inherit")
     parser.add_argument("--model", default="")
+    parser.add_argument(
+        "--repair-source-draft",
+        action="store_true",
+        help="For TaskCompiler, replay only the repair of the frozen raw draft and its current Gate error.",
+    )
     args = parser.parse_args()
 
     model_call = load_model_call(args.events, role=args.role, index=args.index)
@@ -57,6 +63,21 @@ def main() -> int:
     llm = LlmClient(settings)
     runtime = EvidenceCompilerRuntime(llm, settings=settings)
     name, prompt_file, output_type = ROLE_CONFIG[args.role]
+    if args.repair_source_draft:
+        if args.role != "task_compiler":
+            parser.error("--repair-source-draft is only valid for task_compiler")
+        previous_draft = ProofPlan.model_validate_json(str(model_call.get("raw_response") or ""))
+        required = phase_payload.get("required_output") or {}
+        try:
+            runtime._normalize_and_validate_task_plan(
+                previous_draft,
+                requirement_ids=list(required.get("active_requirement_ids") or []),
+                task_objective=str(required.get("objective") or "").strip(),
+            )
+        except ValueError as exc:
+            phase_payload = _task_compiler_repair_payload(phase_payload, exc, previous_draft)
+        else:
+            raise ValueError("Frozen TaskCompiler draft already passes the current Gate")
 
     result: dict[str, Any] = {
         "schema_version": "1",
@@ -76,6 +97,7 @@ def main() -> int:
             "model": settings.llm_model,
             "thinking": settings.llm_thinking_type or "disabled",
             "temperature": settings.llm_temperature,
+            "repair_source_draft": args.repair_source_draft,
         },
         "input_payload": phase_payload,
     }

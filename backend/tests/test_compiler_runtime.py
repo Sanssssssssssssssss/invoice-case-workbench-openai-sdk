@@ -614,6 +614,46 @@ def test_task_compiler_validation_retry_is_bounded_to_one_attempt(
     assert attempts == 2
 
 
+def test_task_compiler_retries_one_gate_rejected_draft_with_exact_error(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    payloads: list[dict] = []
+    gate_calls = 0
+
+    def fake_phase(**kwargs):
+        payloads.append(kwargs["payload"])
+        runtime.llm.calls.append(SimpleNamespace(recovered_by="", retry_of=""))
+        return _plan()
+
+    def fake_gate(_self, _plan):
+        nonlocal gate_calls
+        gate_calls += 1
+        if gate_calls == 1:
+            raise ValueError("Required facet 'stated_components' is not reachable")
+
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+    monkeypatch.setattr(
+        "app.compiler_runtime.runtime.PlanConformanceGate.validate",
+        fake_gate,
+    )
+
+    compiled = runtime.compile_task(
+        active_requirement_ids=["vendor_identity"],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        source_catalog=[],
+    )
+
+    assert compiled == _plan()
+    assert len(payloads) == 2
+    feedback = payloads[1]["repair_feedback"]
+    assert feedback["validation_error"] == "Required facet 'stated_components' is not reachable"
+    assert feedback["previous_draft"] == _plan().model_dump(mode="json")
+    assert runtime.llm.calls[0].recovered_by == "task_compiler_validation_retry_success"
+    assert runtime.llm.calls[1].retry_of == "task_compiler:validation_attempt_1"
+
+
 def test_compute_witness_tool_schema_accepts_refs_but_no_raw_values_or_results() -> None:
     sandbox = EvidenceSandbox(
         sources=[],

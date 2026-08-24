@@ -288,6 +288,7 @@ class EvidenceCompilerRuntime:
             "extraction_summary": _planning_extraction_summary(extraction_summary),
             "required_output": required_output,
         }
+        plan: ProofPlan | None = None
         try:
             plan = self._run_phase(
                 name="task_compiler",
@@ -296,30 +297,29 @@ class EvidenceCompilerRuntime:
                 output_type=ProofPlan,
                 max_turns=1,
             )
-        except ModelBehaviorError as exc:
+            plan = self._normalize_and_validate_task_plan(
+                plan,
+                requirement_ids=requirement_ids,
+                task_objective=task_objective,
+            )
+        except (ModelBehaviorError, ValueError) as exc:
             failed_call = self.llm.calls[-1] if self.llm.calls else None
             plan = self._run_phase(
                 name="task_compiler",
                 prompt_file="task_compiler.md",
-                payload={
-                    **payload,
-                    "repair_feedback": {
-                        "instruction": "Return one corrected ProofPlan; preserve the supplied scope and objective.",
-                        "validation_error": str(exc),
-                    },
-                },
+                payload=_task_compiler_repair_payload(payload, exc, plan),
                 output_type=ProofPlan,
                 max_turns=1,
             )
-            if failed_call is not None:
-                failed_call.recovered_by = "task_compiler_validation_retry_success"
             if self.llm.calls:
                 self.llm.calls[-1].retry_of = "task_compiler:validation_attempt_1"
-        plan = self._normalize_and_validate_task_plan(
-            plan,
-            requirement_ids=requirement_ids,
-            task_objective=task_objective,
-        )
+            plan = self._normalize_and_validate_task_plan(
+                plan,
+                requirement_ids=requirement_ids,
+                task_objective=task_objective,
+            )
+            if failed_call is not None:
+                failed_call.recovered_by = "task_compiler_validation_retry_success"
         self._progress(
             "model_thinking",
             stage="task_compiler",
@@ -2474,6 +2474,20 @@ def _planning_source_catalog(items: Sequence[Mapping[str, Any]]) -> list[dict[st
             0, int(item.get("characters") or 0)
         )
     return [grouped[kind] for kind in sorted(grouped)]
+
+
+def _task_compiler_repair_payload(
+    payload: Mapping[str, Any],
+    error: Exception,
+    previous_draft: ProofPlan | None = None,
+) -> dict[str, Any]:
+    feedback: dict[str, Any] = {
+        "instruction": "Return one corrected ProofPlan; preserve the supplied scope and objective.",
+        "validation_error": str(error),
+    }
+    if previous_draft is not None:
+        feedback["previous_draft"] = previous_draft.model_dump(mode="json")
+    return {**payload, "repair_feedback": feedback}
 
 
 def _planning_extraction_summary(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

@@ -295,6 +295,32 @@ def test_component_semantic_roles_cannot_be_split_across_checks() -> None:
         PlanConformanceGate([_signature()]).validate(ProofPlan.model_validate(plan.model_dump()))
 
 
+def test_component_role_error_reports_every_invalid_check() -> None:
+    plan = _plan()
+    component = next(node for node in plan.nodes if node.id == "check.components")
+    component.semantic_role_refs = ["COMPONENT_OBSERVATION"]
+    root = next(node for node in plan.nodes if node.id == "root.calculation")
+    plan.nodes.append(
+        ProofNode(
+            id="check.components.second",
+            kind="CHECK",
+            statement="The second component is independently verified.",
+            requirement_refs=[REQUIREMENT_ID],
+            policy_refs=[POLICY_REF],
+            facet_refs=["stated_components"],
+            semantic_role_refs=["COMPONENT_APPLICABILITY"],
+        )
+    )
+    root.depends_on.append("check.components.second")
+
+    with pytest.raises(ValueError) as exc_info:
+        PlanConformanceGate([_signature()]).validate(ProofPlan.model_validate(plan.model_dump()))
+
+    message = str(exc_info.value)
+    assert "CHECK 'check.components' missing" in message
+    assert "CHECK 'check.components.second' missing" in message
+
+
 def test_signature_hash_is_order_independent_and_tracks_the_empty_set() -> None:
     active = proof_signature_hash_for(["invoice", REQUIREMENT_ID])
 
