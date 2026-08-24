@@ -23,6 +23,11 @@ from .proof_terms import (
 
 
 _LINE_LOCATOR = re.compile(r"\blines?\s+(\d+)(?:\s*[-:]\s*(\d+))?\b", re.IGNORECASE)
+_PAGE_TEXT_LOCATOR = re.compile(
+    r"\bpage\s+(\d+)(?:\s+(?:text|body(?:\s+text)?))?\s*$",
+    re.IGNORECASE,
+)
+_PAGE_NUMBER_LOCATOR = re.compile(r"\bpage\s+(\d+)\b", re.IGNORECASE)
 _NUMERIC_VALUE = re.compile(r"^[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)\s*%?$")
 _QUOTE_NUMBER = re.compile(
     r"(?<![\w])(?:[-+]\s*(?:(?:[A-Z]{3}|[$€£¥])\s*)?)?(?:\(\s*)?"
@@ -39,6 +44,31 @@ _PERCENT_NUMERIC_OBSERVATION_REPAIR = (
     "percentage (for example, printed 20% -> Claim value string '0.20'; JSON float "
     "0.2, value 20, and string '20%' are invalid for that example)."
 )
+
+
+def locator_supports_quote(content: str, *, locator: str, quote: str) -> bool:
+    """Return whether a persisted locator resolves to the quoted source text."""
+    if not content or not locator or not quote:
+        return False
+    page_match = _PAGE_TEXT_LOCATOR.search(locator)
+    if page_match:
+        marker = re.search(
+            rf"\[page\s+{re.escape(page_match.group(1))}\s+text\]",
+            content,
+            re.IGNORECASE,
+        )
+        if marker:
+            next_page = re.search(r"\[page\s+\d+\s+text\]", content[marker.end() :], re.IGNORECASE)
+            end = marker.end() + next_page.start() if next_page else len(content)
+            return quote in content[marker.end() : end]
+    locator_positions = [match.start() for match in re.finditer(re.escape(locator), content)]
+    quote_positions = [match.start() for match in re.finditer(re.escape(quote), content)]
+    return any(
+        len(content[min(locator_pos, quote_pos) : max(locator_pos + len(locator), quote_pos + len(quote))]) <= 1200
+        and content[min(locator_pos, quote_pos) : max(locator_pos + len(locator), quote_pos + len(quote))].count("\n") <= 6
+        for locator_pos in locator_positions
+        for quote_pos in quote_positions
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,6 +427,31 @@ class EvidenceSandbox:
         normalized_locator, locator_error = self._normalize_locator(locator, source.content)
         if locator_error is not None:
             return self._failure("bind_claim", source_id=source_id, **locator_error)
+        if (
+            quote in source.content
+            and not _LINE_LOCATOR.search(normalized_locator)
+            and not locator_supports_quote(
+                source.content,
+                locator=normalized_locator,
+                quote=quote,
+            )
+        ):
+            page_match = _PAGE_NUMBER_LOCATOR.search(normalized_locator)
+            page_locator = f"page {page_match.group(1)} text" if page_match else ""
+            if page_locator and locator_supports_quote(
+                source.content,
+                locator=page_locator,
+                quote=quote,
+            ):
+                normalized_locator = page_locator
+            else:
+                return self._failure(
+                    "bind_claim",
+                    code="LOCATOR_QUOTE_MISMATCH",
+                    message="The locator does not resolve to the quoted source text.",
+                    repair="Use the page-text or block locator that contains the exact quote.",
+                    source_id=source_id,
+                )
 
         subject = subject.strip()
         predicate = predicate.strip()

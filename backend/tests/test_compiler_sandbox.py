@@ -98,6 +98,39 @@ def test_claim_requires_a_prior_read_and_exact_source_quote() -> None:
     assert sandbox.evidence_ir.claims == []
 
 
+def test_bind_claim_downgrades_a_truncated_block_locator_to_page_text() -> None:
+    quote = "SEO audit: 10 × EUR -1,506.80 = EUR -15,068.00."
+    sandbox = EvidenceSandbox(
+        sources=[
+            SourceRecord(
+                source_id="invoice",
+                content=(
+                    f"[page 1 text]\n{quote}\n"
+                    + ("metadata padding\n" * 80)
+                    + "BLOCKS:\n"
+                    '"text": "SEO audit...[truncated]",\n'
+                    '"locator": "page 1 block p1_b002"'
+                ),
+            )
+        ],
+        allowed_check_ids=["check-lines"],
+    )
+    sandbox.read_source("invoice")
+
+    result = sandbox.bind_claim(
+        subject="SEO audit",
+        predicate="extension_amount",
+        value="-15068.00",
+        source_id="invoice",
+        quote=quote,
+        locator="page 1 block p1_b002",
+        attributes={"currency": "EUR"},
+    )
+
+    assert result["ok"] is True
+    assert result["claim"]["locator"] == "page 1 text"
+
+
 def test_system_provenance_is_read_gated_and_quoteable_without_claiming_authenticity() -> None:
     sandbox = EvidenceSandbox(
         sources=[

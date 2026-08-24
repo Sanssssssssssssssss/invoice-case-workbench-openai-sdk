@@ -9,6 +9,7 @@ from typing import Any
 from app.compiler_runtime.graph_walk import reachable_ids as walk_reachable_ids
 from app.compiler_runtime.kernel import compile_review_artifact
 from app.compiler_runtime.models import CompiledProof, EvidenceIR, ProofPlan, ReviewArtifact
+from app.compiler_runtime.sandbox import locator_supports_quote
 from app.domain.invoice_requirements import requirement_owner
 
 from .models import (
@@ -25,7 +26,7 @@ from .models import (
 )
 
 
-SCORER_VERSION = "business_eval_scorer_v3.6"
+SCORER_VERSION = "business_eval_scorer_v3.8"
 
 STAGE_WEIGHTS: dict[str, Decimal] = {
     "understanding": Decimal("10"),
@@ -1575,7 +1576,8 @@ def _predicate_key(value: Any) -> str:
     # purposes; keeping ``_`` as a token character created broad false
     # negatives on otherwise grounded real runs.
     terms = re.sub(r"[_\W]+", " ", str(value or "").casefold()).split()
-    return " ".join("extension" if term == "extended" else term for term in terms)
+    normalized = " ".join("extension" if term == "extended" else term for term in terms)
+    return "line amount" if normalized == "lump sum amount" else normalized
 
 
 def _predicate_matches_options(value: Any, options: list[str]) -> bool:
@@ -1654,11 +1656,11 @@ def _claim_semantics_match_source_fact(
         return True
     observed = _identifier_terms(
         f"{claim.get('subject', '')} {claim.get('predicate', '')}"
-    ) - {"has", "have", "is", "invoice", "document"}
+    ) - {"has", "have", "is", "invoice", "document", "printed", "stated"}
     if not observed:
         return False
     for option in fact.predicate_options:
-        expected = _identifier_terms(option)
+        expected = _identifier_terms(option) - {"printed", "stated"}
         if "inclusive" in expected:
             expected -= {"price", "treatment"}
         if not expected:
@@ -1672,40 +1674,18 @@ def _claim_semantics_match_source_fact(
             "has",
             "have",
             "is",
+            "printed",
+            "stated",
         }
-        if predicate_terms and predicate_terms.issubset(expected):
+        if (
+            predicate_terms - {"amount", "value"}
+            and predicate_terms.issubset(expected)
+        ):
             return True
     return False
 
 
-def _locator_supports_quote(content: str, *, locator: str, quote: str) -> bool:
-    """Require the locator and quote to resolve to the same local source neighborhood."""
-    page_text = re.search(
-        r"\bpage\s+(\d+)(?:\s+(?:text|body(?:\s+text)?))?\s*$",
-        locator,
-        re.IGNORECASE,
-    )
-    if page_text:
-        page_number = page_text.group(1)
-        marker = re.search(
-            rf"\[page\s+{re.escape(page_number)}\s+text\]",
-            content,
-            re.IGNORECASE,
-        )
-        if marker:
-            next_page = re.search(r"\[page\s+\d+\s+text\]", content[marker.end() :], re.IGNORECASE)
-            end = marker.end() + next_page.start() if next_page else len(content)
-            return quote in content[marker.end() : end]
-    locator_positions = [match.start() for match in re.finditer(re.escape(locator), content)]
-    quote_positions = [match.start() for match in re.finditer(re.escape(quote), content)]
-    for locator_pos in locator_positions:
-        for quote_pos in quote_positions:
-            start = min(locator_pos, quote_pos)
-            end = max(locator_pos + len(locator), quote_pos + len(quote))
-            neighborhood = content[start:end]
-            if len(neighborhood) <= 1200 and neighborhood.count("\n") <= 6:
-                return True
-    return False
+_locator_supports_quote = locator_supports_quote
 
 
 def _fact_expected(fact: ExpectedFact) -> dict[str, Any]:

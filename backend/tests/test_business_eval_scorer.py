@@ -1559,6 +1559,22 @@ def test_source_fact_matching_normalizes_snake_case_percent_and_quote_alternativ
         source_roles={"invoice": "invoice"},
         source_content={"invoice": tax_fact.source_quote},
     )
+    total_oracle = BusinessEvalOracle.model_validate_json(
+        (
+            Path(__file__).resolve().parents[2]
+            / "evals/business_v1/cases/invoice_arithmetic_supported_0005/oracle.json"
+        ).read_text(encoding="utf-8")
+    )
+    total_fact = next(item for item in total_oracle.facts if item.id == "printed_total")
+    assert _claim_semantics_match_source_fact(
+        total_fact,
+        {"subject": "Invoice total", "predicate": "stated_total"},
+    )
+    assert not _claim_semantics_match_source_fact(
+        total_fact,
+        {"subject": "VAT component amount", "predicate": "stated_amount"},
+    )
+    assert _predicate_matches_options("lump_sum_amount", ["line amount"])
 
 
 def test_v33_milestone_lineage_follows_only_declared_upstream_checks() -> None:
