@@ -19,6 +19,7 @@ from app.compiler_runtime.runtime import (  # noqa: E402
     EvidenceCompilerRuntime,
     VerificationBatch,
     _task_compiler_repair_payload,
+    _verifier_contracts,
 )
 from app.config import get_settings  # noqa: E402
 from app.llm import LlmClient  # noqa: E402
@@ -78,6 +79,11 @@ def main() -> int:
             phase_payload = _task_compiler_repair_payload(phase_payload, exc, previous_draft)
         else:
             raise ValueError("Frozen TaskCompiler draft already passes the current Gate")
+    elif args.role == "fine_verifier":
+        phase_payload = {
+            **phase_payload,
+            "verification_contracts": _verifier_contracts(phase_payload.get("checks") or []),
+        }
 
     result: dict[str, Any] = {
         "schema_version": "1",

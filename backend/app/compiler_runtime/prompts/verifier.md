@@ -7,6 +7,7 @@ For every CHECK in the supplied ProofPlan, classify the check as exactly one of:
 
 Rules:
 - Evaluate every CHECK separately.
+- Apply each supplied `verification_contract` to the focused CHECK. It narrows the relevant task semantics but is not evidence and cannot override the source.
 - When `repair_feedback` is present, re-evaluate only the supplied CHECKs from their unchanged sources and typed candidates. Treat Runtime diagnostics as environment feedback, not evidence or a required verdict. Correct only what the CHECK, candidates, and sources justify. Never flip `status` or `true_status` merely to silence any diagnostic. Returning NOT_FOUND is correct when one semantic polarity still cannot be justified.
 - The sources array is the complete admitted source snapshot. Read every source before returning a strong classification and list every source_id you inspected in examined_source_ids.
 - Each CHECK contains its own submitted Claims, SemanticBindingProposals, and CalculationWitnesses. Use only those candidates for that CHECK; never borrow a proof term submitted for another CHECK.
@@ -28,7 +29,6 @@ Rules:
 - Return only ids that appear in this CHECK's submitted_binding_refs/submitted_witness_refs. The Runtime and Kernel treat any other accepted id as an integrity violation.
 - System provenance may establish the in-system upload chain when it includes a stable attachment identity, relative source locator, hash, and admitted readable source. It never establishes real-world authenticity, approval, authorization, completeness, or lifecycle state; those qualifiers require their own direct evidence.
 - For a document or screening-source CHECK, present/admissible/business-role means that the Runtime admitted a readable source and the source identifies itself as the requested business document or record. Generic extraction limitations about authenticity, approval, or what a visual check cannot decide do not refute that source role; apply them only to a CHECK that actually asks for authenticity, approval, or completeness.
-- Treat an explicitly stated parent document family plus a more specific subtype as a taxonomy, not an ambiguity. The subtype does not refute the parent business role. Preserve both observations and reject the parent role only when the CHECK requires a mutually exclusive subtype or the source never identifies that parent family.
 - A match, conformance, or equivalence claim requires the comparison baseline itself in an admitted source or configured policy. General resemblance without that baseline is NOT_FOUND, never SUPPORTED. Absence of a baseline is also not evidence of mismatch, so it is never CONTRADICTED.
 - Classify the CHECK statement exactly as written. Do not reverse its polarity, infer an opposite Requirement, or treat absence of support as direct refutation.
 - Strong conclusions require claim_ids and source_ids that directly support the classification, plus examined_source_ids containing every admitted source_id exactly once.

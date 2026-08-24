@@ -45,6 +45,7 @@ from app.compiler_runtime.runtime import (
     _planning_source_catalog,
     _review_result,
     _sandbox_tools,
+    _verifier_contracts,
 )
 from app.compiler_runtime.sandbox import EvidenceSandbox
 from app.compiler_runtime.signatures import proof_signature_for
@@ -347,7 +348,7 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "Claims are append-only and existing Claim content is immutable" in executor
     assert "later unrelated Claims are allowed" in executor
     assert PROMPT_VERSIONS["executor"] == "typed_evidence_executor_v21"
-    assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v21"
+    assert PROMPT_VERSIONS["verifier"] == "typed_fine_verifier_v22"
     assert "never bind a cross-Claim semantic relationship" in executor
     assert "only check_id, a facet_ref declared on that CHECK, an operation, and typed refs" in executor
     assert "For every declared facet whose minimum proof kinds include WITNESS" in executor
@@ -368,8 +369,12 @@ def test_invoice_arithmetic_guidance_spans_plan_execution_and_verification() -> 
     assert "do not demand an identity or invented calculation Witness" in verifier
     assert "does not require a subtotal aggregation Witness" in verifier
     assert "replay every explicit quantity-by-unit-price extension" in executor
-    assert "taxonomy, not an ambiguity" in verifier
-    assert "The subtype does not refute the parent business role" in verifier
+    document_contract = " ".join(
+        _verifier_contracts([{"requirement_refs": ["invoice"]}])
+    )
+    assert "more specific subtype" in document_contract
+    assert "do not use the subtype alone to refute the parent business role" in document_contract
+    assert _verifier_contracts([{"requirement_refs": ["invoice_number"]}]) == []
     assert "Observation alone is never completion" in executor
     assert "lower bounds for the current CHECK whenever it declares that facet" in executor
     assert "the base need not be repeated in the applicability sentence" in executor

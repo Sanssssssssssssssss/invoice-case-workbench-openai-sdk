@@ -15,7 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.thinking import model_extra_body_for_thinking, role_thinking_type, temperature_for_thinking
 from app.config import Settings
-from app.domain.invoice_requirements import default_requirement_required, requirement_evidence_type
+from app.domain.invoice_requirements import (
+    default_requirement_required,
+    requirement_evidence_type,
+    requirement_kind,
+)
 from app.llm import LlmClient, ModelCallRecord
 from app.runtime.agents_sdk import FencedJsonOutputSchema, build_run_config, run_agent_sync
 from app.runtime.context_partition import usage_from_result
@@ -59,7 +63,7 @@ CHECK_MODEL_CALL_BUDGET = 4
 PROMPT_VERSIONS = {
     "task_compiler": "typed_task_compiler_v19",
     "executor": "typed_evidence_executor_v21",
-    "verifier": "typed_fine_verifier_v21",
+    "verifier": "typed_fine_verifier_v22",
 }
 _PROMPT_ROOT = Path(__file__).with_name("prompts")
 _TRACE_METADATA = {
@@ -758,6 +762,7 @@ class EvidenceCompilerRuntime:
             "proof_signatures": _active_proof_signatures(plan.active_requirement_ids),
             "calculation_operation_protocol": _calculation_operation_protocol(),
             "strong_status_link_protocol": _strong_status_link_protocol(),
+            "verification_contracts": _verifier_contracts(checks),
             "focus_check_ids": requested_check_ids,
             # Verifier judges the focused CHECK from committed proof terms, not
             # from another CHECK's classification.  Status topology remains a
@@ -2517,6 +2522,20 @@ def _active_proof_signatures(requirement_ids: Sequence[str]) -> list[dict[str, A
         for requirement_id in requirement_ids
         if (signature := proof_signature_for(requirement_id)) is not None
     ]
+
+
+def _verifier_contracts(checks: Sequence[Mapping[str, Any]]) -> list[str]:
+    if any(
+        requirement_kind(requirement_id) == "document"
+        for check in checks
+        for requirement_id in check.get("requirement_refs", [])
+    ):
+        return [
+            "An explicitly stated parent document family and a more specific subtype are "
+            "compatible unless the CHECK requires mutually exclusive subtypes; preserve both "
+            "observations, and do not use the subtype alone to refute the parent business role."
+        ]
+    return []
 
 
 def _unconfigured_policy_refs(
