@@ -110,6 +110,26 @@ class RuntimeCheckpointStore:
                 raise FileNotFoundError(compiler_run_id)
             return json.loads(path.read_text(encoding="utf-8"))
 
+    def latest_compiler(
+        self,
+        case_id: str,
+        compiler_run_id: str = "",
+    ) -> tuple[str, dict[str, Any]]:
+        """Return the latest case-local compiler revision and its parent run id."""
+
+        with PERSISTENCE_LOCK:
+            traces = self.store.resolve_case_path(
+                self.store.validate_case_id(case_id),
+                "traces",
+            )
+            candidates = list(traces.glob("*/compiler/*/revision_*.json")) if traces.exists() else []
+            if compiler_run_id:
+                candidates = [path for path in candidates if path.parent.name == compiler_run_id]
+            if not candidates:
+                raise FileNotFoundError(compiler_run_id or "latest compiler run")
+            path = max(candidates, key=lambda item: (item.stat().st_mtime_ns, str(item)))
+            return path.parents[2].name, json.loads(path.read_text(encoding="utf-8"))
+
 
 def _checkpoint_from_json(
     payload: dict[str, Any],

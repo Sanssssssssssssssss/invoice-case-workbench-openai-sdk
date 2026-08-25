@@ -21,6 +21,10 @@ class EvidenceReviewerInput(_SupervisorToolInput):
         default_factory=list,
         description="Smallest sufficient subset of actual Requirement ids for the explicit goal, selected from profile value lists. Profiles are candidate bundles, not atomic scopes; profile map keys are invalid here. For a goal limited to line-item arithmetic, subtotal, stated tax/discount/components, and final amount reconciliation, this list MUST contain EXACTLY [\"invoice_calculation_valid\"]; report generation adds no scope, and Runtime expands declared premises. Other invoice reviews always include invoice_calculation_valid, but that rule does not activate the rest of an invoice profile. Omit only when the current request accepts the case's existing scope; pass ids when it narrows or replaces that scope.",
     )
+    compiler_run_id: str = Field(
+        default="",
+        description="Resume this exact durable child run after recheck_compiler_check. Leave blank for a new review.",
+    )
 
 
 class CasePatchWriterInput(_SupervisorToolInput):
@@ -48,6 +52,9 @@ CAPABILITY_CARDS = {
         "list_case_files": "List case-local files.",
         "write_case_file": "Write report Markdown. Use input.content_ref=\"last_role:report_writer.markdown\" and optional input.relative_path only.",
         "render_pdf": "Render Markdown report to PDF. Use input={} after write_case_file; runtime fills timestamped markdown_path/pdf_path.",
+        "inspect_compiler_run": "Inspect the latest durable Compiler child run, including CHECK progress, proof decisions, diagnostics, corrections, and bounded operational events.",
+        "recheck_compiler_check": "Create a revision that rechecks one named CHECK. Then call evidence_reviewer with the returned compiler_run_id; this tool cannot set proof status.",
+        "cancel_compiler_run": "Cancel one durable Compiler child run without changing committed case proof.",
         "write_case_patch": "Internal action after case_patch_writer only.",
     },
 }

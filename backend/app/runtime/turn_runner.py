@@ -18,11 +18,13 @@ from app.agents.manager import CaseManagerAgentFactory, MANAGER_PROMPT
 from app.agents.patch_builder.deterministic import reduce_review_to_patch
 from app.agents.registry import RoleRegistry
 from app.compiler_runtime.runtime import (
+    CompilerRunCheckpoint,
     EvidenceCompilerRuntime,
     PROMPT_VERSIONS,
     attachment_source_admission,
     compiler_trace_metadata,
     prepare_sources,
+    prepared_sources_from_checkpoint,
 )
 from app.compiler_runtime.consumer import derive_consumer_packet, render_consumer_report
 from app.compiler_runtime.transcript import ModelTranscriptHooks
@@ -1715,13 +1717,41 @@ class TurnRunner:
         role = "evidence_reviewer"
         state.observability.pop("_pending_review_artifact", None)
         case_state = self.store.load(state.case_id)
+        requested_compiler_run_id = str(payload.get("compiler_run_id") or "").strip()
+        resume_parent_run_id = ""
+        resume_checkpoint: CompilerRunCheckpoint | None = None
+        if requested_compiler_run_id:
+            try:
+                resume_parent_run_id, raw_checkpoint = self.checkpoints.latest_compiler(
+                    state.case_id,
+                    requested_compiler_run_id,
+                )
+                resume_checkpoint = CompilerRunCheckpoint.model_validate(raw_checkpoint)
+                if resume_checkpoint.status != "running":
+                    raise ValueError("Compiler run is not waiting for a recheck")
+                if not resume_checkpoint.corrections or resume_checkpoint.corrections[-1].kind != "RECHECK":
+                    raise ValueError("Compiler run has no pending RECHECK correction")
+            except Exception as exc:
+                self.harness.record_observation(
+                    state,
+                    self.context.record_error(kind="role", name=role, exc=exc),
+                )
+                return {
+                    "status": "error",
+                    "role": role,
+                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                }
         requested = list(payload.get("active_requirement_ids") or [])
         existing = [
             item.id
             for item in case_state.requirements
             if item.id not in AUTO_DERIVED_COMPILER_REQUIREMENTS
         ]
-        selected = list(dict.fromkeys(requested if requested else existing))
+        selected = (
+            list(resume_checkpoint.artifact.plan.active_requirement_ids)
+            if resume_checkpoint is not None
+            else list(dict.fromkeys(requested if requested else existing))
+        )
         if not selected:
             exc = ValueError("evidence_reviewer requires at least one active requirement")
             self.harness.record_observation(
@@ -1735,7 +1765,7 @@ class TurnRunner:
             }
         state.observability["active_requirement_ids"] = selected
 
-        attachment_items = self.context.last_attachment_items(state)
+        attachment_items = [] if resume_checkpoint is not None else self.context.last_attachment_items(state)
         admitted_attachments: list[dict[str, Any]] = []
         rejected_attachments: list[dict[str, Any]] = []
         for index, item in enumerate(attachment_items):
@@ -1755,27 +1785,32 @@ class TurnRunner:
                     "classification": str(item.get("classification") or metadata.get("classification") or ""),
                 }
             )
-        source_inputs = list(admitted_attachments)
-        trusted_ids = set(
-            trusted_sources_for_evidence(
-                self.store,
-                state.case_id,
-                case_state.evidence_items,
+        if resume_checkpoint is not None:
+            prepared_sources = prepared_sources_from_checkpoint(resume_checkpoint)
+            extraction_summary: list[dict[str, Any]] = []
+        else:
+            source_inputs = list(admitted_attachments)
+            trusted_ids = set(
+                trusted_sources_for_evidence(
+                    self.store,
+                    state.case_id,
+                    case_state.evidence_items,
+                )
             )
-        )
-        source_inputs.extend(
-            _persisted_evidence_sources(
-                [item for item in case_state.evidence_items if item.id in trusted_ids]
+            source_inputs.extend(
+                _persisted_evidence_sources(
+                    [item for item in case_state.evidence_items if item.id in trusted_ids]
+                )
             )
-        )
-        prepared_sources = prepare_sources(source_inputs)
-        extraction_summary = _compiler_extraction_summary(admitted_attachments)
+            prepared_sources = prepare_sources(source_inputs)
+            extraction_summary = _compiler_extraction_summary(admitted_attachments)
         task_objective = state.user_message_for_planner or request.message
         source_admission = {
             "attachment_count": len(attachment_items),
             "admitted_attachment_count": len(admitted_attachments),
             "rejected_attachment_count": len(rejected_attachments),
             "prepared_source_count": len(prepared_sources),
+            "restored_from_checkpoint": resume_checkpoint is not None,
             "rejected": rejected_attachments,
         }
         state.observability["compiler_source_admission"] = source_admission
@@ -1804,6 +1839,8 @@ class TurnRunner:
             ],
             "extraction_summary": extraction_summary,
             "supervisor_task": supervisor_task(decision, state),
+            "compiler_run_id": requested_compiler_run_id,
+            "compiler_revision": resume_checkpoint.revision if resume_checkpoint is not None else 1,
         }
         capability = compiler_trace_metadata()
         self.context.write_context_manifest(
@@ -1842,7 +1879,12 @@ class TurnRunner:
                     progress_sink=self._compiler_progress_sink(state),
                     executor_session_db_path=self.settings.session_db_path,
                 )
-                compiler_run_id = f"compiler_{state.run_id.removeprefix('run_')}"
+                compiler_run_id = (
+                    resume_checkpoint.compiler_run_id
+                    if resume_checkpoint is not None
+                    else f"compiler_{state.run_id.removeprefix('run_')}"
+                )
+                checkpoint_parent_run_id = resume_parent_run_id or state.run_id
                 compiled = runtime.run(
                     task_objective=task_objective,
                     active_requirement_ids=selected,
@@ -1853,9 +1895,10 @@ class TurnRunner:
                         for item in case_state.requirements
                     },
                     compiler_run_id=compiler_run_id,
+                    checkpoint=resume_checkpoint,
                     checkpoint_sink=lambda checkpoint: self.checkpoints.save_compiler(
                         case_id=state.case_id,
-                        run_id=state.run_id,
+                        run_id=checkpoint_parent_run_id,
                         compiler_run_id=checkpoint.compiler_run_id,
                         payload=checkpoint.model_dump(mode="json"),
                     ),
@@ -2296,6 +2339,8 @@ def _manager_result_preview(name: str, result: dict[str, Any] | None) -> Any | N
         return None
     if name in {"read_attachment", "write_case_patch", "write_case_file", "render_pdf"}:
         return None
+    if name in {"inspect_compiler_run", "recheck_compiler_check", "cancel_compiler_run"}:
+        return _compact_json_value(result, max_chars=12000)
     if name == "materials_advisor":
         tasks = [item for item in result.get("tasks") or [] if isinstance(item, dict)]
         return {

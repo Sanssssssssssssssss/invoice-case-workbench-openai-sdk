@@ -10,7 +10,13 @@ from app.compiler_runtime.kernel import compile_review_artifact
 from app.compiler_runtime.models import CheckAssessment, Claim, EvidenceIR, ProofNode, ProofPlan, ReviewArtifact
 from app.compiler_runtime.policy import policy_excerpt_for, policy_hash
 from app.compiler_runtime.signatures import proof_signature_hash_for
-from app.compiler_runtime.runtime import COMPILER_VERSION, CompilerRunResult, ExecutorSummary, compiler_trace_metadata
+from app.compiler_runtime.runtime import (
+    COMPILER_VERSION,
+    CompilerRunCheckpoint,
+    CompilerRunResult,
+    ExecutorSummary,
+    compiler_trace_metadata,
+)
 from app.harness import HarnessRuntime
 from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.runtime.turn_runner import TurnRunner
@@ -56,6 +62,9 @@ def test_compiler_checkpoint_uses_run_scoped_existing_trace_store(tmp_path, monk
         "status": "completed",
         "completed_check_ids": ["check.one"],
     }
+    parent_run_id, latest = checkpoints.latest_compiler("case_checkpoint", "compiler_child")
+    assert parent_run_id == "run_parent"
+    assert latest["revision"] == 2
 
 
 def test_evidence_reviewer_keeps_external_tool_name_and_atomically_writes_artifact(
@@ -365,3 +374,167 @@ def test_explicit_compiler_scope_replaces_existing_case_requirement_scope(
     assert result["status"] == "error"
     assert captured["active_requirement_ids"] == ["invoice"]
     assert state.observability["active_requirement_ids"] == ["invoice"]
+
+
+def test_manager_can_inspect_and_recheck_one_durable_compiler_child(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("INVOICE_AGENT_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    runner = TurnRunner()
+    case_id = "case_compiler_control"
+    runner.store.apply_patch(
+        case_id,
+        {"case_updates": {"requirements": [{"id": "invoice", "label": "Invoice"}]}},
+    )
+    checkpoint = _completed_compiler_checkpoint()
+    runner.checkpoints.save_compiler(
+        case_id=case_id,
+        run_id="run_parent",
+        compiler_run_id=checkpoint.compiler_run_id,
+        payload=checkpoint.model_dump(mode="json"),
+    )
+    parent_state = HarnessRuntime(runner.store).begin_run(
+        case_id,
+        "inspect compiler",
+        run_id="run_parent",
+    )
+    runner.harness.append_debug_event(
+        parent_state,
+        kind="model_thinking",
+        name="executor",
+        payload={
+            "compiler_run_id": checkpoint.compiler_run_id,
+            "stage": "executor",
+            "status": "completed",
+            "check_id": "check_invoice",
+            "action": "Submitted grounded invoice classification",
+            "public_reason": "The source is available for independent verification.",
+            "reasoning_excerpt": "must not be exposed",
+        },
+        summary="Executor completed",
+    )
+
+    inspected = runner.tools.call(
+        "inspect_compiler_run",
+        case_id,
+        {"compiler_run_id": checkpoint.compiler_run_id},
+    )
+
+    assert inspected["status"] == "completed"
+    assert inspected["checks"][0]["proof_status"] == "NOT_FOUND"
+    assert inspected["recent_events"][0]["action"] == "Submitted grounded invoice classification"
+    assert "reasoning_excerpt" not in json.dumps(inspected)
+    assert "must not be exposed" not in json.dumps(inspected)
+
+    state = HarnessRuntime(runner.store).begin_run(
+        case_id,
+        "The invoice CHECK is wrong; recheck it.",
+        run_id="run_control",
+    )
+    request = AgentTurnRequest(
+        case_id=case_id,
+        message="The invoice CHECK is wrong; recheck it.",
+    )
+    revised = runner.invoke_manager_tool(
+        state=state,
+        request=request,
+        planner_context={},
+        name="recheck_compiler_check",
+        payload={
+            "compiler_run_id": checkpoint.compiler_run_id,
+            "check_id": "check_invoice",
+            "message": "The document classification needs another evidence-grounded review.",
+        },
+    )
+    assert revised["status"] == "success"
+    _, revised_payload = runner.checkpoints.latest_compiler(
+        case_id,
+        checkpoint.compiler_run_id,
+    )
+    assert revised_payload["revision"] == 2
+    assert revised_payload["status"] == "running"
+
+    captured: dict[str, Any] = {}
+
+    class StopAfterResume(RuntimeError):
+        pass
+
+    class CapturingRuntime:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        def run(self, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+            raise StopAfterResume("stop after durable resume handoff")
+
+    monkeypatch.setattr("app.runtime.turn_runner.EvidenceCompilerRuntime", CapturingRuntime)
+    resumed = runner.invoke_manager_tool(
+        state=state,
+        request=request,
+        planner_context={},
+        name="evidence_reviewer",
+        payload={"mode": "review", "compiler_run_id": checkpoint.compiler_run_id},
+    )
+
+    assert resumed["status"] == "error"
+    assert captured["compiler_run_id"] == checkpoint.compiler_run_id
+    assert captured["checkpoint"].revision == 2
+    assert captured["prepared_sources"][0].record.content == "INVOICE INV-001"
+
+
+def _completed_compiler_checkpoint() -> CompilerRunCheckpoint:
+    plan = ProofPlan(
+        plan_id="plan_control",
+        objective="Verify the document classification.",
+        active_requirement_ids=["invoice"],
+        roots={"invoice": "check_invoice"},
+        nodes=[
+            ProofNode(
+                id="check_invoice",
+                kind="CHECK",
+                statement="The supplied source is an invoice.",
+                requirement_refs=["invoice"],
+            )
+        ],
+    )
+    ir = EvidenceIR(
+        source_ids=["source_invoice"],
+        source_fingerprints={"source_invoice": "source-fingerprint-1"},
+    )
+    assessment = CheckAssessment(
+        check_id="check_invoice",
+        status="NOT_FOUND",
+        examined_source_ids=["source_invoice"],
+        missing_fact="The document classification needs another review.",
+    )
+    excerpt = policy_excerpt_for(["invoice"])
+    artifact = ReviewArtifact(
+        plan=plan,
+        plan_hash=plan.content_hash(),
+        proof_signature_hash=proof_signature_hash_for(plan.active_requirement_ids),
+        evidence_ir=ir,
+        evidence_snapshot_hash=ir.content_hash(),
+        assessments=[assessment],
+        policy_hash=policy_hash(excerpt),
+        compiler_version=COMPILER_VERSION,
+        model="fake",
+    )
+    artifact = artifact.model_copy(update={"artifact_hash": artifact.content_hash()})
+    return CompilerRunCheckpoint(
+        compiler_run_id="compiler_control",
+        status="completed",
+        completed_check_ids=["check_invoice"],
+        artifact=artifact,
+        proof=compile_review_artifact(artifact),
+        source_snapshot=[
+            {
+                "source_id": "source_invoice",
+                "title": "invoice.txt",
+                "kind": "invoice",
+                "content": "INVOICE INV-001",
+                "provenance": {"attachment_id": "attachment_1"},
+                "metadata": {"source_fingerprint": "source-fingerprint-1"},
+            }
+        ],
+    )

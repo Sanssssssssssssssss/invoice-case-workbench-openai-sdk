@@ -399,6 +399,8 @@ class EvidenceCompilerRuntime:
         self.hooks = hooks
         self.progress_sink = progress_sink
         self.executor_session_db_path = Path(executor_session_db_path) if executor_session_db_path else None
+        self.current_compiler_run_id = ""
+        self.current_revision = 1
 
     def compile_task(
         self,
@@ -1044,6 +1046,8 @@ class EvidenceCompilerRuntime:
         }
         policy_excerpt = policy_excerpt or policy_excerpt_for(active_ids)
         run_id = compiler_run_id.strip() or f"compiler_{uuid4().hex[:12]}"
+        self.current_compiler_run_id = run_id
+        self.current_revision = checkpoint.revision if checkpoint is not None else 1
         completed_check_ids: list[str] = []
         if checkpoint is None:
             plan = self.compile_task(
@@ -1760,6 +1764,8 @@ class EvidenceCompilerRuntime:
             "status": status,
             "action": action,
             "public_reason": public_reason,
+            "compiler_run_id": self.current_compiler_run_id,
+            "compiler_revision": self.current_revision,
             **counts,
         }
         try:

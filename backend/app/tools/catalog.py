@@ -21,6 +21,9 @@ TOOL_RISK: dict[str, RiskLevel] = {
     "write_case_patch": "local_write",
     "write_case_file": "local_write",
     "render_pdf": "local_write",
+    "inspect_compiler_run": "read",
+    "recheck_compiler_check": "local_write",
+    "cancel_compiler_run": "local_write",
 }
 
 DEFAULT_APPROVAL: dict[str, ApprovalMode] = {
@@ -30,6 +33,9 @@ DEFAULT_APPROVAL: dict[str, ApprovalMode] = {
     "write_case_patch": "never",
     "write_case_file": "always",
     "render_pdf": "always",
+    "inspect_compiler_run": "never",
+    "recheck_compiler_check": "never",
+    "cancel_compiler_run": "never",
 }
 
 INTERNAL_ONLY = {"write_case_patch"}

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.state.schemas import Attachment
 from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
@@ -48,6 +51,28 @@ class RenderPdfInput(ToolInput):
     markdown_path: str = ""
     relative_path: str = ""
     pdf_path: str | None = None
+
+
+class InspectCompilerRunInput(ToolInput):
+    compiler_run_id: str = ""
+
+
+class RecheckCompilerCheckInput(ToolInput):
+    compiler_run_id: str = Field(
+        default="",
+        description="Exact child compiler_run_id returned by inspect_compiler_run; leave blank for the latest child. Never pass a parent run_id.",
+    )
+    check_id: str
+    message: str
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class CancelCompilerRunInput(ToolInput):
+    compiler_run_id: str = Field(
+        default="",
+        description="Exact child compiler_run_id returned by inspect_compiler_run; leave blank for the latest child. Never pass a parent run_id.",
+    )
+    message: str = ""
 
 
 @dataclass(frozen=True)
@@ -143,6 +168,166 @@ def _render_pdf(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:
     if _looks_like_report_path(markdown_path) or _looks_like_report_path(str(pdf_path or "")):
         markdown_path, pdf_path = report_paths_for_run(_started_at(context.run_state))
     return context.workspace.render_pdf(context.case_id, markdown_path, pdf_path)
+
+
+def _inspect_compiler_run(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:
+    data = _as(payload, InspectCompilerRunInput)
+    parent_run_id, checkpoint = _load_compiler(context, data.compiler_run_id)
+    return _compiler_snapshot(context, parent_run_id, checkpoint)
+
+
+def _recheck_compiler_check(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:
+    from app.compiler_runtime.runtime import CompilerCorrection, revise_compiler_checkpoint
+
+    data = _as(payload, RecheckCompilerCheckInput)
+    parent_run_id, checkpoint = _load_compiler(context, data.compiler_run_id)
+    revised = revise_compiler_checkpoint(
+        checkpoint,
+        CompilerCorrection(
+            kind="RECHECK",
+            target_check_id=data.check_id,
+            message=data.message,
+            evidence_refs=data.evidence_refs,
+        ),
+    )
+    RuntimeCheckpointStore(context.workspace.store).save_compiler(
+        case_id=context.case_id,
+        run_id=parent_run_id,
+        compiler_run_id=revised.compiler_run_id,
+        payload=revised.model_dump(mode="json"),
+    )
+    result = _compiler_snapshot(context, parent_run_id, revised)
+    result.update(
+        {
+            "status": "revision_created",
+            "next_action": "evidence_reviewer",
+            "resume_input": {"compiler_run_id": revised.compiler_run_id},
+        }
+    )
+    return result
+
+
+def _cancel_compiler_run(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:
+    from app.compiler_runtime.runtime import CompilerCorrection, revise_compiler_checkpoint
+
+    data = _as(payload, CancelCompilerRunInput)
+    parent_run_id, checkpoint = _load_compiler(context, data.compiler_run_id)
+    cancelled = revise_compiler_checkpoint(
+        checkpoint,
+        CompilerCorrection(kind="CANCEL", message=data.message),
+    )
+    RuntimeCheckpointStore(context.workspace.store).save_compiler(
+        case_id=context.case_id,
+        run_id=parent_run_id,
+        compiler_run_id=cancelled.compiler_run_id,
+        payload=cancelled.model_dump(mode="json"),
+    )
+    result = _compiler_snapshot(context, parent_run_id, cancelled)
+    result["status"] = "cancelled"
+    return result
+
+
+def _load_compiler(
+    context: ToolCallContext,
+    compiler_run_id: str,
+) -> tuple[str, Any]:
+    from app.compiler_runtime.runtime import CompilerRunCheckpoint
+
+    parent_run_id, payload = RuntimeCheckpointStore(context.workspace.store).latest_compiler(
+        context.case_id,
+        compiler_run_id.strip(),
+    )
+    return parent_run_id, CompilerRunCheckpoint.model_validate(payload)
+
+
+def _compiler_snapshot(
+    context: ToolCallContext,
+    parent_run_id: str,
+    checkpoint: Any,
+) -> dict[str, Any]:
+    assessments = {item.check_id: item for item in checkpoint.artifact.assessments}
+    completed = set(checkpoint.completed_check_ids)
+    checks = []
+    for node in checkpoint.artifact.plan.nodes:
+        if node.kind != "CHECK":
+            continue
+        assessment = assessments.get(node.id)
+        checks.append(
+            {
+                "check_id": node.id,
+                "statement": node.statement,
+                "upstream_check_ids": list(node.upstream_check_ids),
+                "workflow_status": (
+                    "active"
+                    if node.id == checkpoint.active_check_id
+                    else "completed" if node.id in completed else "pending"
+                ),
+                "proof_status": assessment.status if assessment is not None else "",
+                "reason": assessment.reason if assessment is not None else "",
+                "missing_fact": assessment.missing_fact if assessment is not None else "",
+            }
+        )
+    return {
+        "case_id": context.case_id,
+        "compiler_run_id": checkpoint.compiler_run_id,
+        "revision": checkpoint.revision,
+        "status": checkpoint.status,
+        "active_check_id": checkpoint.active_check_id,
+        "completed_checks": len(checkpoint.completed_check_ids),
+        "total_checks": len(checks),
+        "checks": checks,
+        "decisions": [item.model_dump(mode="json") for item in checkpoint.proof.decisions],
+        "diagnostics": [item.model_dump(mode="json") for item in checkpoint.proof.diagnostics],
+        "corrections": [item.model_dump(mode="json") for item in checkpoint.corrections],
+        "proof_terms": {
+            "claims": len(checkpoint.artifact.evidence_ir.claims),
+            "bindings": len(checkpoint.artifact.binding_proposals),
+            "witnesses": len(checkpoint.artifact.calculation_witnesses),
+        },
+        "recent_events": _compiler_events(context, parent_run_id, checkpoint.compiler_run_id),
+    }
+
+
+def _compiler_events(
+    context: ToolCallContext,
+    parent_run_id: str,
+    compiler_run_id: str,
+) -> list[dict[str, Any]]:
+    path = context.workspace.store.resolve_case_path(context.case_id, "traces/events.jsonl")
+    if not path.exists():
+        return []
+    selected: deque[dict[str, Any]] = deque(maxlen=40)
+    compiler_stages = {"task_compiler", "executor", "fine_verifier", "proof_kernel"}
+    # ponytail: case-local linear scan; add an event index only if trace size proves this slow.
+    with path.open(encoding="utf-8") as lines:
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            stage = str(payload.get("stage") or payload.get("role") or "")
+            belongs = str(payload.get("compiler_run_id") or "") == compiler_run_id
+            if not belongs and not (
+                str(event.get("run_id") or "") == parent_run_id and stage in compiler_stages
+            ):
+                continue
+            selected.append(
+                {
+                    "event_id": str(event.get("event_id") or ""),
+                    "ts": str(event.get("ts") or ""),
+                    "kind": str(event.get("kind") or ""),
+                    "stage": stage,
+                    "status": str(payload.get("status") or ""),
+                    "check_id": str(payload.get("check_id") or ""),
+                    "action": str(payload.get("action") or event.get("summary") or ""),
+                    "public_reason": str(payload.get("public_reason") or ""),
+                    "diagnostic_code": str(
+                        payload.get("diagnostic_code") or payload.get("hook_code") or ""
+                    ),
+                }
+            )
+    return list(selected)
 
 
 def _as(payload: ToolInput, model: type[ToolInput]) -> Any:
@@ -246,5 +431,41 @@ TOOL_CAPABILITIES: dict[str, ToolCapability] = {
         precondition="markdown_path must point to a case-local Markdown report",
         postcondition="writes a case-local PDF and returns render metadata",
         required_result_keys=("case_id", "markdown_path", "pdf_path"),
+    ),
+    "inspect_compiler_run": ToolCapability(
+        name="inspect_compiler_run",
+        input_model=InspectCompilerRunInput,
+        handler=_inspect_compiler_run,
+        side_effect="case_read",
+        idempotency="safe",
+        error_taxonomy=("compiler_run_missing", "compiler_checkpoint_invalid"),
+        context_exposure="summary_only",
+        precondition="a compiler checkpoint must exist in the current case",
+        postcondition="returns the latest child compiler_run_id, CHECK state, proof decisions, diagnostics, corrections, and bounded operational events without raw prompts or hidden reasoning",
+        required_result_keys=("case_id", "compiler_run_id", "revision", "checks"),
+    ),
+    "recheck_compiler_check": ToolCapability(
+        name="recheck_compiler_check",
+        input_model=RecheckCompilerCheckInput,
+        handler=_recheck_compiler_check,
+        side_effect="case_write",
+        idempotency="side_effectful",
+        error_taxonomy=("compiler_run_missing", "compiler_checkpoint_invalid", "check_missing"),
+        context_exposure="summary_only",
+        precondition="the target CHECK must belong to the named compiler run",
+        postcondition="creates a new revision for one CHECK in the named or latest child and returns the exact compiler_run_id that evidence_reviewer must resume; never use a parent run_id; it cannot set proof status",
+        required_result_keys=("case_id", "compiler_run_id", "revision", "resume_input"),
+    ),
+    "cancel_compiler_run": ToolCapability(
+        name="cancel_compiler_run",
+        input_model=CancelCompilerRunInput,
+        handler=_cancel_compiler_run,
+        side_effect="case_write",
+        idempotency="side_effectful",
+        error_taxonomy=("compiler_run_missing", "compiler_checkpoint_invalid"),
+        context_exposure="summary_only",
+        precondition="the named compiler run must exist in the current case",
+        postcondition="creates a cancelled revision without mutating committed case proof",
+        required_result_keys=("case_id", "compiler_run_id", "revision", "status"),
     ),
 }

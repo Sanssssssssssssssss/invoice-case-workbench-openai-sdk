@@ -129,7 +129,9 @@ class PolicyGate:
                     )
 
         if requires_evidence_repair(user_message) and not has_reviewer_mode(state, "review"):
-            if not _decision_is_reviewer(decision, "review"):
+            if not _decision_is_reviewer(decision, "review") and not (
+                decision.action == "call_tool" and decision.target == "recheck_compiler_check"
+            ):
                 return block(
                     "repair_requires_reviewer",
                     "Weak/conflicting evidence must be recompiled from the current source set.",
@@ -400,6 +402,8 @@ def _reviewer_requirement_scope_error(
 
 def next_action_hint(kind: str, name: str, result: Any | None = None) -> str:
     if kind == "tool" and name == "read_attachment":
+        return "delegate_agent:evidence_reviewer_review"
+    if kind == "tool" and name == "recheck_compiler_check":
         return "delegate_agent:evidence_reviewer_review"
     if kind == "role" and name == "evidence_reviewer":
         return "delegate_agent:case_patch_writer"

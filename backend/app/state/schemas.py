@@ -49,6 +49,9 @@ ToolName = Literal[
     "list_case_files",
     "write_case_file",
     "render_pdf",
+    "inspect_compiler_run",
+    "recheck_compiler_check",
+    "cancel_compiler_run",
 ]
 SupervisorActionType = Literal[
     "delegate_agent",
@@ -69,6 +72,9 @@ SupervisorTarget = Literal[
     "write_case_file",
     "render_pdf",
     "write_case_patch",
+    "inspect_compiler_run",
+    "recheck_compiler_check",
+    "cancel_compiler_run",
 ]
 
 
@@ -375,7 +381,16 @@ class SupervisorDecision(BaseModel):
             raise ValueError("write_case_patch must use action='write_case_patch', not action='call_tool'")
         if self.action == "delegate_agent" and self.target not in {"materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"}:
             raise ValueError("delegate_agent requires a specialist target")
-        if self.action == "call_tool" and self.target not in {"read_case_state", "read_attachment", "list_case_files", "write_case_file", "render_pdf"}:
+        if self.action == "call_tool" and self.target not in {
+            "read_case_state",
+            "read_attachment",
+            "list_case_files",
+            "write_case_file",
+            "render_pdf",
+            "inspect_compiler_run",
+            "recheck_compiler_check",
+            "cancel_compiler_run",
+        }:
             raise ValueError("call_tool requires a tool target")
         if self.action in {"final_answer", "ask_user"} and not str(self.final_answer or "").strip():
             raise ValueError("final_answer and ask_user require non-empty final_answer")
