@@ -315,6 +315,14 @@ class CaseStore:
                 existing = next(item for item in state.evidence_items if item.id == evidence_id)
                 if str(existing.metadata.get("_review_packet_hash") or "") == packet_hash:
                     continue
+                compiler_hash = str(existing.metadata.get("compiler_source_sha256") or "")
+                if compiler_hash and compiler_hash == str(data.get("metadata", {}).get("compiler_source_sha256") or ""):
+                    data["id"] = evidence_id
+                    data["created_at"] = existing.created_at
+                    data.setdefault("metadata", {})["_review_packet_hash"] = packet_hash
+                    state.evidence_items[state.evidence_items.index(existing)] = EvidenceItem.model_validate(data)
+                    packet_hashes.add(packet_hash)
+                    continue
                 raise ValueError(f"Duplicate evidence id: {evidence_id}")
             data["id"] = evidence_id
             if not data.get("created_at"):

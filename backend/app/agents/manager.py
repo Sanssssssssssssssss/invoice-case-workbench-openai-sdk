@@ -36,12 +36,12 @@ class CaseManagerAgentFactory:
         return temperature_for_thinking(
             self.settings.llm_model,
             self.settings.llm_temperature,
-            manager_tool_loop_thinking_type(self.settings.llm_model, self.settings.llm_thinking_type),
+            manager_tool_loop_thinking_type(self.settings.llm_model, self.settings.manager_thinking_type),
         )
 
     def _extra_body(self) -> dict[str, Any] | None:
         return model_extra_body_for_thinking(
             self.settings.llm_model,
-            manager_tool_loop_thinking_type(self.settings.llm_model, self.settings.llm_thinking_type),
+            manager_tool_loop_thinking_type(self.settings.llm_model, self.settings.manager_thinking_type),
             self.settings.llm_base_url,
         )

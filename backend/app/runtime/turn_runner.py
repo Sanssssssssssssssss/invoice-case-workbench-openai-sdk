@@ -15,6 +15,7 @@ from agents.run_state import RunState
 from pydantic import BaseModel
 
 from app.agents.manager import CaseManagerAgentFactory, MANAGER_PROMPT
+from app.agents.thinking import manager_tool_loop_thinking_type
 from app.agents.patch_builder.deterministic import reduce_review_to_patch
 from app.agents.registry import RoleRegistry
 from app.compiler_runtime.runtime import (
@@ -69,7 +70,7 @@ from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
 
 ROLE_TARGETS = {"materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"}
-MANAGER_PROMPT_VERSION = "supervisor_planner_v2.6_native_tools"
+MANAGER_PROMPT_VERSION = "supervisor_planner_v2.9_child_control"
 _SAFE_FINAL_ANSWER_STOP = (
     "本轮最终回复未通过安全校验，因此未提供业务结论。请查看当前案件状态和运行记录。"
 )
@@ -1268,7 +1269,10 @@ class TurnRunner:
             latency_ms=latency_ms,
             ttft_ms=model_ttft_ms(state.observability, "planner"),
             content_chars=len(output_preview),
-            thinking_type=self.settings.llm_thinking_type or "",
+            thinking_type=manager_tool_loop_thinking_type(
+                self.settings.llm_model,
+                self.settings.manager_thinking_type,
+            ),
             prompt_partition=partition,
         )
         self.llm.calls.append(record)

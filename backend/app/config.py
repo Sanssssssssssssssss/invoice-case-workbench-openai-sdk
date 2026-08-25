@@ -28,6 +28,7 @@ class Settings(BaseModel):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_temperature: float = 0.1
     llm_thinking_type: str | None = None
+    manager_thinking_type: str = "high"
     llm_timeout_seconds: float = 90.0
     evidence_reviewer_timeout_seconds: float = 600.0
     case_patch_writer_timeout_seconds: float = 300.0
@@ -149,6 +150,7 @@ def get_settings() -> Settings:
         llm_base_url=base_url,
         llm_temperature=_float_env("LLM_TEMPERATURE", 0.1),
         llm_thinking_type=_first_env("LLM_THINKING_TYPE", "KIMI_THINKING_TYPE"),
+        manager_thinking_type=_first_env("INVOICE_AGENT_MANAGER_THINKING_TYPE") or "high",
         llm_timeout_seconds=_float_env("LLM_TIMEOUT_SECONDS", 90.0),
         evidence_reviewer_timeout_seconds=_first_float_env(
             600.0,

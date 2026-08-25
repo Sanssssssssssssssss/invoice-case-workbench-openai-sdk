@@ -64,7 +64,12 @@ def test_verifier_uses_high_thinking_without_expanding_compiler_or_executor_cost
 
 
 def test_kimi_manager_tool_loop_disables_thinking_but_specialists_follow_configuration() -> None:
-    settings = Settings(llm_model="kimi-k2.5", llm_temperature=0.1, llm_thinking_type="enabled")
+    settings = Settings(
+        llm_model="kimi-k2.5",
+        llm_temperature=0.1,
+        llm_thinking_type="enabled",
+        manager_thinking_type="enabled",
+    )
     manager = CaseManagerAgentFactory(settings).build([])
     registry = RoleRegistry(LlmClient(settings))
 
@@ -75,3 +80,12 @@ def test_kimi_manager_tool_loop_disables_thinking_but_specialists_follow_configu
         thinking_type=role_thinking_type("materials_advisor", {}, "enabled"),
     ).model_settings.extra_body == {"thinking": {"type": "enabled"}}
     assert "evidence_reviewer" not in registry.role_names
+
+
+def test_manager_defaults_to_high_without_expanding_specialist_thinking() -> None:
+    settings = Settings(llm_model="deepseek-v4-flash", llm_thinking_type="disabled")
+    manager = CaseManagerAgentFactory(settings).build([])
+
+    assert settings.manager_thinking_type == "high"
+    assert manager.model_settings.extra_body == {"reasoning": {"effort": "high"}}
+    assert role_thinking_type("executor", {}, settings.llm_thinking_type) == "disabled"

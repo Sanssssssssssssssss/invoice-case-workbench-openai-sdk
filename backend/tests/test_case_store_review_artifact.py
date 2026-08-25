@@ -174,6 +174,22 @@ def test_review_patch_atomically_persists_matching_artifact_and_projection(store
     assert reloaded.compiled_proof.decisions[0].status == "SUPPORTED"
 
 
+def test_revised_review_replaces_the_same_compiler_source(store_factory) -> None:
+    store = store_factory()
+    first = _review_patch(["invoice"])
+    first["case_updates"]["add_evidence"][0]["summary"] = "revision 1"
+    store.apply_review_patch("case-revised-artifact", first, _artifact(["invoice"]))
+
+    revised = _review_patch(["invoice"])
+    revised["case_updates"]["add_evidence"][0]["summary"] = "revision 2"
+    updated = store.apply_review_patch("case-revised-artifact", revised, _artifact(["invoice"]))
+
+    assert len(updated.evidence_items) == 1
+    assert updated.evidence_items[0].summary == "revision 2"
+    assert updated.review_artifact is not None
+    assert updated.compiled_proof is not None
+
+
 def test_case_migration_removes_artifact_copies_from_compiled_proof() -> None:
     artifact = _artifact(["invoice"])
     proof = compile_review_artifact(artifact).model_dump(mode="json")

@@ -1,6 +1,6 @@
 ---
 name: supervisor_planner
-version: supervisor_planner_v2.6_native_tools
+version: supervisor_planner_v2.9_child_control
 owner: orchestration
 last_updated: 2026-08-22
 input_contract: user_message, context_pack, capability_cards, step_count
@@ -42,6 +42,27 @@ Capability-use guidance:
   repair modes to it.
 - After review or repair, normally call `case_patch_writer`, then
   `write_case_patch`, before claiming the case was updated.
+- When the user challenges an existing Compiler result, inspect the latest child
+  run before choosing a repair. Use its CHECK states, diagnostics, proof
+  decisions, and revision as the current operational truth.
+- For that correction path, make `inspect_compiler_run` the only first action.
+  Do not reread attachments or enumerate case files unless inspection says a
+  required source is unavailable; rereading an admitted attachment creates a
+  new review obligation instead of repairing the existing proof.
+- If the correction targets one existing CHECK, recheck that CHECK in the same
+  `compiler_run_id`; do not restart the whole evidence review. Pass the returned
+  resume input back to `evidence_reviewer`, then persist the revised result
+  through the normal case patch path.
+- Treat a user's correction as a diagnostic hypothesis, not as source evidence.
+  Route the hypothesis to the CHECK whose proposition or proof lineage is in
+  dispute, but do not invent a business binding, operand, or proof status in the
+  correction message. The child must test the hypothesis against admitted
+  sources and may keep `NOT_FOUND` when the required relation is unstated.
+- Pass a `compiler_run_id` to `evidence_reviewer` only after a successful
+  `recheck_compiler_check` returns its resume input. A completed run cannot be
+  resumed directly.
+- Cancel a child only when the user asks to stop or its runtime state is fatal.
+  Never assign a proof status yourself; Executor, Verifier, and Kernel own it.
 - If the user uploaded evidence and also asks what is missing or how to satisfy
   requirements, persist the evidence first, then call `materials_advisor`.
 - For report requests, normally call `report_writer`, then write the report file,
