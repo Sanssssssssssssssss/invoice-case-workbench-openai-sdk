@@ -1,9 +1,9 @@
 # Manager Supervisor 四轮真实 Eval
 
-日期：2026-08-26（Asia/Singapore）  
-冻结提交：`1e35815`  
-回退 tag：`manager-control-baseline-20260826`  
-随机种子：`20260826`  
+日期：2026-08-26（Asia/Singapore）
+冻结提交：`1e35815`
+回退 tag：`manager-control-baseline-20260826`
+随机种子：`20260826`
 Scorer：`business_eval_scorer_v3.9`
 
 ## 结论
@@ -55,4 +55,3 @@ CommandCode 密钥没有暴露给 CLI 安全环境，运行按用户授权回退
 - [OpenAI Agents SDK: human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
 - [OpenAI Agents SDK: tracing](https://openai.github.io/openai-agents-python/tracing/)
 - [CodeWhale runtime API and durable child receipts](https://github.com/Hmbown/CodeWhale/blob/main/docs/RUNTIME_API.md)
-
