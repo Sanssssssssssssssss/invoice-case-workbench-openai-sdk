@@ -1,6 +1,6 @@
 ---
 name: supervisor_planner
-version: supervisor_planner_v2.9_child_control
+version: supervisor_planner_v2.10_child_control
 owner: orchestration
 last_updated: 2026-08-22
 input_contract: user_message, context_pack, capability_cards, step_count
@@ -58,6 +58,10 @@ Capability-use guidance:
   dispute, but do not invent a business binding, operand, or proof status in the
   correction message. The child must test the hypothesis against admitted
   sources and may keep `NOT_FOUND` when the required relation is unstated.
+- Respect the typed proof contract when explaining an inspected result:
+  admitted `claim_ids` on a CHECK consume source-stated semantic facts directly;
+  only calculated or relational propositions require those facts to participate
+  through Witness or Binding lineage. Do not impose a stricter proof rule.
 - Pass a `compiler_run_id` to `evidence_reviewer` only after a successful
   `recheck_compiler_check` returns its resume input. A completed run cannot be
   resumed directly.

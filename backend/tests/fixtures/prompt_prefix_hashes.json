@@ -1,10 +1,10 @@
 {
   "planner": {
-    "stable_prefix_hash": "4ca3ce78d2a2b8d5fb22a32df87805e029f97f404dae2c5365b87c0a9c0367b5",
+    "stable_prefix_hash": "6d9aa40314c61ddffbcd4a8bbda5e410cd18a6b29783ced41db44e722488df19",
     "tool_catalog_hash": "c57d89c1496864afcd280864f867692bff3978cd98c46da8bad2f401553647b6",
     "skill_hash": "028da2b7861cd73e503139f58521278da00d4c2270bec90f1def26c5fcc66506",
     "tenant_policy_hash": "8b47922d132b1f65fc5a077f6ad382d5f7e7e854cd3eed94398bf251430eb08c",
-    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:planner:supervisor_planner_v2.9_child_control:4ca3ce78d2a2b8d5fb22a32d"
+    "prompt_cache_key": "invoice_workbench:8b47922d132b1f65:planner:supervisor_planner_v2.10_child_control:6d9aa40314c61ddffbcd4a8b"
   },
   "materials_advisor": {
     "stable_prefix_hash": "a653435902aa5b8cb2fe4cc672b2f62a2776c143823d16d8d504e0855fcc7440",

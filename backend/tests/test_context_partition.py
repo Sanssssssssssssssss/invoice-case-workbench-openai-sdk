@@ -30,7 +30,7 @@ def _packet(role: str, *, context_payload: dict[str, Any] | None = None) -> Any:
     if role == "planner":
         return build_context_packet(
             role="planner",
-            prompt_version="supervisor_planner_v2.9_child_control",
+            prompt_version="supervisor_planner_v2.10_child_control",
             prompt_file="backend/app/agents/planner/prompt.md",
             system_prompt=MANAGER_PROMPT,
             context_payload=context_payload or {"user_message": "x", "context_pack": {"case_brief": "case", "current_goal": "goal"}},

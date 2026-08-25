@@ -76,7 +76,7 @@ class ContextAssembler:
         )
         packet = build_context_packet(
             role="planner",
-            prompt_version="supervisor_planner_v2.9_child_control",
+            prompt_version="supervisor_planner_v2.10_child_control",
             prompt_file=self.planner_prompt_file,
             system_prompt=self.planner_prompt,
             context_payload={"user_message": state.user_message_for_planner, "context_pack": planner_context},

@@ -70,7 +70,7 @@ from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
 
 ROLE_TARGETS = {"materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"}
-MANAGER_PROMPT_VERSION = "supervisor_planner_v2.9_child_control"
+MANAGER_PROMPT_VERSION = "supervisor_planner_v2.10_child_control"
 _SAFE_FINAL_ANSWER_STOP = (
     "本轮最终回复未通过安全校验，因此未提供业务结论。请查看当前案件状态和运行记录。"
 )
