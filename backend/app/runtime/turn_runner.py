@@ -1840,6 +1840,7 @@ class TurnRunner:
                     hooks=self.transcript_hooks(state),
                     settings=self.settings,
                     progress_sink=self._compiler_progress_sink(state),
+                    executor_session_db_path=self.settings.session_db_path,
                 )
                 compiler_run_id = f"compiler_{state.run_id.removeprefix('run_')}"
                 compiled = runtime.run(

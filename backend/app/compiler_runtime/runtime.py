@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from agents import Agent, FunctionTool, ModelSettings, ToolsToFinalOutputResult
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, UserError
+from agents.memory import SQLiteSession
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agents.thinking import model_extra_body_for_thinking, role_thinking_type, temperature_for_thinking
@@ -330,6 +331,7 @@ class _ExecutorConversation:
     checkpoint: EvidenceSandbox
     sandbox: EvidenceSandbox
     input_items: list[Any] | None = None
+    session: Any | None = None
     last_runtime_rejection: dict[str, Any] | None = None
     provider_calls: int = 0
 
@@ -358,11 +360,13 @@ class EvidenceCompilerRuntime:
         hooks: Any | None = None,
         settings: Settings | None = None,
         progress_sink: Callable[[str, dict[str, Any], str], None] | None = None,
+        executor_session_db_path: str | Path | None = None,
     ) -> None:
         self.llm = llm
         self.settings = settings or llm.settings
         self.hooks = hooks
         self.progress_sink = progress_sink
+        self.executor_session_db_path = Path(executor_session_db_path) if executor_session_db_path else None
 
     def compile_task(
         self,
@@ -590,7 +594,9 @@ class EvidenceCompilerRuntime:
                 ),
             }
             payload["runtime_observation"] = observation
-            if conversation is not None and conversation.input_items is not None:
+            if conversation is not None and conversation.session is not None:
+                model_input = json.dumps(observation, ensure_ascii=False, default=str)
+            elif conversation is not None and conversation.input_items is not None:
                 model_input = [
                     *conversation.input_items,
                     {
@@ -647,10 +653,12 @@ class EvidenceCompilerRuntime:
                     input_override=model_input,
                     result_sink=run_results.append if conversation is not None else None,
                     model_budget=model_budget,
+                    session=conversation.session if conversation is not None else None,
                 )
             if conversation is not None and run_results:
                 run_result = run_results[-1]
-                conversation.input_items = run_result.to_input_list()
+                if conversation.session is None:
+                    conversation.input_items = run_result.to_input_list()
                 conversation.provider_calls += len(getattr(run_result, "raw_responses", ()))
         except (ModelBehaviorError, UserError):
             submitted = {
@@ -1109,23 +1117,41 @@ class EvidenceCompilerRuntime:
             latest_checkpoint = latest_checkpoint.model_copy(update={"active_check_id": check_id})
             if checkpoint_sink is not None:
                 checkpoint_sink(latest_checkpoint)
-            (
-                sandbox,
-                assessments,
-                artifact,
-                proof,
-                frontier_retries,
-            ) = self._run_check_frontier(
-                plan=plan,
-                check_id=check_id,
-                prepared_sources=prepared_sources,
-                policy_excerpt=policy_excerpt,
-                requirement_requiredness=requiredness,
-                sandbox=sandbox,
-                assessments=assessments,
-                artifact=artifact,
-                proof=proof,
+            executor_session = (
+                SQLiteSession(
+                    f"{run_id}:{check_id}:executor",
+                    self.executor_session_db_path,
+                )
+                if self.executor_session_db_path is not None
+                else None
             )
+            try:
+                (
+                    sandbox,
+                    assessments,
+                    artifact,
+                    proof,
+                    frontier_retries,
+                ) = self._run_check_frontier(
+                    plan=plan,
+                    check_id=check_id,
+                    prepared_sources=prepared_sources,
+                    policy_excerpt=policy_excerpt,
+                    requirement_requiredness=requiredness,
+                    sandbox=sandbox,
+                    assessments=assessments,
+                    artifact=artifact,
+                    proof=proof,
+                    executor_session=executor_session,
+                    initial_feedback=_correction_feedback(
+                        plan,
+                        check_id,
+                        latest_checkpoint.corrections,
+                    ),
+                )
+            finally:
+                if executor_session is not None:
+                    executor_session.close()
             retry_count += frontier_retries
             completed_check_ids.append(check_id)
             latest_checkpoint = CompilerRunCheckpoint(
@@ -1171,6 +1197,8 @@ class EvidenceCompilerRuntime:
         assessments: Sequence[CheckAssessment],
         artifact: ReviewArtifact,
         proof: CompiledProof,
+        executor_session: Any | None = None,
+        initial_feedback: Sequence[dict[str, Any]] = (),
     ) -> tuple[
         EvidenceSandbox,
         list[CheckAssessment],
@@ -1189,7 +1217,7 @@ class EvidenceCompilerRuntime:
             proof=proof,
         )
         candidate_sandbox: EvidenceSandbox | None = None
-        feedback: list[dict[str, Any]] = []
+        feedback: list[dict[str, Any]] = list(initial_feedback)
         repair_owner = "executor"
         attempts_used = 0
         executor_conversation: _ExecutorConversation | None = None
@@ -1214,6 +1242,7 @@ class EvidenceCompilerRuntime:
                     executor_conversation = _ExecutorConversation(
                         checkpoint=sandbox,
                         sandbox=copy.deepcopy(executor_base),
+                        session=executor_session,
                     )
                 try:
                     _summary, executed_sandbox = self.execute_plan(
@@ -1504,6 +1533,7 @@ class EvidenceCompilerRuntime:
         result_sink: Callable[[Any], None] | None = None,
         model_budget: _CheckModelBudget | None = None,
         thinking_override: str | None = None,
+        session: Any | None = None,
     ) -> Any:
         if not self.llm.available:
             raise RuntimeError("LLM_API_KEY is required for Evidence Compiler execution")
@@ -1566,6 +1596,7 @@ class EvidenceCompilerRuntime:
                     max_turns=max_turns,
                     hooks=self.hooks,
                     run_config=run_config,
+                    session=session,
                 )
                 parsed = result.final_output
                 if not isinstance(parsed, output_type):
@@ -1959,6 +1990,29 @@ def _downstream_check_ids(plan: ProofPlan, target_check_id: str) -> set[str]:
                 affected.add(node.id)
                 changed = True
     return affected
+
+
+def _correction_feedback(
+    plan: ProofPlan,
+    check_id: str,
+    corrections: Sequence[CompilerCorrection],
+) -> list[dict[str, Any]]:
+    feedback: list[dict[str, Any]] = []
+    for correction in corrections:
+        if correction.kind != "RECHECK":
+            continue
+        if check_id not in _downstream_check_ids(plan, correction.target_check_id):
+            continue
+        feedback.append(
+            {
+                "diagnostic_code": "HUMAN_RECHECK_REQUESTED",
+                "check_id": check_id,
+                "target_check_id": correction.target_check_id,
+                "message": correction.message or "A human requested another evidence-grounded review.",
+                "evidence_refs": list(correction.evidence_refs),
+            }
+        )
+    return feedback
 
 
 def _artifact(

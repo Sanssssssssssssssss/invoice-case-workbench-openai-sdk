@@ -1729,6 +1729,55 @@ def test_executor_retry_continues_with_prior_tool_history_and_runtime_observatio
     assert len(conversation.sandbox.submissions) == 2
 
 
+def test_executor_sdk_session_receives_only_new_observation_on_retry(tmp_path, monkeypatch) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    frozen = EvidenceSandbox(sources=[], allowed_check_ids=["check.vendor"])
+    sdk_session = object()
+    conversation = _ExecutorConversation(
+        checkpoint=frozen,
+        sandbox=copy.deepcopy(frozen),
+        session=sdk_session,
+    )
+    observed: list[dict] = []
+
+    def fake_phase(**kwargs):
+        observed.append(kwargs)
+        result = conversation.sandbox.submit_check(
+            check_id="check.vendor",
+            note=f"session candidate {len(observed)}",
+        )
+        assert result["ok"] is True
+        kwargs["result_sink"](SimpleNamespace(raw_responses=[]))
+        return ExecutorSummary(completed_check_ids=["check.vendor"])
+
+    monkeypatch.setattr(runtime, "_run_phase", fake_phase)
+    call = {
+        "plan": _plan(),
+        "prepared_sources": [],
+        "policy_excerpt": policy_excerpt_for(["vendor_identity"]),
+        "sandbox": frozen,
+        "focus_check_id": "check.vendor",
+        "conversation": conversation,
+    }
+    runtime.execute_plan(**call)
+    runtime.execute_plan(
+        **call,
+        runtime_observations=[
+            {
+                "diagnostic_code": "HUMAN_RECHECK_REQUESTED",
+                "message": "Recheck this CHECK.",
+            }
+        ],
+    )
+
+    assert observed[0]["session"] is sdk_session
+    assert observed[0]["input_override"] is None
+    assert observed[1]["session"] is sdk_session
+    observation = json.loads(observed[1]["input_override"])
+    assert observation["failure_signals"][0]["diagnostic_code"] == "HUMAN_RECHECK_REQUESTED"
+    assert conversation.input_items is None
+
+
 @pytest.mark.parametrize("failure_type", [UserError, ModelBehaviorError])
 def test_executor_protocol_error_before_first_submission_is_reraised(
     tmp_path,
