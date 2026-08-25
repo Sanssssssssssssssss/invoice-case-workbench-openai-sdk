@@ -518,7 +518,11 @@ class EvidenceCompilerRuntime:
                 "policy_refs": list(node.policy_refs),
             }
             for node in plan.nodes
-            if node.kind == "CHECK" and node.id in target_check_ids
+            if (
+                node.kind == "CHECK"
+                and node.id in target_check_ids
+                and (node.facet_refs or node.semantic_role_refs or node.policy_refs)
+            )
         }
         try:
             run_results: list[Any] = []
@@ -538,7 +542,7 @@ class EvidenceCompilerRuntime:
                         sandbox,
                         target_check_ids,
                         prior_submission_counts=submission_counts,
-                        require_final_review=True,
+                        review_check_ids=list(submission_review_by_check),
                     ),
                     input_override=model_input,
                     result_sink=run_results.append if conversation is not None else None,
@@ -2288,7 +2292,12 @@ def _sandbox_tools(
         ),
         _function_tool(
             "submit_check",
-            "Submit candidate Claim refs, semantic binding proposals, Witness refs, and remaining questions for one CHECK; this is not a verdict. Runtime treats the first successful call as a private draft and returns a pre-commit coverage review; call submit_check again after that review.",
+            "Submit candidate Claim refs, semantic binding proposals, Witness refs, and remaining questions for one CHECK; this is not a verdict. "
+            + (
+                "Runtime treats the first successful call as a private draft and returns a pre-commit coverage review; call submit_check again after that review."
+                if submission_review_by_check
+                else "When Runtime returns a pre-commit coverage review, address it and call submit_check again."
+            ),
             _SubmitCheckInput,
             submit_check,
         ),
@@ -2300,14 +2309,15 @@ def _completion_hook(
     check_ids: Sequence[str],
     *,
     prior_submission_counts: Mapping[str, int] | None = None,
-    require_final_review: bool = False,
+    review_check_ids: Sequence[str] = (),
 ) -> Any:
     expected = set(check_ids)
     baseline = dict(prior_submission_counts or {})
-    review_rounds = {check_id: 0 for check_id in expected}
+    review_expected = expected.intersection(review_check_ids)
+    review_rounds = {check_id: 0 for check_id in review_expected}
 
     def complete(_context: Any, tool_results: Any) -> ToolsToFinalOutputResult:
-        if require_final_review:
+        if review_expected:
             submitted_this_round: set[str] = set()
             for tool_result in list(tool_results or []):
                 tool = getattr(tool_result, "tool", None)
@@ -2324,7 +2334,7 @@ def _completion_hook(
                     submitted_this_round.add(check_id)
             for check_id in submitted_this_round:
                 review_rounds[check_id] += 1
-            if any(review_rounds[check_id] < 2 for check_id in expected):
+            if any(review_rounds[check_id] < 2 for check_id in review_expected):
                 return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
         submissions_by_check: dict[str, list[Any]] = {check_id: [] for check_id in expected}
         for item in sandbox.submissions:

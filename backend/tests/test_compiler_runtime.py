@@ -3580,7 +3580,7 @@ def test_completion_hook_requires_same_executor_pre_commit_review() -> None:
         },
     )
     submit = next(tool for tool in tools if tool.name == "submit_check")
-    hook = _completion_hook(sandbox, ["check.one"], require_final_review=True)
+    hook = _completion_hook(sandbox, ["check.one"], review_check_ids=["check.one"])
 
     first_output = asyncio.run(
         submit.on_invoke_tool(None, json.dumps({"check_id": "check.one", "note": "draft"}))
@@ -3597,6 +3597,15 @@ def test_completion_hook_requires_same_executor_pre_commit_review() -> None:
     second_result = SimpleNamespace(tool=submit, output=second_output)
 
     assert hook(None, [second_result]).is_final_output is True
+
+    simple = EvidenceSandbox(sources=[], allowed_check_ids=["check.simple"])
+    simple_submit = next(tool for tool in _sandbox_tools(simple) if tool.name == "submit_check")
+    simple_hook = _completion_hook(simple, ["check.simple"])
+    simple_output = asyncio.run(
+        simple_submit.on_invoke_tool(None, json.dumps({"check_id": "check.simple", "note": "done"}))
+    )
+    assert "pre_commit_review" not in json.loads(simple_output)
+    assert simple_hook(None, [SimpleNamespace(tool=simple_submit, output=simple_output)]).is_final_output
 
 
 
