@@ -29,6 +29,7 @@ from app.compiler_runtime.runtime import (
     CompilerCorrection,
     EvidenceCompilerRuntime,
     ExecutorSummary,
+    PreparedSource,
     VerificationBatch,
     _CheckModelBudget,
     _ExecutorConversation,
@@ -50,7 +51,7 @@ from app.compiler_runtime.runtime import (
     _sandbox_tools,
     _verifier_contracts,
 )
-from app.compiler_runtime.sandbox import EvidenceSandbox
+from app.compiler_runtime.sandbox import EvidenceSandbox, SourceRecord
 from app.compiler_runtime.signatures import proof_signature_for
 from app.config import Settings
 from app.llm import LlmClient
@@ -1098,6 +1099,59 @@ def test_runtime_resumes_after_last_committed_check_without_replaying_it(tmp_pat
     assert result.checkpoint is not None
     assert result.checkpoint.status == "completed"
     assert result.checkpoint.completed_check_ids == ["check.one", "check.two"]
+
+
+def test_runtime_restores_sources_from_checkpoint(tmp_path) -> None:
+    plan = _two_check_plan()
+    assessments = {
+        "check.one": _not_found_assessment("check.one"),
+        "check.two": _not_found_assessment("check.two"),
+    }
+    source = PreparedSource(
+        record=SourceRecord(
+            source_id="source.invoice",
+            title="invoice.txt",
+            kind="invoice",
+            content="Invoice total: 10.00",
+            provenance={"attachment_id": "attachment_1"},
+        ),
+        metadata={"pages": 1, "source_fingerprint": "source-fingerprint-1"},
+    )
+    checkpoints = []
+    first = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments=assessments,
+    )
+    first.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[source],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        compiler_run_id="compiler_source_restore",
+        checkpoint_sink=checkpoints.append,
+    )
+    committed_one = next(
+        item
+        for item in checkpoints
+        if item.status == "running" and item.completed_check_ids == ["check.one"]
+    )
+
+    resumed = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments=assessments,
+    )
+    result = resumed.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        compiler_run_id="compiler_source_restore",
+        checkpoint=committed_one,
+    )
+
+    assert resumed.execute_calls == ["check.two"]
+    assert result.checkpoint is not None
+    assert result.checkpoint.source_snapshot[0]["content"] == "Invoice total: 10.00"
 
 
 def test_recheck_creates_revision_and_preserves_unaffected_sibling(tmp_path) -> None:

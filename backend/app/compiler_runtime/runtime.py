@@ -248,6 +248,7 @@ class CompilerRunCheckpoint(_RuntimeModel):
     proof: CompiledProof
     retry_count: int = 0
     corrections: list[CompilerCorrection] = Field(default_factory=list)
+    source_snapshot: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def revise_compiler_checkpoint(
@@ -323,7 +324,38 @@ def revise_compiler_checkpoint(
         proof=revised_proof,
         retry_count=checkpoint.retry_count,
         corrections=[*checkpoint.corrections, correction],
+        source_snapshot=list(checkpoint.source_snapshot),
     )
+
+
+def prepared_sources_from_checkpoint(checkpoint: CompilerRunCheckpoint) -> list[PreparedSource]:
+    return [
+        PreparedSource(
+            record=SourceRecord(
+                source_id=str(item["source_id"]),
+                title=str(item.get("title") or ""),
+                kind=str(item.get("kind") or "unknown"),
+                content=str(item.get("content") or ""),
+                provenance=dict(item.get("provenance") or {}),
+            ),
+            metadata=dict(item.get("metadata") or {}),
+        )
+        for item in checkpoint.source_snapshot
+    ]
+
+
+def _source_snapshot(prepared_sources: Sequence[PreparedSource]) -> list[dict[str, Any]]:
+    return [
+        {
+            "source_id": item.record.source_id,
+            "title": item.record.title,
+            "kind": item.record.kind,
+            "content": item.record.content,
+            "provenance": dict(item.record.provenance),
+            "metadata": dict(item.metadata),
+        }
+        for item in prepared_sources
+    ]
 
 
 @dataclass
@@ -997,6 +1029,9 @@ class EvidenceCompilerRuntime:
         checkpoint: CompilerRunCheckpoint | None = None,
         checkpoint_sink: Callable[[CompilerRunCheckpoint], None] | None = None,
     ) -> CompilerRunResult:
+        prepared_sources = list(prepared_sources)
+        if checkpoint is not None and not prepared_sources:
+            prepared_sources = prepared_sources_from_checkpoint(checkpoint)
         active_ids = expand_active_requirements(active_requirement_ids)
         requiredness = {
             requirement_id: bool(
@@ -1108,6 +1143,11 @@ class EvidenceCompilerRuntime:
             proof=proof,
             retry_count=retry_count,
             corrections=list(checkpoint.corrections) if checkpoint is not None else [],
+            source_snapshot=(
+                list(checkpoint.source_snapshot)
+                if checkpoint is not None
+                else _source_snapshot(prepared_sources)
+            ),
         )
         if checkpoint_sink is not None:
             checkpoint_sink(latest_checkpoint)
@@ -1164,6 +1204,7 @@ class EvidenceCompilerRuntime:
                 proof=proof,
                 retry_count=retry_count,
                 corrections=list(latest_checkpoint.corrections),
+                source_snapshot=list(latest_checkpoint.source_snapshot),
             )
             if checkpoint_sink is not None:
                 checkpoint_sink(latest_checkpoint)
