@@ -35,11 +35,25 @@ def test_compiler_checkpoint_uses_run_scoped_existing_trace_store(tmp_path, monk
         case_id="case_checkpoint",
         run_id="run_parent",
         compiler_run_id="compiler_child",
-        payload={"status": "running", "completed_check_ids": ["check.one"]},
+        payload={"revision": 1, "status": "completed", "completed_check_ids": ["check.one"]},
+    )
+    checkpoints.save_compiler(
+        case_id="case_checkpoint",
+        run_id="run_parent",
+        compiler_run_id="compiler_child",
+        payload={"revision": 2, "status": "running", "completed_check_ids": []},
     )
 
     assert checkpoints.load_compiler("case_checkpoint", "run_parent", "compiler_child") == {
+        "revision": 2,
         "status": "running",
+        "completed_check_ids": [],
+    }
+    assert checkpoints.load_compiler(
+        "case_checkpoint", "run_parent", "compiler_child", revision=1
+    ) == {
+        "revision": 1,
+        "status": "completed",
         "completed_check_ids": ["check.one"],
     }
 

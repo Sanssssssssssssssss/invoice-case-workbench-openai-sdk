@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from agents import Agent, FunctionTool, ModelSettings, ToolsToFinalOutputResult
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, UserError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agents.thinking import model_extra_body_for_thinking, role_thinking_type, temperature_for_thinking
 from app.config import Settings
@@ -223,15 +223,106 @@ class CompilerRunResult:
     checkpoint: "CompilerRunCheckpoint | None" = None
 
 
+class CompilerCorrection(_RuntimeModel):
+    correction_id: str = Field(default_factory=lambda: f"correction_{uuid4().hex[:12]}")
+    kind: Literal["RECHECK", "ADD_EVIDENCE", "CORRECT_SCOPE", "CANCEL"]
+    target_check_id: str = ""
+    message: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "CompilerCorrection":
+        if self.kind in {"RECHECK", "ADD_EVIDENCE"} and not self.target_check_id.strip():
+            raise ValueError(f"{self.kind} requires target_check_id")
+        return self
+
+
 class CompilerRunCheckpoint(_RuntimeModel):
     compiler_run_id: str
     revision: int = 1
-    status: Literal["running", "completed", "failed"] = "running"
+    status: Literal["running", "completed", "failed", "cancelled"] = "running"
     active_check_id: str = ""
     completed_check_ids: list[str] = Field(default_factory=list)
     artifact: ReviewArtifact
     proof: CompiledProof
     retry_count: int = 0
+    corrections: list[CompilerCorrection] = Field(default_factory=list)
+
+
+def revise_compiler_checkpoint(
+    checkpoint: CompilerRunCheckpoint,
+    correction: CompilerCorrection,
+    *,
+    requirement_requiredness: Mapping[str, bool] | None = None,
+) -> CompilerRunCheckpoint:
+    """Create a new revision without granting humans proof authority."""
+
+    if correction.kind == "CANCEL":
+        return checkpoint.model_copy(
+            update={
+                "revision": checkpoint.revision + 1,
+                "status": "cancelled",
+                "active_check_id": "",
+                "corrections": [*checkpoint.corrections, correction],
+            }
+        )
+    if correction.kind != "RECHECK":
+        raise ValueError(f"{correction.kind} requires a fresh compiler invocation")
+
+    plan = checkpoint.artifact.plan
+    check_ids = {node.id for node in plan.nodes if node.kind == "CHECK"}
+    target = correction.target_check_id.strip()
+    if target not in check_ids:
+        raise ValueError(f"Correction target {target!r} is not a CHECK in this run")
+    affected = _downstream_check_ids(plan, target)
+    artifact = checkpoint.artifact
+    revised_artifact = artifact.model_copy(
+        update={
+            "assessments": [item for item in artifact.assessments if item.check_id not in affected],
+            "binding_proposals": [
+                item for item in artifact.binding_proposals if item.check_id not in affected
+            ],
+            "calculation_witnesses": [
+                item for item in artifact.calculation_witnesses if item.check_id not in affected
+            ],
+            "submitted_claim_refs": {
+                check_id: refs
+                for check_id, refs in artifact.submitted_claim_refs.items()
+                if check_id not in affected
+            },
+            "submitted_binding_refs": {
+                check_id: refs
+                for check_id, refs in artifact.submitted_binding_refs.items()
+                if check_id not in affected
+            },
+            "submitted_witness_refs": {
+                check_id: refs
+                for check_id, refs in artifact.submitted_witness_refs.items()
+                if check_id not in affected
+            },
+            "execution_status": "PARTIAL",
+            "artifact_hash": "",
+        }
+    )
+    revised_artifact = revised_artifact.model_copy(
+        update={"artifact_hash": revised_artifact.content_hash()}
+    )
+    revised_proof = compile_review_artifact(
+        revised_artifact,
+        requirement_requiredness=requirement_requiredness,
+    )
+    return CompilerRunCheckpoint(
+        compiler_run_id=checkpoint.compiler_run_id,
+        revision=checkpoint.revision + 1,
+        status="running",
+        completed_check_ids=[
+            check_id for check_id in checkpoint.completed_check_ids if check_id not in affected
+        ],
+        artifact=revised_artifact,
+        proof=revised_proof,
+        retry_count=checkpoint.retry_count,
+        corrections=[*checkpoint.corrections, correction],
+    )
 
 
 @dataclass
@@ -963,8 +1054,20 @@ class EvidenceCompilerRuntime:
                 raise ValueError("Compiler checkpoint policy snapshot changed")
             plan = checkpoint.artifact.plan
             ordered_check_ids = _ordered_check_ids(plan)
-            if checkpoint.completed_check_ids != ordered_check_ids[: len(checkpoint.completed_check_ids)]:
-                raise ValueError("Compiler checkpoint completed CHECKs are not a valid plan prefix")
+            completed_set = set(checkpoint.completed_check_ids)
+            if (
+                len(completed_set) != len(checkpoint.completed_check_ids)
+                or completed_set - set(ordered_check_ids)
+                or checkpoint.completed_check_ids
+                != [check_id for check_id in ordered_check_ids if check_id in completed_set]
+            ):
+                raise ValueError("Compiler checkpoint completed CHECKs do not match plan order")
+            nodes = {node.id: node for node in plan.nodes}
+            if any(
+                not set(nodes[check_id].upstream_check_ids).issubset(completed_set)
+                for check_id in completed_set
+            ):
+                raise ValueError("Compiler checkpoint completed CHECKs break dataflow closure")
             current_sources = _initial_sandbox(
                 plan=plan,
                 prepared_sources=prepared_sources,
@@ -996,6 +1099,7 @@ class EvidenceCompilerRuntime:
             artifact=artifact,
             proof=proof,
             retry_count=retry_count,
+            corrections=list(checkpoint.corrections) if checkpoint is not None else [],
         )
         if checkpoint_sink is not None:
             checkpoint_sink(latest_checkpoint)
@@ -1033,6 +1137,7 @@ class EvidenceCompilerRuntime:
                 artifact=artifact,
                 proof=proof,
                 retry_count=retry_count,
+                corrections=list(latest_checkpoint.corrections),
             )
             if checkpoint_sink is not None:
                 checkpoint_sink(latest_checkpoint)
@@ -1840,6 +1945,20 @@ def _upstream_frontier_results(
             }
         )
     return results
+
+
+def _downstream_check_ids(plan: ProofPlan, target_check_id: str) -> set[str]:
+    affected = {target_check_id}
+    changed = True
+    while changed:
+        changed = False
+        for node in plan.nodes:
+            if node.kind != "CHECK" or node.id in affected:
+                continue
+            if affected.intersection(node.upstream_check_ids):
+                affected.add(node.id)
+                changed = True
+    return affected
 
 
 def _artifact(

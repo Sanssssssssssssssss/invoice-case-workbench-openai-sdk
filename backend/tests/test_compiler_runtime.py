@@ -26,6 +26,7 @@ from app.compiler_runtime.runtime import (
     CHECK_FRONTIER_ATTEMPT_CAP,
     EXECUTOR_MAX_TURNS,
     PROMPT_VERSIONS,
+    CompilerCorrection,
     EvidenceCompilerRuntime,
     ExecutorSummary,
     VerificationBatch,
@@ -40,6 +41,7 @@ from app.compiler_runtime.runtime import (
     expand_active_requirements,
     policy_excerpt_for,
     requirement_context,
+    revise_compiler_checkpoint,
     prepare_sources,
     _planning_extraction_summary,
     _planning_source_documents,
@@ -1096,6 +1098,93 @@ def test_runtime_resumes_after_last_committed_check_without_replaying_it(tmp_pat
     assert result.checkpoint is not None
     assert result.checkpoint.status == "completed"
     assert result.checkpoint.completed_check_ids == ["check.one", "check.two"]
+
+
+def test_recheck_creates_revision_and_preserves_unaffected_sibling(tmp_path) -> None:
+    plan = ProofPlan(
+        plan_id="plan.revision",
+        objective="Verify a dependency chain and an independent sibling.",
+        active_requirement_ids=["vendor_identity"],
+        roots={"vendor_identity": "root.all"},
+        nodes=[
+            ProofNode(
+                id="check.one",
+                kind="CHECK",
+                statement="The first source check is complete.",
+                requirement_refs=["vendor_identity"],
+            ),
+            ProofNode(
+                id="check.two",
+                kind="CHECK",
+                statement="The dependent source check is complete.",
+                requirement_refs=["vendor_identity"],
+                upstream_check_ids=["check.one"],
+            ),
+            ProofNode(
+                id="check.sibling",
+                kind="CHECK",
+                statement="The independent source check is complete.",
+                requirement_refs=["vendor_identity"],
+            ),
+            ProofNode(
+                id="root.all",
+                kind="ALL",
+                depends_on=["check.one", "check.two", "check.sibling"],
+            ),
+        ],
+    )
+    assessments = {
+        check_id: _not_found_assessment(check_id)
+        for check_id in ("check.one", "check.two", "check.sibling")
+    }
+    initial_runtime = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments=assessments,
+    )
+    initial = initial_runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        compiler_run_id="compiler_revision_test",
+    )
+    original = initial.checkpoint
+    assert original is not None
+
+    revised = revise_compiler_checkpoint(
+        original,
+        CompilerCorrection(
+            kind="RECHECK",
+            target_check_id="check.one",
+            message="The first CHECK needs another review.",
+        ),
+    )
+
+    assert original.status == "completed"
+    assert original.revision == 1
+    assert revised.revision == 2
+    assert revised.status == "running"
+    assert revised.completed_check_ids == ["check.sibling"]
+    assert [item.check_id for item in revised.artifact.assessments] == ["check.sibling"]
+
+    resumed_runtime = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments=assessments,
+    )
+    completed = resumed_runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        compiler_run_id="compiler_revision_test",
+        checkpoint=revised,
+    )
+
+    assert set(resumed_runtime.execute_calls) == {"check.one", "check.two"}
+    assert "check.sibling" not in resumed_runtime.execute_calls
+    assert completed.checkpoint is not None
+    assert completed.checkpoint.revision == 2
+    assert completed.checkpoint.status == "completed"
 
 
 def test_runtime_orders_declared_upstream_check_and_hands_off_only_its_committed_result(

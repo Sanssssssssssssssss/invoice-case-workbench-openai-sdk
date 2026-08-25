@@ -77,19 +77,35 @@ class RuntimeCheckpointStore:
         compiler_run_id: str,
         payload: dict[str, Any],
     ) -> None:
-        path = self.store.resolve_case_path(
+        revision = int(payload.get("revision") or 1)
+        root = self.store.resolve_case_path(
             self.store.validate_case_id(case_id),
-            f"traces/{run_id}/compiler/{compiler_run_id}.json",
+            f"traces/{run_id}/compiler/{compiler_run_id}",
         )
+        path = root / f"revision_{revision:04d}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
-    def load_compiler(self, case_id: str, run_id: str, compiler_run_id: str) -> dict[str, Any]:
+    def load_compiler(
+        self,
+        case_id: str,
+        run_id: str,
+        compiler_run_id: str,
+        *,
+        revision: int | None = None,
+    ) -> dict[str, Any]:
         with PERSISTENCE_LOCK:
-            path = self.store.resolve_case_path(
+            root = self.store.resolve_case_path(
                 self.store.validate_case_id(case_id),
-                f"traces/{run_id}/compiler/{compiler_run_id}.json",
+                f"traces/{run_id}/compiler/{compiler_run_id}",
             )
+            if revision is None:
+                candidates = sorted(root.glob("revision_*.json")) if root.exists() else []
+                if not candidates:
+                    raise FileNotFoundError(compiler_run_id)
+                path = candidates[-1]
+            else:
+                path = root / f"revision_{int(revision):04d}.json"
             if not path.exists():
                 raise FileNotFoundError(compiler_run_id)
             return json.loads(path.read_text(encoding="utf-8"))
