@@ -14,6 +14,10 @@ import type {
 
 let cachedBaseUrl: string | null = null
 
+export function setBackendBaseUrl(baseUrl: string) {
+  cachedBaseUrl = baseUrl.trim().replace(/\/+$/, '')
+}
+
 export async function getBaseUrl() {
   if (cachedBaseUrl) return cachedBaseUrl
   if (typeof window !== 'undefined' && window.cockpit) {

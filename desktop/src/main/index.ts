@@ -1,10 +1,13 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron'
 import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backendProcess.js'
 import { isAllowedExternalUrl } from './externalLinks.js'
+import { AgentSettingsStore } from './agentSettingsStore.js'
+import type { SaveAgentSettingsInput } from '../shared/agentSettings.js'
 
 let mainWindow: BrowserWindow | null = null
 let backend: BackendHandle | null = null
+let agentSettings: AgentSettingsStore | null = null
 let isQuitting = false
 
 const RENDERER_LOAD_ATTEMPTS = 40
@@ -87,15 +90,20 @@ function registerWindowIpc(): void {
   })
 }
 
-function registerBackendIpc(handle: BackendHandle): void {
+function activeBackend(): BackendHandle {
+  if (!backend) throw new Error('Backend is not running')
+  return backend
+}
+
+function registerBackendIpc(): void {
   ipcMain.handle('backend:get-info', () => ({
-    baseUrl: handle.baseUrl,
-    port: handle.port,
-    logPath: handle.logPath
+    baseUrl: activeBackend().baseUrl,
+    port: activeBackend().port,
+    logPath: activeBackend().logPath
   }))
 
   ipcMain.handle('case-file:open', async (_event, caseId: string, path: string) => {
-    const metadata = await resolveCaseFile(handle, caseId, path)
+    const metadata = await resolveCaseFile(activeBackend(), caseId, path)
     const error = await shell.openPath(metadata.absolute_path)
     if (error) {
       throw new Error(error)
@@ -103,8 +111,32 @@ function registerBackendIpc(handle: BackendHandle): void {
   })
 
   ipcMain.handle('case-file:show-in-folder', async (_event, caseId: string, path: string) => {
-    const metadata = await resolveCaseFile(handle, caseId, path)
+    const metadata = await resolveCaseFile(activeBackend(), caseId, path)
     shell.showItemInFolder(metadata.absolute_path)
+  })
+
+  ipcMain.handle('agent-settings:get', () => {
+    if (!agentSettings) throw new Error('Agent settings are not ready')
+    return agentSettings.public()
+  })
+
+  ipcMain.handle('agent-settings:save', async (_event, input: SaveAgentSettingsInput) => {
+    if (!agentSettings) throw new Error('Agent settings are not ready')
+    const candidate = agentSettings.candidate(input)
+    const replacement = await startBackend(agentSettings.backendEnv(candidate))
+    try {
+      agentSettings.save(candidate)
+    } catch (error) {
+      replacement.stop()
+      throw error
+    }
+    const previous = backend
+    backend = replacement
+    previous?.stop()
+    return {
+      settings: agentSettings.public(candidate),
+      backend: { baseUrl: replacement.baseUrl, port: replacement.port, logPath: replacement.logPath }
+    }
   })
 }
 
@@ -134,8 +166,16 @@ async function resolveCaseFile(handle: BackendHandle, caseId: string, path: stri
 
 app.whenReady().then(async () => {
   registerWindowIpc()
-  backend = await startBackend()
-  registerBackendIpc(backend)
+  agentSettings = new AgentSettingsStore(
+    join(app.getPath('userData'), 'agent-settings.json'),
+    {
+      available: () => safeStorage.isEncryptionAvailable(),
+      encrypt: (value) => safeStorage.encryptString(value),
+      decrypt: (value) => safeStorage.decryptString(value)
+    }
+  )
+  backend = await startBackend(agentSettings.backendEnv())
+  registerBackendIpc()
   createWindow(backend)
 
   app.on('activate', () => {

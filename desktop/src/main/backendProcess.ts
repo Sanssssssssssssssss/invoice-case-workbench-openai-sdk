@@ -23,7 +23,7 @@ export function repoRoot(): string {
   return resolve(process.resourcesPath, 'app')
 }
 
-export async function startBackend(): Promise<BackendHandle> {
+export async function startBackend(envOverrides: NodeJS.ProcessEnv = {}): Promise<BackendHandle> {
   const root = repoRoot()
   const port = await findFreePort()
   const baseUrl = `http://127.0.0.1:${port}`
@@ -43,6 +43,7 @@ export async function startBackend(): Promise<BackendHandle> {
         ...process.env,
         PYTHONUNBUFFERED: '1',
         LLM_THINKING_TYPE: 'enabled',
+        ...envOverrides,
         INVOICE_AGENT_DESKTOP_PORT: String(port)
       }
     }

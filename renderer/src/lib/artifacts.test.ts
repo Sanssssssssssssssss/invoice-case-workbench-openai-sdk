@@ -15,6 +15,30 @@ const artifact: ArtifactItem = {
   generated: true
 }
 
+const settingsIpc = {
+  getAgentSettings: vi.fn(async () => ({
+    provider: 'deepseek' as const,
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-v4-flash',
+    thinking: 'high' as const,
+    maxSteps: 10,
+    contextChars: 200000,
+    hasApiKey: true
+  })),
+  saveAgentSettings: vi.fn(async () => ({
+    settings: {
+      provider: 'deepseek' as const,
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-v4-flash',
+      thinking: 'high' as const,
+      maxSteps: 10,
+      contextChars: 200000,
+      hasApiKey: true
+    },
+    backend: { baseUrl: 'http://127.0.0.1:8010', port: 8010, logPath: '' }
+  }))
+}
+
 describe('artifact actions', () => {
   it('keeps PDF as the primary report entry ahead of Markdown', () => {
     const markdown = { ...artifact, updated_at: '2026-06-02T10:00:00+00:00' }
@@ -34,6 +58,7 @@ describe('artifact actions', () => {
 
     const result = await runArtifactAction('case_1', artifact, 'open', {
       cockpit: {
+        ...settingsIpc,
         getBackendInfo: vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8010', port: 8010, logPath: '' })),
         windowControl: vi.fn(async () => undefined),
         openCaseFile,
@@ -51,6 +76,7 @@ describe('artifact actions', () => {
 
     const result = await runArtifactAction('case_1', artifact, 'show', {
       cockpit: {
+        ...settingsIpc,
         getBackendInfo: vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8010', port: 8010, logPath: '' })),
         windowControl: vi.fn(async () => undefined),
         openCaseFile: vi.fn(async () => undefined),

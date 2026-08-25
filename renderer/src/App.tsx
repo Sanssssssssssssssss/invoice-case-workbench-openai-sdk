@@ -406,6 +406,7 @@ export default function App() {
             onCreate={() => createCase.mutate()}
             onDelete={(caseId) => deleteCase.mutate(caseId)}
             onRefresh={() => void casesQuery.refetch()}
+            agentRunning={agentRunning}
           />
         </Panel>
         <PanelResizeHandle className="resize-handle" />
