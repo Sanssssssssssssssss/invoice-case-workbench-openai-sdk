@@ -1671,6 +1671,117 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
+.compiler-child-run {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.compiler-child-head,
+.compiler-child-head > div,
+.compiler-child-events article > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compiler-child-head {
+  justify-content: space-between;
+}
+
+.compiler-child-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.compiler-child-head .eyebrow {
+  color: var(--teal);
+  font-size: 10px;
+  font-weight: 720;
+}
+
+.compiler-child-head strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compiler-run-status {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: var(--teal-soft);
+  color: var(--teal);
+  font-size: 10px;
+  font-weight: 720;
+}
+
+.compiler-run-status.completed {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.compiler-run-status.error,
+.compiler-run-status.fatal {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.compiler-child-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.compiler-child-facts span,
+.compiler-child-events article span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.compiler-child-facts span {
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+}
+
+.compiler-child-events {
+  display: grid;
+  gap: 6px;
+  max-height: 230px;
+  overflow-y: auto;
+}
+
+.compiler-child-events article {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  border-left: 2px solid #b8d7d5;
+  background: var(--surface);
+}
+
+.compiler-child-events article > div {
+  justify-content: space-between;
+}
+
+.compiler-child-events article strong {
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.compiler-child-events article p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .compiler-artifact-step {
   position: relative;
   min-width: 0;

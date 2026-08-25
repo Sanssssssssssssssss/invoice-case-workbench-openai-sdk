@@ -51,7 +51,7 @@ export function Inspector(props: InspectorProps) {
           <EvidencePanel evidence={props.evidence} />
         </Tabs.Content>
         <Tabs.Content value="compiler" className="tab-content">
-          <CompilerPanel caseState={props.caseState} />
+          <CompilerPanel caseState={props.caseState} events={props.events} />
         </Tabs.Content>
         <Tabs.Content value="trace" className="tab-content trace-tab">
           <TracePanel {...props} />

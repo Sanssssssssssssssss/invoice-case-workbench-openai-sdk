@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AlertTriangle, Braces, CheckCircle2, CircleDashed, FileSearch, GitBranch, ShieldCheck } from 'lucide-react'
-import type { CaseState, DecisionProof, ProofNode } from '@/types'
-import { compilerArtifactStats, flattenProofTree, proofStatusLabel, proofStatusTone } from '@/lib/compilerView'
+import type { CaseState, DecisionProof, ProofNode, TraceEvent } from '@/types'
+import { compilerArtifactStats, compilerChildRunView, flattenProofTree, proofStatusLabel, proofStatusTone, type CompilerChildRunView } from '@/lib/compilerView'
 
 type CompilerView = 'proof' | 'plan' | 'ir' | 'diagnostics'
 
@@ -12,19 +12,24 @@ const views: Array<{ id: CompilerView; label: string }> = [
   { id: 'diagnostics', label: '缺口与诊断' }
 ]
 
-export function CompilerPanel({ caseState }: { caseState?: CaseState }) {
+export function CompilerPanel({ caseState, events = [] }: { caseState?: CaseState; events?: TraceEvent[] }) {
   const [view, setView] = useState<CompilerView>('proof')
   const artifact = caseState?.review_artifact
   const proof = caseState?.compiled_proof
   const stats = compilerArtifactStats(caseState)
+  const childRun = useMemo(() => compilerChildRunView(events), [events])
 
   if (!artifact || !proof) {
+    if (childRun) {
+      return (
+        <div className="compiler-panel">
+          <ChildRunStatus childRun={childRun} />
+          <CompilerEmpty />
+        </div>
+      )
+    }
     return (
-      <div className="compiler-empty">
-        <span className="compiler-empty-icon"><CircleDashed size={22} /></span>
-        <strong>尚无 Evidence Compiler 产物</strong>
-        <p>这个案件可能来自旧版本，或还没有执行证据审核。需求和已保存证据仍可正常查看。</p>
-      </div>
+      <CompilerEmpty />
     )
   }
 
@@ -38,6 +43,8 @@ export function CompilerPanel({ caseState }: { caseState?: CaseState }) {
         </div>
         <span className="compiler-health"><ShieldCheck size={16} /> 已经 Kernel 验证</span>
       </header>
+
+      {childRun && <ChildRunStatus childRun={childRun} />}
 
       <div className="compiler-artifact-flow" aria-label="compiler artifacts">
         <ArtifactStep label="ProofPlan" value={`${stats.checks} checks`} icon={<GitBranch size={15} />} />
@@ -61,6 +68,55 @@ export function CompilerPanel({ caseState }: { caseState?: CaseState }) {
       {view === 'diagnostics' && <DiagnosticsView caseState={caseState} />}
     </div>
   )
+}
+
+function CompilerEmpty() {
+  return (
+    <div className="compiler-empty">
+      <span className="compiler-empty-icon"><CircleDashed size={22} /></span>
+      <strong>尚无 Evidence Compiler 产物</strong>
+      <p>这个案件可能来自旧版本，或还没有执行证据审核。需求和已保存证据仍可正常查看。</p>
+    </div>
+  )
+}
+
+function ChildRunStatus({ childRun }: { childRun: CompilerChildRunView }) {
+  const progress = childRun.totalChecks > 0
+    ? `${childRun.completedChecks}/${childRun.totalChecks} CHECK`
+    : '正在准备 CHECK'
+  return (
+    <section className="compiler-child-run" aria-label="Compiler child run">
+      <div className="compiler-child-head">
+        <div>
+          <span className="eyebrow">Durable child run · revision {childRun.revision}</span>
+          <strong title={childRun.compilerRunId}>{childRun.compilerRunId}</strong>
+        </div>
+        <span className={`compiler-run-status ${childRun.status}`}>{childRunStatusLabel(childRun.status)}</span>
+      </div>
+      <div className="compiler-child-facts">
+        <span>{progress}</span>
+        {childRun.activeCheckId && <span>当前：{childRun.activeCheckId}</span>}
+      </div>
+      <div className="compiler-child-events">
+        {childRun.events.map((event) => (
+          <article key={event.eventId}>
+            <div>
+              <strong>{event.action || event.stage || 'Compiler 进度'}</strong>
+              <span>{[event.status, event.checkId, event.diagnosticCode].filter(Boolean).join(' · ')}</span>
+            </div>
+            {event.publicReason && <p>{event.publicReason}</p>}
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function childRunStatusLabel(status: string) {
+  if (status === 'completed') return '已完成'
+  if (status === 'error' || status === 'fatal') return '失败'
+  if (status === 'cancelled') return '已取消'
+  return '运行中'
 }
 
 function ArtifactStep({ label, value, icon, last = false }: { label: string; value: string; icon: React.ReactNode; last?: boolean }) {

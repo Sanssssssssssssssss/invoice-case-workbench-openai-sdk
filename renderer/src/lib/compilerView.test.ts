@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ProofPlan, TraceEvent } from '@/types'
-import { compilerStageForEvent, flattenProofTree, initialCompilerTraceSelection, proofStatusLabel } from './compilerView'
+import { compilerChildRunView, compilerStageForEvent, flattenProofTree, initialCompilerTraceSelection, proofStatusLabel } from './compilerView'
 
 const plan: ProofPlan = {
   plan_id: 'plan_1',
@@ -150,5 +150,41 @@ describe('initial compiler trace selection', () => {
   it('keeps an empty run on Compiler with no selected event', () => {
     expect(initialCompilerTraceSelection([])).toEqual({ stage: 'compiler', event: null })
     expect(initialCompilerTraceSelection([event('allow', 'policy_check')])).toEqual({ stage: 'compiler', event: null })
+  })
+})
+
+describe('compiler child run view', () => {
+  it('derives the latest revision and exposes only bounded public operational fields', () => {
+    const events = Array.from({ length: 10 }, (_, index) => ({
+      ...event(`child-${index}`, 'model_thinking'),
+      case_seq: index,
+      payload: {
+        compiler_run_id: 'compiler_child',
+        compiler_revision: index === 0 ? 1 : 2,
+        stage: 'executor',
+        status: index === 9 ? 'frontier_committed' : 'frontier_started',
+        action: `action ${index}`,
+        public_reason: `reason ${index}`,
+        focused_check_ids: ['check_total'],
+        check_count: 1,
+        reasoning_excerpt: 'private',
+        raw_prompt: 'private'
+      }
+    }))
+
+    const view = compilerChildRunView(events)
+    expect(view).toMatchObject({
+      compilerRunId: 'compiler_child',
+      revision: 2,
+      status: 'completed',
+      completedChecks: 1,
+      totalChecks: 1
+    })
+    expect(view?.events).toHaveLength(8)
+    expect(JSON.stringify(view)).not.toContain('private')
+  })
+
+  it('returns null when the selected run has no child metadata', () => {
+    expect(compilerChildRunView([event('task_compiler')])).toBeNull()
   })
 })

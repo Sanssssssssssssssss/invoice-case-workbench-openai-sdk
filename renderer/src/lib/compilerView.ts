@@ -29,6 +29,24 @@ export interface CompilerTraceSelection {
   event: TraceEvent | null
 }
 
+export interface CompilerChildRunView {
+  compilerRunId: string
+  revision: number
+  status: string
+  completedChecks: number
+  totalChecks: number
+  activeCheckId: string
+  events: Array<{
+    eventId: string
+    stage: string
+    status: string
+    action: string
+    publicReason: string
+    checkId: string
+    diagnosticCode: string
+  }>
+}
+
 export function flattenProofTree(plan: ProofPlan, rootId: string): ProofTreeRow[] {
   const nodes = new Map(plan.nodes.map((node) => [node.id, node]))
   const rows: ProofTreeRow[] = []
@@ -119,6 +137,72 @@ export function initialCompilerTraceSelection(events: TraceEvent[]): CompilerTra
     }
   }
   return { stage: 'compiler', event: null }
+}
+
+export function compilerChildRunView(events: TraceEvent[]): CompilerChildRunView | null {
+  const ordered = [...events].sort((left, right) => left.case_seq - right.case_seq || left.seq - right.seq)
+  const tagged = ordered.filter((event) => stringValue(event.payload.compiler_run_id))
+  const compilerRunId = stringValue(tagged.at(-1)?.payload.compiler_run_id)
+  if (!compilerRunId) return null
+
+  const runEvents = tagged.filter((event) => stringValue(event.payload.compiler_run_id) === compilerRunId)
+  const revision = Math.max(1, ...runEvents.map((event) => numberValue(event.payload.compiler_revision)))
+  const revisionEvents = runEvents.filter((event) => Math.max(1, numberValue(event.payload.compiler_revision)) === revision)
+  const completed = new Set<string>()
+  let totalChecks = 0
+
+  for (const event of revisionEvents) {
+    totalChecks = Math.max(totalChecks, numberValue(event.payload.check_count), numberValue(event.payload.target_check_count))
+    if (stringValue(event.payload.status) === 'frontier_committed') {
+      const checkId = checkIdForEvent(event)
+      if (checkId) completed.add(checkId)
+    }
+    for (const checkId of stringArray(event.payload.completed_check_ids)) completed.add(checkId)
+  }
+
+  const latest = revisionEvents.at(-1)!
+  const latestStatus = stringValue(latest.payload.status) || latest.status
+  const hasFinalProof = revisionEvents.some((event) => numberValue(event.payload.supported_count)
+    + numberValue(event.payload.contradicted_count)
+    + numberValue(event.payload.not_found_count) > 0)
+  const status = ['fatal', 'error'].includes(latestStatus)
+    ? 'error'
+    : hasFinalProof || (totalChecks > 0 && completed.size >= totalChecks)
+      ? 'completed'
+      : latestStatus || 'running'
+
+  return {
+    compilerRunId,
+    revision,
+    status,
+    completedChecks: completed.size,
+    totalChecks,
+    activeCheckId: status === 'completed' ? '' : checkIdForEvent(latest),
+    events: revisionEvents.slice(-8).reverse().map((event) => ({
+      eventId: event.event_id,
+      stage: stringValue(event.payload.stage) || stringValue(event.payload.role),
+      status: stringValue(event.payload.status) || event.status,
+      action: stringValue(event.payload.action) || event.summary,
+      publicReason: stringValue(event.payload.public_reason),
+      checkId: checkIdForEvent(event),
+      diagnosticCode: stringValue(event.payload.diagnostic_code)
+        || stringValue(event.payload.hook_code)
+        || stringArray(event.payload.diagnostic_codes)[0]
+        || ''
+    }))
+  }
+}
+
+function checkIdForEvent(event: TraceEvent) {
+  return stringValue(event.payload.check_id) || stringArray(event.payload.focused_check_ids)[0] || ''
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && Boolean(item)) : []
+}
+
+function numberValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
 function stringValue(value: unknown) {
