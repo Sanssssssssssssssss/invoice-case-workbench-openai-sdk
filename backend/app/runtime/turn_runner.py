@@ -1841,6 +1841,7 @@ class TurnRunner:
                     settings=self.settings,
                     progress_sink=self._compiler_progress_sink(state),
                 )
+                compiler_run_id = f"compiler_{state.run_id.removeprefix('run_')}"
                 compiled = runtime.run(
                     task_objective=task_objective,
                     active_requirement_ids=selected,
@@ -1850,10 +1851,23 @@ class TurnRunner:
                         item.id: item.required
                         for item in case_state.requirements
                     },
+                    compiler_run_id=compiler_run_id,
+                    checkpoint_sink=lambda checkpoint: self.checkpoints.save_compiler(
+                        case_id=state.case_id,
+                        run_id=state.run_id,
+                        compiler_run_id=checkpoint.compiler_run_id,
+                        payload=checkpoint.model_dump(mode="json"),
+                    ),
                 )
                 result = EvidenceReviewResult.model_validate(compiled.review_result).model_dump(mode="json")
                 state.observability["_pending_review_artifact"] = compiled.artifact.model_dump(mode="json")
                 state.observability["compiler_run"] = {
+                    "compiler_run_id": compiler_run_id,
+                    "revision": compiled.checkpoint.revision if compiled.checkpoint else 1,
+                    "status": compiled.checkpoint.status if compiled.checkpoint else "completed",
+                    "completed_check_ids": (
+                        list(compiled.checkpoint.completed_check_ids) if compiled.checkpoint else []
+                    ),
                     "plan_id": compiled.artifact.plan.plan_id,
                     "plan_hash": compiled.artifact.plan_hash,
                     "evidence_snapshot_hash": compiled.artifact.evidence_snapshot_hash,

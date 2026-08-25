@@ -7,7 +7,8 @@ import time
 from dataclasses import dataclass
 from graphlib import TopologicalSorter
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
+from uuid import uuid4
 
 from agents import Agent, FunctionTool, ModelSettings, ToolsToFinalOutputResult
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, UserError
@@ -219,6 +220,18 @@ class CompilerRunResult:
     proof: CompiledProof
     review_result: dict[str, Any]
     retry_count: int
+    checkpoint: "CompilerRunCheckpoint | None" = None
+
+
+class CompilerRunCheckpoint(_RuntimeModel):
+    compiler_run_id: str
+    revision: int = 1
+    status: Literal["running", "completed", "failed"] = "running"
+    active_check_id: str = ""
+    completed_check_ids: list[str] = Field(default_factory=list)
+    artifact: ReviewArtifact
+    proof: CompiledProof
+    retry_count: int = 0
 
 
 @dataclass
@@ -881,6 +894,9 @@ class EvidenceCompilerRuntime:
         extraction_summary: Sequence[dict[str, Any]] = (),
         requirement_requiredness: Mapping[str, bool] | None = None,
         task_objective: str = "",
+        compiler_run_id: str = "",
+        checkpoint: CompilerRunCheckpoint | None = None,
+        checkpoint_sink: Callable[[CompilerRunCheckpoint], None] | None = None,
     ) -> CompilerRunResult:
         active_ids = expand_active_requirements(active_requirement_ids)
         requiredness = {
@@ -893,51 +909,102 @@ class EvidenceCompilerRuntime:
             for requirement_id in active_ids
         }
         policy_excerpt = policy_excerpt or policy_excerpt_for(active_ids)
-        plan = self.compile_task(
-            active_requirement_ids=active_ids,
-            policy_excerpt=policy_excerpt,
-            source_catalog=[
-                {
-                    "source_id": item.record.source_id,
-                    "title": item.record.title,
-                    "kind": item.record.kind,
-                    "characters": len(item.record.content),
-                }
-                for item in prepared_sources
-            ],
-            extraction_summary=extraction_summary,
-            source_documents=[
-                {"kind": item.record.kind, "content": item.record.content}
-                for item in prepared_sources
-            ],
-            task_objective=task_objective,
-        )
+        run_id = compiler_run_id.strip() or f"compiler_{uuid4().hex[:12]}"
+        completed_check_ids: list[str] = []
+        if checkpoint is None:
+            plan = self.compile_task(
+                active_requirement_ids=active_ids,
+                policy_excerpt=policy_excerpt,
+                source_catalog=[
+                    {
+                        "source_id": item.record.source_id,
+                        "title": item.record.title,
+                        "kind": item.record.kind,
+                        "characters": len(item.record.content),
+                    }
+                    for item in prepared_sources
+                ],
+                extraction_summary=extraction_summary,
+                source_documents=[
+                    {"kind": item.record.kind, "content": item.record.content}
+                    for item in prepared_sources
+                ],
+                task_objective=task_objective,
+            )
+            sandbox = _initial_sandbox(
+                plan=plan,
+                prepared_sources=prepared_sources,
+                policy_excerpt=policy_excerpt,
+            )
+            assessments: list[CheckAssessment] = []
+            artifact = _artifact(
+                plan=plan,
+                evidence_ir=sandbox.evidence_ir,
+                assessments=assessments,
+                submitted_claim_refs={},
+                submitted_binding_refs={},
+                submitted_witness_refs={},
+                policy_excerpt=policy_excerpt,
+                model=self.settings.llm_model,
+                sandbox=sandbox,
+                execution_status=_derived_execution_status(plan, sandbox, assessments),
+            )
+            proof = compile_review_artifact(
+                artifact,
+                requirement_requiredness=requiredness,
+            )
+            retry_count = 0
+        else:
+            if checkpoint.compiler_run_id != run_id:
+                raise ValueError("Compiler checkpoint run id does not match requested run id")
+            if checkpoint.artifact.plan.active_requirement_ids != active_ids:
+                raise ValueError("Compiler checkpoint requirement scope does not match current run")
+            if checkpoint.artifact.policy_hash != policy_hash(policy_excerpt):
+                raise ValueError("Compiler checkpoint policy snapshot changed")
+            plan = checkpoint.artifact.plan
+            ordered_check_ids = _ordered_check_ids(plan)
+            if checkpoint.completed_check_ids != ordered_check_ids[: len(checkpoint.completed_check_ids)]:
+                raise ValueError("Compiler checkpoint completed CHECKs are not a valid plan prefix")
+            current_sources = _initial_sandbox(
+                plan=plan,
+                prepared_sources=prepared_sources,
+                policy_excerpt=policy_excerpt,
+            )
+            if (
+                current_sources.evidence_ir.source_snapshot_hash()
+                != checkpoint.artifact.evidence_ir.source_snapshot_hash()
+            ):
+                raise ValueError("Compiler checkpoint source snapshot changed")
+            sandbox = EvidenceSandbox.from_artifact(
+                artifact=checkpoint.artifact,
+                sources=[item.record for item in prepared_sources],
+            )
+            if sandbox.evidence_ir.content_hash() != checkpoint.artifact.evidence_snapshot_hash:
+                raise ValueError("Compiler checkpoint evidence snapshot changed")
+            assessments = list(checkpoint.artifact.assessments)
+            artifact = checkpoint.artifact
+            proof = checkpoint.proof
+            retry_count = checkpoint.retry_count
+            completed_check_ids = list(checkpoint.completed_check_ids)
 
-        sandbox = _initial_sandbox(
-            plan=plan,
-            prepared_sources=prepared_sources,
-            policy_excerpt=policy_excerpt,
+        latest_checkpoint = CompilerRunCheckpoint(
+            compiler_run_id=run_id,
+            revision=checkpoint.revision if checkpoint is not None else 1,
+            status="running",
+            active_check_id="",
+            completed_check_ids=completed_check_ids,
+            artifact=artifact,
+            proof=proof,
+            retry_count=retry_count,
         )
-        assessments: list[CheckAssessment] = []
-        artifact = _artifact(
-            plan=plan,
-            evidence_ir=sandbox.evidence_ir,
-            assessments=assessments,
-            submitted_claim_refs={},
-            submitted_binding_refs={},
-            submitted_witness_refs={},
-            policy_excerpt=policy_excerpt,
-            model=self.settings.llm_model,
-            sandbox=sandbox,
-            execution_status=_derived_execution_status(plan, sandbox, assessments),
-        )
-        proof = compile_review_artifact(
-            artifact,
-            requirement_requiredness=requiredness,
-        )
-
-        retry_count = 0
+        if checkpoint_sink is not None:
+            checkpoint_sink(latest_checkpoint)
         for check_id in _ordered_check_ids(plan):
+            if check_id in completed_check_ids:
+                continue
+            latest_checkpoint = latest_checkpoint.model_copy(update={"active_check_id": check_id})
+            if checkpoint_sink is not None:
+                checkpoint_sink(latest_checkpoint)
             (
                 sandbox,
                 assessments,
@@ -956,6 +1023,23 @@ class EvidenceCompilerRuntime:
                 proof=proof,
             )
             retry_count += frontier_retries
+            completed_check_ids.append(check_id)
+            latest_checkpoint = CompilerRunCheckpoint(
+                compiler_run_id=run_id,
+                revision=latest_checkpoint.revision,
+                status="running",
+                active_check_id="",
+                completed_check_ids=completed_check_ids,
+                artifact=artifact,
+                proof=proof,
+                retry_count=retry_count,
+            )
+            if checkpoint_sink is not None:
+                checkpoint_sink(latest_checkpoint)
+
+        latest_checkpoint = latest_checkpoint.model_copy(update={"status": "completed", "active_check_id": ""})
+        if checkpoint_sink is not None:
+            checkpoint_sink(latest_checkpoint)
 
         return CompilerRunResult(
             artifact=artifact,
@@ -967,6 +1051,7 @@ class EvidenceCompilerRuntime:
                 proof=proof,
             ),
             retry_count=retry_count,
+            checkpoint=latest_checkpoint,
         )
 
     def _run_check_frontier(

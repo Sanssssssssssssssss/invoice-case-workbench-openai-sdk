@@ -1052,6 +1052,52 @@ def test_runtime_commits_each_check_as_a_single_frontier_in_plan_order(tmp_path)
     assert result.retry_count == 0
 
 
+def test_runtime_resumes_after_last_committed_check_without_replaying_it(tmp_path) -> None:
+    plan = _two_check_plan()
+    assessments = {
+        "check.one": _not_found_assessment("check.one"),
+        "check.two": _not_found_assessment("check.two"),
+    }
+    checkpoints = []
+    first = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments=assessments,
+    )
+    first.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        compiler_run_id="compiler_resume_test",
+        checkpoint_sink=checkpoints.append,
+    )
+    committed_one = next(
+        item
+        for item in checkpoints
+        if item.status == "running" and item.completed_check_ids == ["check.one"]
+    )
+
+    resumed = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments=assessments,
+    )
+    result = resumed.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        compiler_run_id="compiler_resume_test",
+        checkpoint=committed_one,
+    )
+
+    assert resumed.execute_calls == ["check.two"]
+    assert resumed.verify_calls == ["check.two"]
+    assert resumed.prior_submissions == {"check.two": ["check.one"]}
+    assert result.checkpoint is not None
+    assert result.checkpoint.status == "completed"
+    assert result.checkpoint.completed_check_ids == ["check.one", "check.two"]
+
+
 def test_runtime_orders_declared_upstream_check_and_hands_off_only_its_committed_result(
     tmp_path,
 ) -> None:

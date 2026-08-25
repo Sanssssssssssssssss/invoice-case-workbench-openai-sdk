@@ -69,6 +69,31 @@ class RuntimeCheckpointStore:
             if path.exists():
                 path.unlink()
 
+    def save_compiler(
+        self,
+        *,
+        case_id: str,
+        run_id: str,
+        compiler_run_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        path = self.store.resolve_case_path(
+            self.store.validate_case_id(case_id),
+            f"traces/{run_id}/compiler/{compiler_run_id}.json",
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+
+    def load_compiler(self, case_id: str, run_id: str, compiler_run_id: str) -> dict[str, Any]:
+        with PERSISTENCE_LOCK:
+            path = self.store.resolve_case_path(
+                self.store.validate_case_id(case_id),
+                f"traces/{run_id}/compiler/{compiler_run_id}.json",
+            )
+            if not path.exists():
+                raise FileNotFoundError(compiler_run_id)
+            return json.loads(path.read_text(encoding="utf-8"))
+
 
 def _checkpoint_from_json(
     payload: dict[str, Any],

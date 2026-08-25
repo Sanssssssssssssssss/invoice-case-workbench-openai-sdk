@@ -12,7 +12,9 @@ from app.compiler_runtime.policy import policy_excerpt_for, policy_hash
 from app.compiler_runtime.signatures import proof_signature_hash_for
 from app.compiler_runtime.runtime import COMPILER_VERSION, CompilerRunResult, ExecutorSummary, compiler_trace_metadata
 from app.harness import HarnessRuntime
+from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.runtime.turn_runner import TurnRunner
+from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, Attachment
 
 
@@ -21,6 +23,25 @@ def _isolate_cached_settings() -> None:
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+def test_compiler_checkpoint_uses_run_scoped_existing_trace_store(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INVOICE_AGENT_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    store = CaseStore()
+    store.ensure_case_dirs("case_checkpoint")
+    checkpoints = RuntimeCheckpointStore(store)
+
+    checkpoints.save_compiler(
+        case_id="case_checkpoint",
+        run_id="run_parent",
+        compiler_run_id="compiler_child",
+        payload={"status": "running", "completed_check_ids": ["check.one"]},
+    )
+
+    assert checkpoints.load_compiler("case_checkpoint", "run_parent", "compiler_child") == {
+        "status": "running",
+        "completed_check_ids": ["check.one"],
+    }
 
 
 def test_evidence_reviewer_keeps_external_tool_name_and_atomically_writes_artifact(

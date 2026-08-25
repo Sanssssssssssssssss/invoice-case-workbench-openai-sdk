@@ -10,7 +10,7 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from pydantic import ValidationError
 
-from .models import Claim, EvidenceIR
+from .models import Claim, EvidenceIR, ReviewArtifact
 from .proof_terms import (
     CalculationOperation,
     CalculationRequest,
@@ -187,6 +187,50 @@ class EvidenceSandbox:
         self._witnesses: list[CalculationWitness] = []
         self._witness_by_id: dict[str, CalculationWitness] = {}
         self._focused_write_check_ids: frozenset[str] | None = None
+
+    @classmethod
+    def from_artifact(
+        cls,
+        *,
+        artifact: ReviewArtifact,
+        sources: Iterable[SourceRecord],
+    ) -> "EvidenceSandbox":
+        """Restore the last committed CHECK boundary from its canonical artifact."""
+
+        plan = artifact.plan
+        sandbox = cls(
+            sources=sources,
+            allowed_check_ids=(node.id for node in plan.nodes if node.kind == "CHECK"),
+            allowed_check_facets={
+                node.id: node.facet_refs for node in plan.nodes if node.kind == "CHECK"
+            },
+            allowed_check_policy_refs={
+                node.id: node.policy_refs for node in plan.nodes if node.kind == "CHECK"
+            },
+            policy_values=artifact.resolved_policy_terms,
+            policy_snapshot_hash=artifact.policy_hash,
+            evidence_ir=artifact.evidence_ir,
+        )
+        sandbox._binding_proposals = [item.model_copy(deep=True) for item in artifact.binding_proposals]
+        sandbox._binding_by_id = {item.id: item for item in sandbox._binding_proposals}
+        sandbox._witnesses = [item.model_copy(deep=True) for item in artifact.calculation_witnesses]
+        sandbox._witness_by_id = {item.id: item for item in sandbox._witnesses}
+
+        check_ids = set(artifact.submitted_claim_refs)
+        check_ids.update(artifact.submitted_binding_refs)
+        check_ids.update(artifact.submitted_witness_refs)
+        for check_id in sorted(check_ids):
+            submission = CheckSubmission(
+                submission_id=f"restored_{check_id}",
+                check_id=check_id,
+                claim_ids=tuple(artifact.submitted_claim_refs.get(check_id, ())),
+                binding_ids=tuple(artifact.submitted_binding_refs.get(check_id, ())),
+                witness_ids=tuple(artifact.submitted_witness_refs.get(check_id, ())),
+                note="restored committed boundary",
+            )
+            sandbox._submissions.append(submission)
+            sandbox._submission_by_id[submission.submission_id] = submission
+        return sandbox
 
     @property
     def evidence_ir(self) -> EvidenceIR:
