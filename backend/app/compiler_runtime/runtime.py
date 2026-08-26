@@ -1382,7 +1382,7 @@ class EvidenceCompilerRuntime:
                 )
             except _CheckBudgetExhausted:
                 break
-            except (ModelBehaviorError, UserError) as exc:
+            except (MaxTurnsExceeded, ModelBehaviorError, UserError) as exc:
                 feedback = [
                     _frontier_feedback(
                         check_id,

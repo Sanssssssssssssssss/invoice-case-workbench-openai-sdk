@@ -1974,6 +1974,29 @@ class TurnRunner:
                 return receipt
             except Exception as exc:
                 state.observability.pop("_pending_review_artifact", None)
+                receipt = {
+                    "status": "error",
+                    "role": role,
+                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                }
+                try:
+                    _parent_run_id, saved = self.checkpoints.latest_compiler(
+                        state.case_id,
+                        compiler_run_id,
+                    )
+                except FileNotFoundError:
+                    saved = None
+                if saved is not None:
+                    receipt.update(
+                        {
+                            "compiler_run_id": str(saved.get("compiler_run_id") or compiler_run_id),
+                            "revision": int(saved.get("revision") or 1),
+                            "active_check_id": str(saved.get("active_check_id") or ""),
+                            "completed_check_ids": list(saved.get("completed_check_ids") or []),
+                            "next_action_hint": "call_tool:inspect_compiler_run",
+                        }
+                    )
+                    state.observability["compiler_run"] = receipt
                 self.harness.record_role_call(
                     state,
                     role,
@@ -1982,20 +2005,27 @@ class TurnRunner:
                     error=f"{type(exc).__name__}: {exc}",
                     capability=capability,
                 )
-                self.harness.record_observation(
-                    state,
-                    self.context.record_error(kind="role", name=role, exc=exc),
-                )
+                observation = self.context.record_error(kind="role", name=role, exc=exc)
+                if saved is not None:
+                    observation.update(
+                        {
+                            "status": "error",
+                            "key_facts": [
+                                f"compiler_run_id={receipt['compiler_run_id']}",
+                                f"revision={receipt['revision']}",
+                                f"active_check_id={receipt['active_check_id']}",
+                            ],
+                            "next_action_hint": receipt["next_action_hint"],
+                            "must_preserve_refs": [receipt["compiler_run_id"]],
+                        }
+                    )
+                self.harness.record_observation(state, observation)
                 span.update(
                     output=safe_role_output({}, error=f"{type(exc).__name__}: {exc}"),
                     level="ERROR",
                     status_message=str(exc),
                 )
-                return {
-                    "status": "error",
-                    "role": role,
-                    "error": {"type": type(exc).__name__, "message": str(exc)},
-                }
+                return receipt
 
     def _compiler_progress_sink(self, state: HarnessRunState) -> Any:
         def emit(kind: str, payload: dict[str, Any], summary: str) -> bool:

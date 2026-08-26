@@ -32,6 +32,10 @@ class PolicyGate:
         decision: SupervisorDecision,
         planner_context: dict[str, Any],
     ) -> PolicyCheck:
+        compiler_control_action = (
+            decision.action == "call_tool"
+            and decision.target in {"inspect_compiler_run", "recheck_compiler_check", "cancel_compiler_run"}
+        )
         if decision.action == "delegate_agent" and decision.target not in ROLE_TARGETS:
             return block("invalid_delegate_target", "delegate_agent must target a known specialist role.")
         if (
@@ -140,13 +144,19 @@ class PolicyGate:
 
         reviewer_terminal_failure = _role_failed_nonretryable(state, "evidence_reviewer")
         reviewer_paused = _reviewer_is_paused(state)
-        if reviewer_terminal_failure and decision.action not in {"final_answer", "ask_user"}:
+        if reviewer_terminal_failure and decision.action not in {"final_answer", "ask_user"} and not compiler_control_action:
             return block(
                 "reviewer_failure_requires_final",
                 "Evidence review failed terminally in this turn; no CasePatch can be produced.",
                 constraints=["Use final_answer. Runtime will disclose that review failed and no evidence was written."],
             )
-        if has_observation(state, kind="tool", name="read_attachment") and not _review_finished(state) and not reviewer_terminal_failure and not reviewer_paused:
+        if (
+            has_observation(state, kind="tool", name="read_attachment")
+            and not _review_finished(state)
+            and not reviewer_terminal_failure
+            and not reviewer_paused
+            and not compiler_control_action
+        ):
             expected_mode = _next_reviewer_mode(state)
             if not _decision_is_reviewer(decision, expected_mode):
                 return block(

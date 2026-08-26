@@ -1683,6 +1683,40 @@ def test_frontier_does_not_ask_model_to_repair_runtime_exception(tmp_path, monke
     assert calls == 1
 
 
+def test_frontier_retries_verifier_max_turns_inside_the_same_check(tmp_path, monkeypatch) -> None:
+    runtime = EvidenceCompilerRuntime(LlmClient(_settings(tmp_path)))
+    execute_calls = 0
+    verify_calls = 0
+    monkeypatch.setattr(runtime, "compile_task", lambda **_kwargs: _plan())
+
+    def fake_execute(**kwargs):
+        nonlocal execute_calls
+        execute_calls += 1
+        candidate = copy.deepcopy(kwargs["sandbox"])
+        candidate.submit_check(check_id=kwargs["focus_check_id"], note="bounded candidate")
+        return ExecutorSummary(completed_check_ids=[kwargs["focus_check_id"]]), candidate
+
+    def fake_verify(**kwargs):
+        nonlocal verify_calls
+        verify_calls += 1
+        if verify_calls == 1:
+            raise MaxTurnsExceeded("reasoning completed without structured output")
+        return [_not_found_assessment(kwargs["focus_check_id"])]
+
+    monkeypatch.setattr(runtime, "execute_plan", fake_execute)
+    monkeypatch.setattr(runtime, "verify", fake_verify)
+
+    result = runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+    )
+
+    assert execute_calls == 1
+    assert verify_calls == 2
+    assert result.checkpoint.status == "completed"
+
+
 def test_later_frontier_can_resubmit_frozen_claim_lineage(
     tmp_path,
     monkeypatch,

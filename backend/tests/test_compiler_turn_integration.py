@@ -561,6 +561,9 @@ def test_manager_can_inspect_and_recheck_one_durable_compiler_child(
     )
 
     assert resumed["status"] == "error"
+    assert resumed["compiler_run_id"] == checkpoint.compiler_run_id
+    assert resumed["revision"] == 2
+    assert resumed["next_action_hint"] == "call_tool:inspect_compiler_run"
     assert captured["compiler_run_id"] == checkpoint.compiler_run_id
     assert captured["checkpoint"].revision == 2
     assert captured["prepared_sources"][0].record.content == "INVOICE INV-001"

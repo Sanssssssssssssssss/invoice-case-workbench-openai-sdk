@@ -746,6 +746,34 @@ def test_policy_gate_inspects_paused_reviewer_before_patch(tmp_path) -> None:
     assert blocked_patch.error_type == "paused_review_requires_inspection"
 
 
+def test_policy_gate_allows_compiler_inspection_after_reviewer_error(tmp_path) -> None:
+    store, context, harness, state = _state(tmp_path, message="review attachment")
+    harness.record_observation(state, {"kind": "tool", "name": "read_attachment"})
+    harness.record_observation(
+        state,
+        {
+            "kind": "role",
+            "name": "evidence_reviewer",
+            "status": "error",
+            "error": {"type": "MaxTurnsExceeded", "message": "Max turns (1) exceeded"},
+            "next_action_hint": "call_tool:inspect_compiler_run",
+        },
+    )
+
+    check = PolicyGate(store=store, context=context).check(
+        request=AgentTurnRequest(case_id=state.case_id, message="review attachment"),
+        state=state,
+        decision=SupervisorDecision(
+            action="call_tool",
+            target="inspect_compiler_run",
+            input={"compiler_run_id": "compiler_error"},
+        ),
+        planner_context={"attachments": []},
+    )
+
+    assert check.allowed
+
+
 def test_policy_gate_enforces_report_writer_file_and_pdf_sequence(tmp_path, monkeypatch) -> None:
     store, context, harness, state = _state(tmp_path, message="生成最终报告")
     monkeypatch.setattr(
