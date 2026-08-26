@@ -14,6 +14,7 @@ from app.context import ContextManager, classify_runtime_error
 from app.harness import HarnessRuntime
 from app.llm import LlmClient
 from app.runtime.context_assembler import ContextAssembler
+from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.runtime.supervisor_contract import sorted_specialist_tool_specs
 from app.runtime.policy_gate import (
     PolicyGate,
@@ -744,6 +745,39 @@ def test_policy_gate_inspects_paused_reviewer_before_patch(tmp_path) -> None:
     assert inspected.allowed
     assert not blocked_patch.allowed
     assert blocked_patch.error_type == "paused_review_requires_inspection"
+
+
+def test_policy_gate_inspects_existing_compiler_before_user_recheck(tmp_path) -> None:
+    store, context, harness, state = _state(tmp_path, message="最终金额可能有误，请复核")
+    RuntimeCheckpointStore(store).save_compiler(
+        case_id=state.case_id,
+        run_id="run_prior",
+        compiler_run_id="compiler_prior",
+        payload={"revision": 1},
+    )
+    gate = PolicyGate(store=store, context=context)
+    request = AgentTurnRequest(case_id=state.case_id, message="最终金额可能有误，请复核")
+
+    blocked = gate.check(
+        request=request,
+        state=state,
+        decision=SupervisorDecision(
+            action="delegate_agent",
+            target="evidence_reviewer",
+            input={"mode": "review", "compiler_run_id": "compiler_prior"},
+        ),
+        planner_context={"attachments": []},
+    )
+    allowed = gate.check(
+        request=request,
+        state=state,
+        decision=SupervisorDecision(action="call_tool", target="inspect_compiler_run", input={}),
+        planner_context={"attachments": []},
+    )
+
+    assert not blocked.allowed
+    assert blocked.error_type == "repair_requires_compiler_inspection"
+    assert allowed.allowed
 
 
 def test_policy_gate_allows_compiler_inspection_after_reviewer_error(tmp_path) -> None:

@@ -6,6 +6,7 @@ from typing import Any
 
 from app.compiler_runtime.consumer import derive_consumer_packet
 from app.domain.invoice_requirements import is_known_requirement
+from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.state.attachment_manifest import resolve_manifest_attachment
 from app.state.case_store import CaseStore
 from app.state.schemas import AgentTurnRequest, PolicyCheck, SupervisorDecision
@@ -23,6 +24,7 @@ class PolicyGate:
         self.context = context
         self.tool_catalog = tool_catalog or ToolCatalog(FileWorkspace(store))
         self.approval_policy = ToolApprovalPolicy()
+        self.checkpoints = RuntimeCheckpointStore(store)
 
     def check(
         self,
@@ -132,9 +134,23 @@ class PolicyGate:
                         constraints=[f"Choose call_tool target=read_attachment input.attachment_id={attachment_id}."],
                     )
 
+        if (
+            not attachments
+            and requires_evidence_repair(user_message)
+            and _compiler_checkpoint_exists(self.checkpoints, state.case_id)
+            and not has_observation(state, kind="tool", name="inspect_compiler_run")
+            and not (decision.action == "call_tool" and decision.target == "inspect_compiler_run")
+        ):
+            return block(
+                "repair_requires_compiler_inspection",
+                "A prior Compiler result exists. Inspect its durable CHECK state before choosing a repair.",
+                constraints=["Choose call_tool target=inspect_compiler_run before recheck, resume, or restart."],
+            )
+
         if requires_evidence_repair(user_message) and not has_reviewer_mode(state, "review"):
             if not _decision_is_reviewer(decision, "review") and not (
-                decision.action == "call_tool" and decision.target == "recheck_compiler_check"
+                decision.action == "call_tool"
+                and decision.target in {"inspect_compiler_run", "recheck_compiler_check"}
             ):
                 return block(
                     "repair_requires_reviewer",
@@ -555,8 +571,16 @@ def requires_evidence_repair(message: str) -> bool:
     text = str(message or "").lower()
     cleanup = ("忽略", "不用管", "别管", "清理", "删掉", "删除", "覆盖", "翻案", "修复", "以pdf为准", "以 pdf 为准", "ignore", "clear", "remove", "override", "supersede", "repair")
     evidence = ("弱证据", "图片", "png", "ocr", "pdf", "证据", "conflict", "冲突", "误识", "错", "金额", "来源", "traceability", "evidence")
-    recheck = ("重新审核", "重新审查", "重新复核", "re-review")
+    recheck = ("重新审核", "重新审查", "重新复核", "复核", "re-review", "recheck")
     return (any(item in text for item in cleanup) and any(item in text for item in evidence)) or any(item in text for item in recheck)
+
+
+def _compiler_checkpoint_exists(checkpoints: RuntimeCheckpointStore, case_id: str) -> bool:
+    try:
+        checkpoints.latest_compiler(case_id)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def requires_attachment_reopen(message: str) -> bool:
