@@ -443,8 +443,11 @@ def test_manager_can_inspect_and_recheck_one_durable_compiler_child(
         name="recheck_compiler_check",
         payload={
             "compiler_run_id": checkpoint.compiler_run_id,
+            "correction_id": "correction_invoice_classification",
+            "expected_revision": 1,
             "check_id": "check_invoice",
             "message": "The document classification needs another evidence-grounded review.",
+            "evidence_refs": ["source_invoice"],
         },
     )
     assert revised["status"] == "success"
@@ -454,6 +457,48 @@ def test_manager_can_inspect_and_recheck_one_durable_compiler_child(
     )
     assert revised_payload["revision"] == 2
     assert revised_payload["status"] == "running"
+
+    duplicate = runner.tools.call(
+        "recheck_compiler_check",
+        case_id,
+        {
+            "compiler_run_id": checkpoint.compiler_run_id,
+            "correction_id": "correction_invoice_classification",
+            "expected_revision": 1,
+            "check_id": "check_invoice",
+            "message": "The document classification needs another evidence-grounded review.",
+            "evidence_refs": ["source_invoice"],
+        },
+    )
+    assert duplicate["status"] == "revision_exists"
+    assert duplicate["revision"] == 2
+
+    with pytest.raises(ValueError, match="Stale compiler revision"):
+        runner.tools.call(
+            "recheck_compiler_check",
+            case_id,
+            {
+                "compiler_run_id": checkpoint.compiler_run_id,
+                "correction_id": "correction_stale",
+                "expected_revision": 1,
+                "check_id": "check_invoice",
+                "message": "Try a stale write.",
+            },
+        )
+
+    with pytest.raises(ValueError, match="not admitted"):
+        runner.tools.call(
+            "recheck_compiler_check",
+            case_id,
+            {
+                "compiler_run_id": checkpoint.compiler_run_id,
+                "correction_id": "correction_external_ref",
+                "expected_revision": 2,
+                "check_id": "check_invoice",
+                "message": "Use an external file.",
+                "evidence_refs": ["C:/outside/invoice.pdf"],
+            },
+        )
 
     captured: dict[str, Any] = {}
 

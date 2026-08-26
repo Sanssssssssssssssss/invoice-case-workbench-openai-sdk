@@ -8,6 +8,7 @@ from typing import Any, Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.runtime.checkpoints import RuntimeCheckpointStore
+from app.state.persistence import PERSISTENCE_LOCK
 from app.state.schemas import Attachment
 from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
@@ -61,6 +62,15 @@ class RecheckCompilerCheckInput(ToolInput):
     compiler_run_id: str = Field(
         default="",
         description="Exact child compiler_run_id returned by inspect_compiler_run; leave blank for the latest child. Never pass a parent run_id.",
+    )
+    correction_id: str = Field(
+        min_length=1,
+        max_length=96,
+        description="Stable idempotency key for this exact correction action; reuse it when retrying the same action.",
+    )
+    expected_revision: int = Field(
+        ge=1,
+        description="Revision returned by inspect_compiler_run; stale revisions are rejected.",
     )
     check_id: str
     message: str
@@ -180,31 +190,60 @@ def _recheck_compiler_check(context: ToolCallContext, payload: ToolInput) -> dic
     from app.compiler_runtime.runtime import CompilerCorrection, revise_compiler_checkpoint
 
     data = _as(payload, RecheckCompilerCheckInput)
-    parent_run_id, checkpoint = _load_compiler(context, data.compiler_run_id)
-    revised = revise_compiler_checkpoint(
-        checkpoint,
-        CompilerCorrection(
-            kind="RECHECK",
-            target_check_id=data.check_id,
-            message=data.message,
-            evidence_refs=data.evidence_refs,
-        ),
+    correction = CompilerCorrection(
+        correction_id=data.correction_id,
+        kind="RECHECK",
+        target_check_id=data.check_id,
+        message=data.message,
+        evidence_refs=data.evidence_refs,
     )
-    RuntimeCheckpointStore(context.workspace.store).save_compiler(
-        case_id=context.case_id,
-        run_id=parent_run_id,
-        compiler_run_id=revised.compiler_run_id,
-        payload=revised.model_dump(mode="json"),
-    )
+    with PERSISTENCE_LOCK:
+        parent_run_id, checkpoint = _load_compiler(context, data.compiler_run_id)
+        existing = next(
+            (item for item in checkpoint.corrections if item.correction_id == correction.correction_id),
+            None,
+        )
+        if existing is not None:
+            if existing != correction:
+                raise ValueError(f"Correction id {correction.correction_id!r} was reused with different input")
+            revised = checkpoint
+        else:
+            if checkpoint.revision != data.expected_revision:
+                raise ValueError(
+                    f"Stale compiler revision: expected {data.expected_revision}, current {checkpoint.revision}"
+                )
+            _validate_evidence_refs(checkpoint, data.evidence_refs)
+            revised = revise_compiler_checkpoint(checkpoint, correction)
+            RuntimeCheckpointStore(context.workspace.store).save_compiler(
+                case_id=context.case_id,
+                run_id=parent_run_id,
+                compiler_run_id=revised.compiler_run_id,
+                payload=revised.model_dump(mode="json"),
+            )
     result = _compiler_snapshot(context, parent_run_id, revised)
     result.update(
         {
-            "status": "revision_created",
-            "next_action": "evidence_reviewer",
+            "status": "revision_exists" if existing is not None else "revision_created",
+            "next_action": "evidence_reviewer" if revised.status == "running" else "inspect_compiler_run",
             "resume_input": {"compiler_run_id": revised.compiler_run_id},
         }
     )
     return result
+
+
+def _validate_evidence_refs(checkpoint: Any, evidence_refs: list[str]) -> None:
+    admitted: set[str] = set()
+    ref_keys = {"source_id", "attachment_id", "original_ref", "extraction_ref", "source_doc_id"}
+    for source in checkpoint.source_snapshot:
+        for values in (source, source.get("provenance") or {}, source.get("metadata") or {}):
+            admitted.update(
+                str(value)
+                for key, value in values.items()
+                if key in ref_keys and isinstance(value, str) and value
+            )
+    unknown = sorted(set(evidence_refs) - admitted)
+    if unknown:
+        raise ValueError(f"Evidence refs are not admitted in this compiler run: {unknown}")
 
 
 def _cancel_compiler_run(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:
@@ -449,10 +488,16 @@ TOOL_CAPABILITIES: dict[str, ToolCapability] = {
         input_model=RecheckCompilerCheckInput,
         handler=_recheck_compiler_check,
         side_effect="case_write",
-        idempotency="side_effectful",
-        error_taxonomy=("compiler_run_missing", "compiler_checkpoint_invalid", "check_missing"),
+        idempotency="idempotent",
+        error_taxonomy=(
+            "compiler_run_missing",
+            "compiler_checkpoint_invalid",
+            "check_missing",
+            "stale_revision",
+            "evidence_ref_not_admitted",
+        ),
         context_exposure="summary_only",
-        precondition="the target CHECK must belong to the named compiler run",
+        precondition="the target CHECK must belong to the named compiler run; expected_revision must match the inspected revision",
         postcondition="creates a new revision for one CHECK in the named or latest child and returns the exact compiler_run_id that evidence_reviewer must resume; never use a parent run_id; it cannot set proof status",
         required_result_keys=("case_id", "compiler_run_id", "revision", "resume_input"),
     ),

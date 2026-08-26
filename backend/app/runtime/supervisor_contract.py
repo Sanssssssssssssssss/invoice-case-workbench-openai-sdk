@@ -53,7 +53,7 @@ CAPABILITY_CARDS = {
         "write_case_file": "Write report Markdown. Use input.content_ref=\"last_role:report_writer.markdown\" and optional input.relative_path only.",
         "render_pdf": "Render Markdown report to PDF. Use input={} after write_case_file; runtime fills timestamped markdown_path/pdf_path.",
         "inspect_compiler_run": "Inspect the latest durable Compiler child run, including CHECK progress, proof decisions, diagnostics, corrections, and bounded operational events.",
-        "recheck_compiler_check": "Create a revision that rechecks one named CHECK. Then call evidence_reviewer with the returned compiler_run_id; this tool cannot set proof status.",
+        "recheck_compiler_check": "Create a revision that rechecks one named CHECK. Pass the inspected revision and a stable correction_id; reuse that id only when retrying the exact same action. Then call evidence_reviewer with the returned compiler_run_id; this tool cannot set proof status.",
         "cancel_compiler_run": "Cancel one durable Compiler child run without changing committed case proof.",
         "write_case_patch": "Internal action after case_patch_writer only.",
     },
