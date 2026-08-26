@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from agents.models.chatcmpl_converter import Converter
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -22,8 +23,12 @@ from app.runtime.policy_gate import (
     requires_attachment_reopen,
     requires_materials_advice,
 )
+from app.runtime.agents_sdk import (
+    FencedJsonOutputSchema,
+    _without_empty_tool_call_messages,
+    build_run_config,
+)
 from app.runtime.retry import is_transient_llm_error, is_transient_tool_error
-from app.runtime.agents_sdk import FencedJsonOutputSchema, build_run_config
 from app.runtime.tool_runtime import ToolRuntime
 from app.runtime.turn_runner import TurnRunner, supervisor_task
 from app.session_manager import SessionManager
@@ -1021,6 +1026,66 @@ def test_agents_sdk_run_config_uses_explicit_timeout() -> None:
         assert client.timeout == 123
     finally:
         asyncio.run(client.close())
+
+
+def test_manager_run_config_replays_streamed_deepseek_reasoning() -> None:
+    config = build_run_config(
+        Settings(llm_api_key="test", llm_base_url="https://api.deepseek.com"),
+        workflow_name="invoice_agent.case_manager",
+        replay_streamed_reasoning=True,
+    )
+    client = getattr(config, "_invoice_openai_client")
+    model = config.model_provider.get_model("deepseek-v4-flash")
+    items = [
+        {
+            "type": "reasoning",
+            "id": "reasoning_1",
+            "status": "completed",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": "inspect the saved child before resuming"}],
+            "encrypted_content": "signature",
+        },
+        {
+            "type": "function_call",
+            "id": "call_1",
+            "call_id": "call_1",
+            "name": "inspect_compiler_run",
+            "arguments": "{}",
+            "status": "completed",
+        },
+    ]
+
+    try:
+        messages = Converter.items_to_messages(
+            items,
+            model="deepseek-v4-flash",
+            base_url="https://api.deepseek.com",
+            should_replay_reasoning_content=model.should_replay_reasoning_content,
+        )
+        assert messages[0]["reasoning_content"] == "inspect the saved child before resuming"
+    finally:
+        asyncio.run(client.close())
+
+
+def test_manager_chat_history_drops_only_empty_message_between_tool_call_and_output() -> None:
+    tool_call = {"type": "function_call", "call_id": "call_1"}
+    empty_message = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": ""}],
+    }
+    tool_output = {"type": "function_call_output", "call_id": "call_1", "output": "ok"}
+    real_message = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "done"}],
+    }
+
+    assert _without_empty_tool_call_messages([tool_call, empty_message, tool_output, real_message]) == [
+        tool_call,
+        tool_output,
+        real_message,
+    ]
 
 
 def test_attachment_batch_summary_is_deterministic_without_llm(tmp_path) -> None:

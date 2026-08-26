@@ -5,7 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from agents import AgentOutputSchema, RunConfig, Runner
+from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_provider import OpenAIProvider
+from agents.models.reasoning_content_replay import (
+    ReasoningContentReplayContext,
+    default_should_replay_reasoning_content,
+)
 from openai import AsyncOpenAI
 
 from app.config import Settings
@@ -32,12 +37,13 @@ def build_run_config(
     workflow_name: str,
     trace_metadata: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
+    replay_streamed_reasoning: bool = False,
 ) -> RunConfig:
     base_url = settings.llm_base_url or "https://api.openai.com/v1"
     timeout = float(timeout_seconds if timeout_seconds is not None else settings.llm_timeout_seconds)
     client, should_close = _client_for(settings, base_url=base_url, timeout_seconds=timeout)
     config = RunConfig(
-        model_provider=OpenAIProvider(
+        model_provider=(_ReasoningReplayProvider if replay_streamed_reasoning else OpenAIProvider)(
             openai_client=client,
             use_responses=_use_responses_api(settings.llm_provider, base_url),
         ),
@@ -49,6 +55,70 @@ def build_run_config(
     setattr(config, "_invoice_openai_client", client)
     setattr(config, "_invoice_close_openai_client", should_close)
     return config
+
+
+class _ReasoningReplayProvider(OpenAIProvider):
+    def get_model(self, model_name: str | None) -> Any:
+        model = super().get_model(model_name)
+        if isinstance(model, OpenAIChatCompletionsModel):
+            return _ReasoningReplayChatCompletionsModel(
+                model=model.model,
+                openai_client=model._get_client(),
+                should_replay_reasoning_content=_replay_streamed_deepseek_reasoning,
+            )
+        return model
+
+
+class _ReasoningReplayChatCompletionsModel(OpenAIChatCompletionsModel):
+    async def _fetch_response(
+        self,
+        system_instructions: Any,
+        input: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if isinstance(input, list):
+            input = _without_empty_tool_call_messages(input)
+        return await super()._fetch_response(system_instructions, input, *args, **kwargs)
+
+
+def _replay_streamed_deepseek_reasoning(context: ReasoningContentReplayContext) -> bool:
+    if not default_should_replay_reasoning_content(context):
+        return False
+    item = context.reasoning.item
+    if isinstance(item, dict) and not item.get("summary"):
+        texts = [
+            str(part.get("text") or "")
+            for part in item.get("content", [])
+            if isinstance(part, dict) and part.get("type") == "reasoning_text" and part.get("text")
+        ]
+        if texts:
+            item["summary"] = [{"type": "summary_text", "text": "\n".join(texts)}]
+    return bool(isinstance(item, dict) and item.get("summary"))
+
+
+def _without_empty_tool_call_messages(items: list[Any]) -> list[Any]:
+    cleaned: list[Any] = []
+    for index, item in enumerate(items):
+        previous = items[index - 1] if index else None
+        following = items[index + 1] if index + 1 < len(items) else None
+        content = item.get("content") if isinstance(item, dict) else None
+        empty_assistant = (
+            isinstance(item, dict)
+            and item.get("type") == "message"
+            and item.get("role") == "assistant"
+            and isinstance(content, list)
+            and all(not str(part.get("text") or "") for part in content if isinstance(part, dict))
+        )
+        between_tool_call_and_output = (
+            isinstance(previous, dict)
+            and previous.get("type") == "function_call"
+            and isinstance(following, dict)
+            and following.get("type") == "function_call_output"
+        )
+        if not (empty_assistant and between_tool_call_and_output):
+            cleaned.append(item)
+    return cleaned
 
 
 def run_agent_sync(*args: Any, **kwargs: Any) -> Any:

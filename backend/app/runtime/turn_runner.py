@@ -1227,6 +1227,7 @@ class TurnRunner:
         return build_run_config(
             self.settings,
             workflow_name="invoice_agent.case_manager",
+            replay_streamed_reasoning=True,
             trace_metadata={
                 "case_id": state.case_id,
                 "run_id": state.run_id,
