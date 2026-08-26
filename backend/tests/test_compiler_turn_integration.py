@@ -424,8 +424,45 @@ def test_manager_can_inspect_and_recheck_one_durable_compiler_child(
     assert inspected["status"] == "completed"
     assert inspected["checks"][0]["proof_status"] == "NOT_FOUND"
     assert inspected["recent_events"][0]["action"] == "Submitted grounded invoice classification"
+    assert inspected["recent_events"][0]["case_seq"] == inspected["next_case_seq"]
     assert "reasoning_excerpt" not in json.dumps(inspected)
     assert "must not be exposed" not in json.dumps(inspected)
+
+    for event_no in range(1, 14):
+        runner.harness.append_debug_event(
+            parent_state,
+            kind="model_thinking",
+            name="proof_kernel",
+            payload={
+                "compiler_run_id": checkpoint.compiler_run_id,
+                "stage": "proof_kernel",
+                "status": "completed",
+                "check_id": "check_invoice",
+                "action": f"Compiled event {event_no}",
+            },
+            summary=f"Kernel event {event_no}",
+        )
+    incremental = runner.tools.call(
+        "inspect_compiler_run",
+        case_id,
+        {
+            "compiler_run_id": checkpoint.compiler_run_id,
+            "after_case_seq": inspected["next_case_seq"],
+        },
+    )
+    assert [item["action"] for item in incremental["recent_events"]] == [
+        f"Compiled event {event_no}" for event_no in range(1, 13)
+    ]
+    assert incremental["next_case_seq"] > inspected["next_case_seq"]
+    final_page = runner.tools.call(
+        "inspect_compiler_run",
+        case_id,
+        {
+            "compiler_run_id": checkpoint.compiler_run_id,
+            "after_case_seq": incremental["next_case_seq"],
+        },
+    )
+    assert [item["action"] for item in final_page["recent_events"]] == ["Compiled event 13"]
 
     state = HarnessRuntime(runner.store).begin_run(
         case_id,

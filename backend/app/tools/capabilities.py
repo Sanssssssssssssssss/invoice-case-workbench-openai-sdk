@@ -56,6 +56,11 @@ class RenderPdfInput(ToolInput):
 
 class InspectCompilerRunInput(ToolInput):
     compiler_run_id: str = ""
+    after_case_seq: int | None = Field(
+        default=None,
+        ge=0,
+        description="Optional case event cursor. Pass next_case_seq from the previous inspection to receive only newer child events.",
+    )
 
 
 class RecheckCompilerCheckInput(ToolInput):
@@ -183,7 +188,12 @@ def _render_pdf(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:
 def _inspect_compiler_run(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:
     data = _as(payload, InspectCompilerRunInput)
     parent_run_id, checkpoint = _load_compiler(context, data.compiler_run_id)
-    return _compiler_snapshot(context, parent_run_id, checkpoint)
+    return _compiler_snapshot(
+        context,
+        parent_run_id,
+        checkpoint,
+        after_case_seq=data.after_case_seq,
+    )
 
 
 def _recheck_compiler_check(context: ToolCallContext, payload: ToolInput) -> dict[str, Any]:
@@ -283,6 +293,8 @@ def _compiler_snapshot(
     context: ToolCallContext,
     parent_run_id: str,
     checkpoint: Any,
+    *,
+    after_case_seq: int | None = None,
 ) -> dict[str, Any]:
     assessments = {item.check_id: item for item in checkpoint.artifact.assessments}
     completed = set(checkpoint.completed_check_ids)
@@ -306,6 +318,12 @@ def _compiler_snapshot(
                 "missing_fact": assessment.missing_fact if assessment is not None else "",
             }
         )
+    recent_events = _compiler_events(
+        context,
+        parent_run_id,
+        checkpoint.compiler_run_id,
+        after_case_seq=after_case_seq,
+    )
     return {
         "case_id": context.case_id,
         "compiler_run_id": checkpoint.compiler_run_id,
@@ -323,7 +341,10 @@ def _compiler_snapshot(
             "bindings": len(checkpoint.artifact.binding_proposals),
             "witnesses": len(checkpoint.artifact.calculation_witnesses),
         },
-        "recent_events": _compiler_events(context, parent_run_id, checkpoint.compiler_run_id),
+        "recent_events": recent_events,
+        "next_case_seq": max(
+            [after_case_seq or 0, *(int(item["case_seq"]) for item in recent_events)]
+        ),
     }
 
 
@@ -331,11 +352,14 @@ def _compiler_events(
     context: ToolCallContext,
     parent_run_id: str,
     compiler_run_id: str,
+    *,
+    after_case_seq: int | None = None,
 ) -> list[dict[str, Any]]:
     path = context.workspace.store.resolve_case_path(context.case_id, "traces/events.jsonl")
     if not path.exists():
         return []
-    selected: deque[dict[str, Any]] = deque(maxlen=40)
+    # The Manager preview preserves at most 12 list items; keep cursor pages lossless.
+    selected: deque[dict[str, Any]] = deque(maxlen=12)
     compiler_stages = {"task_compiler", "executor", "fine_verifier", "proof_kernel"}
     # ponytail: case-local linear scan; add an event index only if trace size proves this slow.
     with path.open(encoding="utf-8") as lines:
@@ -345,6 +369,9 @@ def _compiler_events(
             except json.JSONDecodeError:
                 continue
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            case_seq = int(event.get("case_seq") or 0)
+            if after_case_seq is not None and case_seq <= after_case_seq:
+                continue
             stage = str(payload.get("stage") or payload.get("role") or "")
             belongs = str(payload.get("compiler_run_id") or "") == compiler_run_id
             if not belongs and not (
@@ -353,6 +380,8 @@ def _compiler_events(
                 continue
             selected.append(
                 {
+                    "seq": int(event.get("run_seq") or event.get("seq") or 0),
+                    "case_seq": case_seq,
                     "event_id": str(event.get("event_id") or ""),
                     "ts": str(event.get("ts") or ""),
                     "kind": str(event.get("kind") or ""),
@@ -366,6 +395,8 @@ def _compiler_events(
                     ),
                 }
             )
+            if after_case_seq is not None and len(selected) == selected.maxlen:
+                break
     return list(selected)
 
 
