@@ -5,7 +5,7 @@ import { api, createEventSource } from '@/lib/api'
 import { approvalInterruptsFromEvents, approvalInterruptsFromTrace } from '@/lib/approvals'
 import { createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic } from '@/lib/chat'
 import { isNewAgentRunStreamEvent, parseAgentRunStreamMessage, parseLiveStatusMessage, parseTraceEventMessage } from '@/lib/eventStream'
-import { mergeEvents } from '@/lib/trace'
+import { mergeEvents, selectActivityEvents } from '@/lib/trace'
 import type { AgentRunStreamEvent, AgentTurnResponse, ApprovalInterrupt, LiveStatus, TraceEvent } from '@/types'
 import { latestReportArtifacts } from '@/lib/artifacts'
 import {
@@ -113,7 +113,7 @@ export default function App() {
   }, [liveStatusQuery.data, selectedCaseId, updateCaseRuntime])
 
   useEffect(() => {
-    if (!running || !selectedCaseId) return
+    if (!agentRunning || !selectedCaseId) return
     let closed = false
     let source: EventSource | null = null
     const lastCaseSeq = caseRuntime(runtimeByCaseRef.current, selectedCaseId).liveEvents.reduce((max, event) => Math.max(max, event.case_seq), 0)
@@ -143,7 +143,7 @@ export default function App() {
       closed = true
       source?.close()
     }
-  }, [running, selectedCaseId, queryClient, updateCaseRuntime])
+  }, [agentRunning, selectedCaseId, queryClient, updateCaseRuntime])
 
   useEffect(() => {
     if (!selectedCaseId || !agentRunning) return
@@ -177,6 +177,7 @@ export default function App() {
     const liveForRun = selectedRunId ? liveEvents.filter((event) => event.run_id === selectedRunId) : liveEvents
     return mergeEvents(base, liveForRun)
   }, [eventsQuery.data, liveEvents, selectedRunId])
+  const activityEvents = selectActivityEvents(liveEvents, visibleEvents, agentRunning)
 
   const visibleMessages = useMemo(
     () => mergeConversationWithOptimistic(conversationQuery.data ?? [], optimisticMessages),
@@ -416,7 +417,7 @@ export default function App() {
             caseState={caseQuery.data}
             messages={visibleMessages}
             reportArtifacts={reportArtifacts}
-            liveEvents={liveEvents}
+            liveEvents={activityEvents}
             liveStatus={liveStatus}
             running={agentRunning}
             agentRunning={agentRunning}
@@ -501,7 +502,7 @@ function liveStatusFromRunStream(event: AgentRunStreamEvent, current: LiveStatus
     thinkingSource: isThinking && reasoningText ? 'public_work_log' : sameRun ? current.thinkingSource : '',
     reasoningChars: isThinking ? reasoningText.length : sameRun ? current.reasoningChars : 0,
     reasoningChunks: isThinking && reasoningText ? 1 : sameRun ? current.reasoningChunks : 0,
-    runStartedAt: stringValue(event.payload.run_started_at) || event.ts,
+    runStartedAt: stringValue(event.payload.run_started_at) || (sameRun ? current?.runStartedAt || '' : '') || event.ts,
     elapsedMs: numberValue(event.payload.duration_ms),
     activeStep,
     latestThoughtSummary,

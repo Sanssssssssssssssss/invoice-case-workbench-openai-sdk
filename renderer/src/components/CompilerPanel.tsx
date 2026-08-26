@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AlertTriangle, Braces, CheckCircle2, CircleDashed, FileSearch, GitBranch, ShieldCheck } from 'lucide-react'
 import type { CaseState, DecisionProof, ProofNode, TraceEvent } from '@/types'
-import { compilerArtifactStats, compilerChildRunView, flattenProofTree, proofStatusLabel, proofStatusTone, type CompilerChildRunView } from '@/lib/compilerView'
+import { compilerArtifactStats, compilerCheckRuntimeView, compilerChildRunView, flattenProofTree, proofStatusLabel, proofStatusTone, type CompilerCheckRuntimeView, type CompilerChildRunView } from '@/lib/compilerView'
 
 type CompilerView = 'proof' | 'plan' | 'ir' | 'diagnostics'
 
@@ -18,13 +18,21 @@ export function CompilerPanel({ caseState, events = [] }: { caseState?: CaseStat
   const proof = caseState?.compiled_proof
   const stats = compilerArtifactStats(caseState)
   const childRun = useMemo(() => compilerChildRunView(events), [events])
+  const liveChecks = useMemo(() => compilerCheckRuntimeView(events), [events])
 
   if (!artifact || !proof) {
     if (childRun) {
       return (
         <div className="compiler-panel">
           <ChildRunStatus childRun={childRun} />
-          <CompilerEmpty />
+          {liveChecks ? <LiveCheckTable view={liveChecks} /> : <CompilerEmpty />}
+        </div>
+      )
+    }
+    if (liveChecks) {
+      return (
+        <div className="compiler-panel">
+          <LiveCheckTable view={liveChecks} />
         </div>
       )
     }
@@ -45,6 +53,7 @@ export function CompilerPanel({ caseState, events = [] }: { caseState?: CaseStat
       </header>
 
       {childRun && <ChildRunStatus childRun={childRun} />}
+      {liveChecks && <LiveCheckTable view={liveChecks} />}
 
       <div className="compiler-artifact-flow" aria-label="compiler artifacts">
         <ArtifactStep label="ProofPlan" value={`${stats.checks} checks`} icon={<GitBranch size={15} />} />
@@ -70,6 +79,42 @@ export function CompilerPanel({ caseState, events = [] }: { caseState?: CaseStat
   )
 }
 
+function LiveCheckTable({ view }: { view: CompilerCheckRuntimeView }) {
+  return (
+    <section className="compiler-live-checks" aria-label="Compiler CHECK progress">
+      <header>
+        <div>
+          <span className="eyebrow">实时 CHECK · revision {view.revision}</span>
+          <strong>{view.rows.length} 个已知 CHECK</strong>
+        </div>
+        {view.compilerRunId && <span title={view.compilerRunId}>{view.compilerRunId}</span>}
+      </header>
+      <div className="compiler-check-table" role="table">
+        {view.rows.map((row) => (
+          <article className={`compiler-check-row ${row.workflowStatus}`} role="row" key={row.checkId}>
+            <span className="compiler-check-state">{workflowStatusLabel(row.workflowStatus)}</span>
+            <div>
+              <strong>{row.checkId}</strong>
+              <p>{row.statement || '等待 inspect_compiler_run 返回 CHECK 语句。'}</p>
+              {row.upstreamCheckIds.length > 0 && <small>上游：{row.upstreamCheckIds.join(' · ')}</small>}
+              {(row.reason || row.missingFact) && <small>{row.reason || row.missingFact}</small>}
+            </div>
+            <span className="compiler-check-proof">{row.proofStatus ? proofStatusLabel(row.proofStatus) : '—'}</span>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function workflowStatusLabel(status: string) {
+  if (status === 'active') return '执行中'
+  if (status === 'completed') return '已提交'
+  if (status === 'rolled_back') return '已回滚'
+  if (status === 'failed') return '失败'
+  return '等待'
+}
+
 function CompilerEmpty() {
   return (
     <div className="compiler-empty">
@@ -81,6 +126,9 @@ function CompilerEmpty() {
 }
 
 function ChildRunStatus({ childRun }: { childRun: CompilerChildRunView }) {
+  const partial = childRun.status === 'completed'
+    && childRun.totalChecks > 0
+    && childRun.completedChecks < childRun.totalChecks
   const progress = childRun.totalChecks > 0
     ? `${childRun.completedChecks}/${childRun.totalChecks} CHECK`
     : '正在准备 CHECK'
@@ -91,7 +139,7 @@ function ChildRunStatus({ childRun }: { childRun: CompilerChildRunView }) {
           <span className="eyebrow">Durable child run · revision {childRun.revision}</span>
           <strong title={childRun.compilerRunId}>{childRun.compilerRunId}</strong>
         </div>
-        <span className={`compiler-run-status ${childRun.status}`}>{childRunStatusLabel(childRun.status)}</span>
+        <span className={`compiler-run-status ${childRun.status}`}>{childRunStatusLabel(childRun.status, partial)}</span>
       </div>
       <div className="compiler-child-facts">
         <span>{progress}</span>
@@ -112,8 +160,8 @@ function ChildRunStatus({ childRun }: { childRun: CompilerChildRunView }) {
   )
 }
 
-function childRunStatusLabel(status: string) {
-  if (status === 'completed') return '已完成'
+function childRunStatusLabel(status: string, partial = false) {
+  if (status === 'completed') return partial ? '已完成 · 部分' : '已完成'
   if (status === 'error' || status === 'fatal') return '失败'
   if (status === 'cancelled') return '已取消'
   return '运行中'

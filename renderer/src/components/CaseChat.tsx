@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Bot, CheckCircle2, ChevronDown, ChevronUp, CloudUpload, Download, ExternalLink, FileText, FolderOpen, Paperclip, Send, Settings2, ShieldAlert, UserRound, X } from 'lucide-react'
+import { Bot, CheckCircle2, CloudUpload, Download, ExternalLink, FileText, FolderOpen, Paperclip, Send, Settings2, ShieldAlert, UserRound, X } from 'lucide-react'
 import { Virtuoso } from 'react-virtuoso'
 import type { ApprovalInterrupt, ArtifactItem, CaseState, ConversationItem, LiveStatus, TraceEvent } from '@/types'
 import type { ApprovalPhase } from '@/lib/caseRuntime'
 import { requirementProgress, statusLabel } from '@/lib/requirements'
 import { shortTime } from '@/lib/trace'
-import { shouldShowThinking, thinkingLineClass, thinkingRaw, thinkingSummary, thinkingTitle } from '@/lib/thinking'
+import { formatThinkingElapsed } from '@/lib/thinking'
 import { dataTransferHasFiles, mergeFiles } from '@/lib/files'
 import { isPdfArtifact, runArtifactAction } from '@/lib/artifacts'
-import { plainChatText } from '@/lib/chat'
+import { isEvidenceToastEvent, plainChatText } from '@/lib/chat'
+import { publicWorkTimeline, type PublicWorkItem, type PublicWorkTimeline } from '@/lib/workTimeline'
 import { RequirementRing } from './RequirementRing'
 
 interface CaseChatProps {
@@ -72,6 +73,9 @@ export function CaseChat({
   }, [messages])
   const waitingApproval = pendingApprovals.length > 0
   const approvalExecuting = approvalPhase === 'executing'
+  const work = useMemo(() => publicWorkTimeline(liveEvents, agentRunning), [agentRunning, liveEvents])
+  const optimisticStartedAt = useMemo(() => agentRunning ? new Date().toISOString() : '', [agentRunning])
+  const workStartedAt = work.startedAt || liveStatus?.runStartedAt || optimisticStartedAt
   const message = draft
   const setMessage = onDraftChange
   const setFiles = (update: File[] | ((current: File[]) => File[])) => {
@@ -84,6 +88,23 @@ export function CaseChat({
   const virtuosoComponents = useMemo(() => ({ Footer: MessageFooter }), [])
   const rows = useMemo<ChatRow[]>(() => {
     const base: ChatRow[] = messages.map((item) => ({ type: 'message', id: `${item.ts}:${item.role}:${item.content}`, item }))
+    if (work.items.length) {
+      let insertion = base.length
+      for (let index = base.length - 1; index >= 0; index -= 1) {
+        const row = base[index]
+        if (row.type === 'message' && row.item.role === 'user') {
+          insertion = index + 1
+          break
+        }
+      }
+      base.splice(insertion, 0, {
+        type: 'work',
+        id: 'work:current',
+        timeline: work,
+        running: agentRunning,
+        startedAt: workStartedAt
+      })
+    }
     if (reportArtifacts.length) {
       base.push({
         type: 'reports',
@@ -91,11 +112,8 @@ export function CaseChat({
         artifacts: reportArtifacts
       })
     }
-    if (shouldShowThinking(liveStatus, agentRunning)) {
-      base.push({ type: 'thinking' as const, id: 'thinking:live', status: liveStatus })
-    }
     return base
-  }, [agentRunning, liveStatus, messages, reportArtifacts])
+  }, [agentRunning, messages, reportArtifacts, work, workStartedAt])
 
   const submit = () => {
     if ((!message.trim() && files.length === 0) || running || waitingApproval) return
@@ -139,7 +157,7 @@ export function CaseChat({
     inputRef.current?.focus()
   }
 
-  const lastAccepted = [...liveEvents].reverse().find((event) => event.kind === 'artifact' || event.status === 'saved')
+  const lastAccepted = [...liveEvents].reverse().find(isEvidenceToastEvent)
 
   return (
     <main className="chat-workspace">
@@ -169,8 +187,8 @@ export function CaseChat({
           computeItemKey={(_index, row) => row.id}
           components={virtuosoComponents}
           itemContent={(_index, row) =>
-            row.type === 'thinking' ? (
-              <ThinkingBubble status={row.status} />
+            row.type === 'work' ? (
+              <WorkTimelineBubble timeline={row.timeline} running={row.running} startedAt={row.startedAt} />
             ) : row.type === 'reports' ? (
               <ReportArtifactsRow caseId={caseId} artifacts={row.artifacts} />
             ) : (
@@ -178,7 +196,7 @@ export function CaseChat({
             )
           }
         />
-        {messages.length === 0 && reportArtifacts.length === 0 && (
+        {messages.length === 0 && reportArtifacts.length === 0 && work.items.length === 0 && (
           <div className="empty-chat">
             <Bot size={24} />
             <span>发送问题或添加材料，开始案件运行。</span>
@@ -289,7 +307,7 @@ export function CaseChat({
 type ChatRow =
   | { type: 'message'; id: string; item: ConversationItem }
   | { type: 'reports'; id: string; artifacts: ArtifactItem[] }
-  | { type: 'thinking'; id: string; status: LiveStatus | null }
+  | { type: 'work'; id: string; timeline: PublicWorkTimeline; running: boolean; startedAt: string }
 
 function MessageFooter() {
   return <div className="message-bottom-space" />
@@ -457,52 +475,88 @@ function ApprovalPanel({
   )
 }
 
-function ThinkingBubble({ status }: { status: LiveStatus | null }) {
-  const [expanded, setExpanded] = useState(false)
+export function WorkTimelineBubble({ timeline, running, startedAt }: { timeline: PublicWorkTimeline; running: boolean; startedAt: string }) {
   const [now, setNow] = useState(() => Date.now())
+  const [expanded, setExpanded] = useState(running)
   useEffect(() => {
-    if (!status?.isRunning) return
+    if (!running) return
     const id = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(id)
-  }, [status?.isRunning, status?.runStartedAt])
-  const summaryText = thinkingSummary(status)
-  const rawText = thinkingRaw(status)
-  const hasRaw = Boolean(rawText && rawText !== summaryText)
-  const startedAt = status?.runStartedAt ? Date.parse(status.runStartedAt) : NaN
-  const liveElapsedMs = Number.isFinite(startedAt) && status?.isRunning ? Math.max(0, now - startedAt) : status?.elapsedMs
-  if (!summaryText && !rawText) return null
+  }, [running, startedAt])
+  useEffect(() => {
+    setExpanded(running)
+  }, [running])
+  const parsedStartedAt = startedAt ? Date.parse(startedAt) : NaN
+  const elapsed = Number.isFinite(parsedStartedAt) ? formatThinkingElapsed(Math.max(0, now - parsedStartedAt)) : ''
+  const issueCount = timeline.items.filter((item) => item.status === 'warning' || item.status === 'error').length
+  const statusSummary = running
+    ? `${timeline.items.length} 项 · 运行中${elapsed ? ` ${elapsed}` : ''}`
+    : `${timeline.items.length} 项 · ${issueCount ? `${issueCount} 项需处理` : '已完成'}`
   return (
     <motion.article
-      className="message-item agent thinking-message"
+      className="message-item agent thinking-message work-timeline-message"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 6 }}
       transition={{ duration: 0.18 }}
     >
       <div className="message-avatar thinking-avatar">
         <Bot size={18} />
       </div>
       <div className="message-body thinking-body">
-        <div className="message-meta">
-          <strong>{thinkingTitle(status, liveElapsedMs)}</strong>
-          <time>{shortTime(status?.updatedAt || new Date().toISOString())}</time>
-        </div>
-        <div className="thinking-panel">
-          <div className="thinking-pulse">
-            <span />
-            <span />
-            <span />
+        <details
+          className="work-timeline-group"
+          open={expanded}
+          onToggle={(event) => setExpanded(event.currentTarget.open)}
+        >
+          <summary>
+            <span>
+              <strong>Agent · 本轮过程</strong>
+              <span>{statusSummary}</span>
+            </span>
+            <time>{shortTime(timeline.items.at(-1)?.ts || startedAt || new Date().toISOString())}</time>
+          </summary>
+          <div className="thinking-panel work-timeline">
+            {timeline.items.map((item) => <WorkTimelineItem key={item.id} item={item} />)}
           </div>
-          <p className={thinkingLineClass(expanded)}>{summaryText || rawText}</p>
-          {hasRaw && expanded ? <pre className="thinking-raw">{rawText}</pre> : null}
-          <button className="thinking-toggle" onClick={() => setExpanded((value) => !value)}>
-            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            {expanded ? '收起' : '展开'}
-          </button>
-        </div>
+        </details>
       </div>
     </motion.article>
   )
+}
+
+function WorkTimelineItem({ item }: { item: PublicWorkItem }) {
+  const [expanded, setExpanded] = useState(item.status === 'running')
+  useEffect(() => {
+    setExpanded(item.status === 'running')
+  }, [item.status])
+  const metadata = [item.checkId, item.tool, item.diagnosticCode].filter(Boolean)
+  return (
+    <details
+      className={`work-item ${item.status}`}
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        <span className="work-item-status" aria-hidden="true" />
+        <span className="work-item-copy">
+          <strong>{item.actor}</strong>
+          <span>{item.title}</span>
+        </span>
+        <span className="work-item-meta">{workStatusLabel(item.status)}{item.ts ? ` · ${shortTime(item.ts)}` : ''}</span>
+      </summary>
+      <div className="work-item-detail">
+        {item.publicReason && <p>{item.publicReason}</p>}
+        {metadata.length > 0 && <span>{metadata.join(' · ')}</span>}
+      </div>
+    </details>
+  )
+}
+
+function workStatusLabel(status: PublicWorkItem['status']) {
+  if (status === 'running') return '运行中'
+  if (status === 'error') return '失败'
+  if (status === 'warning') return '需调整'
+  return '已完成'
 }
 
 function reportFormatLabel(item: ArtifactItem) {

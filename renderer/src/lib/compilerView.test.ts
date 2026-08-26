@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ProofPlan, TraceEvent } from '@/types'
-import { compilerChildRunView, compilerStageForEvent, flattenProofTree, initialCompilerTraceSelection, proofStatusLabel } from './compilerView'
+import { compilerCheckRuntimeView, compilerChildRunView, compilerStageForEvent, flattenProofTree, initialCompilerTraceSelection, proofStatusLabel } from './compilerView'
 
 const plan: ProofPlan = {
   plan_id: 'plan_1',
@@ -225,7 +225,133 @@ describe('compiler child run view', () => {
     expect(compilerChildRunView(events)).toMatchObject({ status: 'running', completedChecks: 5, totalChecks: 6 })
   })
 
+  it('shows a terminal child as partially completed after one CHECK rolled back', () => {
+    const childEvent = (id: string, caseSeq: number, status: string, checkId = '') => ({
+      ...event(id, 'model_thinking'),
+      case_seq: caseSeq,
+      payload: {
+        compiler_run_id: 'compiler_partial',
+        compiler_revision: 1,
+        status,
+        check_count: 6,
+        focused_check_ids: checkId ? [checkId] : []
+      }
+    })
+    const events: TraceEvent[] = [childEvent('plan', 1, 'completed')]
+    for (let index = 1; index <= 5; index += 1) events.push(childEvent(`check-${index}`, index + 1, 'frontier_committed', `check_${index}`))
+    events.push(childEvent('rollback', 7, 'frontier_rolled_back', 'check_6'))
+    events.push({
+      ...event('receipt', 'role_call'),
+      case_seq: 8,
+      name: 'evidence_reviewer',
+      payload: { role: 'evidence_reviewer', result: {}, error: '' }
+    })
+
+    expect(compilerChildRunView(events)).toMatchObject({
+      status: 'completed',
+      completedChecks: 5,
+      totalChecks: 6,
+      activeCheckId: ''
+    })
+  })
+
   it('returns null when the selected run has no child metadata', () => {
     expect(compilerChildRunView([event('task_compiler')])).toBeNull()
+  })
+})
+
+describe('live compiler CHECK view', () => {
+  it('builds rows from inspect_compiler_run and applies focused frontier deltas', () => {
+    const inspect = {
+      ...event('inspect', 'tool_call'),
+      seq: 1,
+      case_seq: 1,
+      name: 'inspect_compiler_run',
+      payload: {
+        result: {
+          compiler_run_id: 'compiler_live',
+          revision: 2,
+          checks: [
+            {
+              check_id: 'check_invoice',
+              statement: 'Invoice exists',
+              upstream_check_ids: [],
+              workflow_status: 'completed',
+              proof_status: 'SUPPORTED'
+            },
+            {
+              check_id: 'check_total',
+              statement: 'Total reconciles',
+              upstream_check_ids: ['check_invoice'],
+              workflow_status: 'pending',
+              proof_status: ''
+            }
+          ]
+        }
+      }
+    }
+    const frontier = (id: string, seq: number, status: string) => ({
+      ...event(id, 'model_thinking'),
+      seq,
+      case_seq: seq,
+      payload: {
+        compiler_run_id: 'compiler_live',
+        compiler_revision: 2,
+        status,
+        focused_check_ids: ['check_total']
+      }
+    })
+
+    expect(compilerCheckRuntimeView([inspect, frontier('started', 2, 'frontier_started')])).toMatchObject({
+      compilerRunId: 'compiler_live',
+      revision: 2,
+      rows: [
+        { checkId: 'check_invoice', workflowStatus: 'completed', proofStatus: 'SUPPORTED' },
+        { checkId: 'check_total', statement: 'Total reconciles', upstreamCheckIds: ['check_invoice'], workflowStatus: 'active' }
+      ]
+    })
+    expect(compilerCheckRuntimeView([inspect, frontier('started', 2, 'frontier_started'), frontier('committed', 3, 'frontier_committed')])?.rows[1].workflowStatus).toBe('completed')
+    expect(compilerCheckRuntimeView([inspect, frontier('rolled-back', 3, 'frontier_rolled_back')])?.rows[1].workflowStatus).toBe('rolled_back')
+  })
+
+  it('keeps a focused CHECK visible before an inspect snapshot arrives', () => {
+    const frontier = {
+      ...event('frontier', 'model_thinking'),
+      payload: {
+        compiler_run_id: 'compiler_live',
+        compiler_revision: 1,
+        status: 'frontier_started',
+        focused_check_ids: ['check_pending']
+      }
+    }
+    expect(compilerCheckRuntimeView([frontier])).toMatchObject({
+      rows: [{ checkId: 'check_pending', statement: '', workflowStatus: 'active' }]
+    })
+  })
+
+  it('preserves a completed snapshot CHECK with no assessment as rolled back', () => {
+    const inspect = {
+      ...event('inspect-partial', 'tool_call'),
+      name: 'inspect_compiler_run',
+      payload: {
+        result: {
+          compiler_run_id: 'compiler_partial',
+          revision: 1,
+          status: 'completed',
+          checks: [{
+            check_id: 'check_6',
+            statement: 'Final CHECK',
+            workflow_status: 'completed',
+            proof_status: ''
+          }]
+        }
+      }
+    }
+
+    expect(compilerCheckRuntimeView([inspect])?.rows[0]).toMatchObject({
+      checkId: 'check_6',
+      workflowStatus: 'rolled_back',
+      proofStatus: ''
+    })
   })
 })

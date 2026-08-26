@@ -1,4 +1,4 @@
-import type { ConversationAttachment, ConversationItem } from '@/types'
+import type { ConversationAttachment, ConversationItem, TraceEvent } from '@/types'
 
 interface OptimisticUserMessageOptions {
   content: string
@@ -74,6 +74,10 @@ export function plainChatText(content: string) {
     .replace(/(^|\s)\*([^*\n]+)\*(?=\s|$)/g, '$1$2')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+export function isEvidenceToastEvent(event: Pick<TraceEvent, 'raw_kind' | 'status'>) {
+  return event.raw_kind === 'artifact'
 }
 
 function contentKey(item: ConversationItem) {

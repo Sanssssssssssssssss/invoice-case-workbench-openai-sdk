@@ -32,6 +32,10 @@ export function mergeEvents(existing: TraceEvent[] = [], incoming: TraceEvent[])
   return Array.from(byId.values()).sort((a, b) => a.case_seq - b.case_seq || a.seq - b.seq)
 }
 
+export function selectActivityEvents(liveEvents: TraceEvent[], visibleEvents: TraceEvent[], running: boolean) {
+  return running ? liveEvents : visibleEvents
+}
+
 export function formatDuration(ms: number | null | undefined) {
   if (ms == null) return ''
   if (ms < 1000) return `${ms}ms`

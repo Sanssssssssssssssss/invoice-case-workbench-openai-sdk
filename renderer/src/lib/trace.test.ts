@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { eventTitle, mergeEvents, timelinePositionClass } from './trace'
+import { eventTitle, mergeEvents, selectActivityEvents, timelinePositionClass } from './trace'
 import type { TraceEvent } from '@/types'
 
 function event(event_id: string, case_seq: number): TraceEvent {
@@ -44,6 +44,16 @@ describe('mergeEvents', () => {
     expect(merged).toHaveLength(1)
     expect(merged[0].summary).toBe('120 chars')
     expect(merged[0].case_seq).toBe(6)
+  })
+})
+
+describe('selectActivityEvents', () => {
+  it('uses the selected run events after the active run stops', () => {
+    const live = [event('live', 2)]
+    const selected = [event('selected', 1)]
+
+    expect(selectActivityEvents(live, selected, true)).toBe(live)
+    expect(selectActivityEvents(live, selected, false)).toBe(selected)
   })
 })
 

@@ -863,6 +863,131 @@ button {
   line-height: 1.62;
 }
 
+.work-timeline {
+  gap: 6px;
+  max-height: 430px;
+  overflow-y: auto;
+}
+
+.work-timeline-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.work-timeline-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.work-timeline-group > summary > span {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.work-timeline-group > summary strong {
+  font-weight: 760;
+}
+
+.work-timeline-group > summary span span,
+.work-timeline-group > summary time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.work-timeline-group:not([open]) > summary {
+  margin-bottom: 0;
+}
+
+.work-item {
+  border: 1px solid #d7e6e5;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.work-item summary {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 9px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.work-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.work-item-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.work-item.running .work-item-status {
+  background: var(--teal);
+  box-shadow: 0 0 0 3px rgba(0, 123, 124, 0.12);
+}
+
+.work-item.warning .work-item-status {
+  background: var(--amber);
+}
+
+.work-item.error .work-item-status {
+  background: var(--red);
+}
+
+.work-item-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.work-item-copy strong,
+.work-item-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-item-copy strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.work-item-copy span {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.work-item-meta {
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.work-item-detail {
+  display: grid;
+  gap: 5px;
+  padding: 0 9px 9px 24px;
+}
+
+.work-item-detail p {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.work-item-detail span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
 .thinking-panel p.collapsed,
 .thinking-panel p.expanded {
   display: -webkit-box;
@@ -2018,6 +2143,114 @@ button {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.45;
+}
+
+.compiler-live-checks {
+  display: grid;
+  gap: 9px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  background: #fbfcfd;
+}
+
+.compiler-live-checks > header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.compiler-live-checks > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.compiler-live-checks > header .eyebrow {
+  color: var(--teal);
+  font-size: 10px;
+  font-weight: 720;
+}
+
+.compiler-live-checks > header strong {
+  font-size: 12px;
+}
+
+.compiler-live-checks > header > span {
+  max-width: 190px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compiler-check-table {
+  display: grid;
+  gap: 5px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.compiler-check-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 44px;
+  gap: 8px;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid #c9d3dc;
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.compiler-check-row.active {
+  border-left-color: var(--teal);
+  background: var(--teal-soft);
+}
+
+.compiler-check-row.completed {
+  border-left-color: var(--green);
+}
+
+.compiler-check-row.rolled_back,
+.compiler-check-row.failed {
+  border-left-color: var(--red);
+  background: var(--red-soft);
+}
+
+.compiler-check-state,
+.compiler-check-proof {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.compiler-check-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.compiler-check-row > div strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compiler-check-row > div p,
+.compiler-check-row > div small {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.compiler-check-row > div small {
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .compiler-artifact-step {

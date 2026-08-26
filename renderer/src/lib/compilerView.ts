@@ -47,6 +47,23 @@ export interface CompilerChildRunView {
   }>
 }
 
+export interface CompilerCheckRow {
+  checkId: string
+  statement: string
+  upstreamCheckIds: string[]
+  workflowStatus: string
+  proofStatus: string
+  reason: string
+  missingFact: string
+  updatedSeq: number
+}
+
+export interface CompilerCheckRuntimeView {
+  compilerRunId: string
+  revision: number
+  rows: CompilerCheckRow[]
+}
+
 export function flattenProofTree(plan: ProofPlan, rootId: string): ProofTreeRow[] {
   const nodes = new Map(plan.nodes.map((node) => [node.id, node]))
   const rows: ProofTreeRow[] = []
@@ -162,7 +179,10 @@ export function compilerChildRunView(events: TraceEvent[]): CompilerChildRunView
 
   const latest = revisionEvents.at(-1)!
   const latestStatus = stringValue(latest.payload.status) || latest.status
-  const status = ['fatal', 'error'].includes(latestStatus)
+  const receiptStatus = childReceiptStatus(ordered, compilerRunId, revisionEvents.at(-1)?.case_seq || 0)
+  const status = receiptStatus === 'completed'
+    ? 'completed'
+    : receiptStatus === 'error' || ['fatal', 'error'].includes(latestStatus)
     ? 'error'
     : totalChecks > 0 && completed.size >= totalChecks
       ? 'completed'
@@ -190,6 +210,114 @@ export function compilerChildRunView(events: TraceEvent[]): CompilerChildRunView
   }
 }
 
+export function compilerCheckRuntimeView(events: TraceEvent[]): CompilerCheckRuntimeView | null {
+  const ordered = [...events].sort((left, right) => left.case_seq - right.case_seq || left.seq - right.seq)
+  const rows = new Map<string, CompilerCheckRow>()
+  const order: string[] = []
+  let compilerRunId = ''
+  let revision = 1
+
+  const put = (row: CompilerCheckRow) => {
+    if (!rows.has(row.checkId)) order.push(row.checkId)
+    rows.set(row.checkId, row)
+  }
+
+  for (const event of ordered) {
+    const payload = event.payload
+    const result = recordValue(payload.result)
+    const tool = stringValue(payload.tool) || event.name
+    const snapshotChecks = tool === 'inspect_compiler_run' && Array.isArray(result?.checks) ? result.checks : null
+    if (snapshotChecks) {
+      const snapshotRunId = stringValue(result?.compiler_run_id)
+      const snapshotRevision = numberValue(result?.revision) || 1
+      rows.clear()
+      order.splice(0)
+      compilerRunId = snapshotRunId || compilerRunId
+      revision = snapshotRevision
+      const snapshotStatus = stringValue(result?.status)
+      for (const raw of snapshotChecks) {
+        const check = recordValue(raw)
+        const id = stringValue(check?.check_id)
+        if (!id) continue
+        const proofStatus = stringValue(check?.proof_status)
+        const workflowStatus = stringValue(check?.workflow_status) || 'pending'
+        put({
+          checkId: id,
+          statement: stringValue(check?.statement),
+          upstreamCheckIds: stringArray(check?.upstream_check_ids),
+          workflowStatus: snapshotStatus === 'completed' && workflowStatus === 'completed' && !proofStatus
+            ? 'rolled_back'
+            : workflowStatus,
+          proofStatus,
+          reason: stringValue(check?.reason),
+          missingFact: stringValue(check?.missing_fact),
+          updatedSeq: event.seq
+        })
+      }
+    }
+
+    if (event.raw_kind !== 'model_thinking') continue
+    const status = stringValue(payload.status)
+    if (!status.startsWith('frontier_') && !['fatal', 'error'].includes(status)) continue
+    const eventRunId = stringValue(payload.compiler_run_id)
+    const eventRevision = numberValue(payload.compiler_revision) || 1
+    if (eventRunId && compilerRunId && (eventRunId !== compilerRunId || eventRevision !== revision)) {
+      rows.clear()
+      order.splice(0)
+    }
+    compilerRunId = eventRunId || compilerRunId
+    revision = eventRevision
+    const id = checkIdForEvent(event)
+    if (!id) continue
+
+    if (status === 'frontier_started') {
+      for (const [rowId, row] of rows) {
+        if (rowId !== id && row.workflowStatus === 'active') rows.set(rowId, { ...row, workflowStatus: 'pending' })
+      }
+    }
+    const current = rows.get(id) || {
+      checkId: id,
+      statement: '',
+      upstreamCheckIds: [],
+      workflowStatus: 'pending',
+      proofStatus: '',
+      reason: '',
+      missingFact: '',
+      updatedSeq: event.seq
+    }
+    const workflowStatus = status === 'frontier_committed'
+      ? 'completed'
+      : status === 'frontier_rolled_back'
+        ? 'rolled_back'
+        : ['fatal', 'error'].includes(status)
+          ? 'failed'
+          : 'active'
+    put({ ...current, workflowStatus, updatedSeq: event.seq })
+  }
+
+  const projected = order.map((id) => rows.get(id)!).filter(Boolean)
+  return projected.length ? { compilerRunId, revision, rows: projected } : null
+}
+
+function childReceiptStatus(events: TraceEvent[], compilerRunId: string, afterCaseSeq: number) {
+  for (const event of events) {
+    if (event.case_seq < afterCaseSeq) continue
+    const result = recordValue(event.payload.result)
+    const resultRunId = stringValue(result?.compiler_run_id)
+    if (resultRunId && resultRunId !== compilerRunId) continue
+    const resultStatus = stringValue(result?.status).toLowerCase()
+    if (event.raw_kind === 'tool_call' && event.name === 'inspect_compiler_run' && resultRunId) {
+      if (['completed', 'succeeded', 'success'].includes(resultStatus)) return 'completed'
+      if (['failed', 'error', 'fatal', 'cancelled'].includes(resultStatus)) return 'error'
+    }
+    if (event.raw_kind === 'role_call' && event.name === 'evidence_reviewer') {
+      if (resultStatus === 'paused' || resultStatus === 'running') continue
+      return event.payload.error ? 'error' : 'completed'
+    }
+  }
+  return ''
+}
+
 function checkIdForEvent(event: TraceEvent) {
   return stringValue(event.payload.check_id) || stringArray(event.payload.focused_check_ids)[0] || ''
 }
@@ -204,4 +332,8 @@ function numberValue(value: unknown) {
 
 function stringValue(value: unknown) {
   return typeof value === 'string' ? value : ''
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }

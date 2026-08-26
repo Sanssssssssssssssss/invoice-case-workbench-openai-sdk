@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createOptimisticSystemMessage, createOptimisticUserMessage, mergeConversationWithOptimistic, plainChatText } from './chat'
+import { createOptimisticSystemMessage, createOptimisticUserMessage, isEvidenceToastEvent, mergeConversationWithOptimistic, plainChatText } from './chat'
 import type { ConversationItem } from '@/types'
 
 describe('chat optimistic messages', () => {
@@ -106,5 +106,11 @@ describe('chat optimistic messages', () => {
 
   it('keeps line breaks while removing raw Markdown decoration', () => {
     expect(plainChatText('## 结论\n\n**通过**\n- 第一项\n- 第二项')).toBe('结论\n\n通过\n• 第一项\n• 第二项')
+  })
+
+  it('does not present a final-answer trace summary as an accepted artifact', () => {
+    expect(isEvidenceToastEvent({ raw_kind: 'final_answer', status: 'saved' })).toBe(false)
+    expect(isEvidenceToastEvent({ raw_kind: 'artifact', status: 'ok' })).toBe(true)
+    expect(isEvidenceToastEvent({ raw_kind: 'checkpoint', status: 'saved' })).toBe(false)
   })
 })
