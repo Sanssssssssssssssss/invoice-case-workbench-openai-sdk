@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, UserError
+from agents.memory import SQLiteSession
 from pydantic import ValidationError
 
 from app.compiler_runtime.kernel import compile_review_artifact
@@ -1099,6 +1100,40 @@ def test_runtime_resumes_after_last_committed_check_without_replaying_it(tmp_pat
     assert result.checkpoint is not None
     assert result.checkpoint.status == "completed"
     assert result.checkpoint.completed_check_ids == ["check.one", "check.two"]
+
+
+def test_runtime_discards_uncommitted_executor_session_after_crash(tmp_path, monkeypatch) -> None:
+    plan = _two_check_plan()
+    assessments = {
+        "check.one": _not_found_assessment("check.one"),
+        "check.two": _not_found_assessment("check.two"),
+    }
+    session_db = tmp_path / "executor-sessions.sqlite"
+    stale = SQLiteSession("compiler_crash:check.one:executor", session_db)
+    asyncio.run(stale.add_items([{"role": "assistant", "content": "uncommitted candidate"}]))
+    stale.close()
+    runtime = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments=assessments,
+    )
+    runtime.executor_session_db_path = session_db
+    session_items: dict[str, list[Any]] = {}
+    run_frontier = runtime._run_check_frontier
+
+    def inspect_session(**kwargs: Any):
+        session_items[kwargs["check_id"]] = asyncio.run(kwargs["executor_session"].get_items())
+        return run_frontier(**kwargs)
+
+    monkeypatch.setattr(runtime, "_run_check_frontier", inspect_session)
+    runtime.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        compiler_run_id="compiler_crash",
+    )
+
+    assert session_items["check.one"] == []
 
 
 def test_runtime_restores_sources_from_checkpoint(tmp_path) -> None:

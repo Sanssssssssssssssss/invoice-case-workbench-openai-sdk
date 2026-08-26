@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -1169,6 +1170,8 @@ class EvidenceCompilerRuntime:
                 if self.executor_session_db_path is not None
                 else None
             )
+            if executor_session is not None:
+                asyncio.run(executor_session.clear_session())
             try:
                 (
                     sandbox,
