@@ -141,9 +141,14 @@ async def _execute_approval(case_id: str, run_id: str, approved: bool, reason: s
     except Exception as exc:
         stream_hub.emit(
             run_id,
-            "error",
-            {"type": type(exc).__name__, "message": str(exc)},
-            summary="Approval resume failed.",
+            "approval_required",
+            {
+                "case_id": case_id,
+                "run_id": run_id,
+                "retryable": True,
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            },
+            summary="Approval resume failed; the checkpoint was preserved for retry.",
         )
 
 

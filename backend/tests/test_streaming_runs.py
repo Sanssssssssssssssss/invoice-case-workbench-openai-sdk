@@ -190,6 +190,48 @@ def test_streaming_approval_rejects_wrong_case_and_duplicate(tmp_path, monkeypat
     assert runtime.approval_resume_count == 1
 
 
+def test_streaming_approval_crash_returns_to_waiting_for_retry(tmp_path, monkeypatch) -> None:
+    _configure(tmp_path, monkeypatch)
+    import app.api.agent_runs as agent_runs
+    from app.main import app
+
+    stream_hub.clear()
+    runtime = _FakeRuntime(
+        CaseStore(tmp_path / "cases"),
+        waiting_first=True,
+        resume_failures=1,
+    )
+    monkeypatch.setattr(agent_runs, "AgentRuntime", lambda: runtime)
+    client = TestClient(app)
+    accepted = client.post(
+        "/api/agent/runs",
+        json={"case_id": "case_approval_retry", "message": "report", "attachments": []},
+    ).json()
+    _wait_until(lambda: stream_hub.get(accepted["run_id"]).status == "waiting_approval")
+    url = f"/api/agent/runs/{accepted['run_id']}/approval"
+
+    first = client.post(
+        url,
+        json={"case_id": "case_approval_retry", "approved": True, "reason": "first"},
+    )
+    _wait_until(
+        lambda: runtime.approval_resume_count == 1
+        and stream_hub.get(accepted["run_id"]).status == "waiting_approval"
+    )
+    retry_event = stream_hub.events_after(accepted["run_id"])[-1]
+    second = client.post(
+        url,
+        json={"case_id": "case_approval_retry", "approved": True, "reason": "retry"},
+    )
+    _wait_until(lambda: stream_hub.get(accepted["run_id"]).status == "completed")
+
+    assert first.status_code == 200
+    assert retry_event.kind == "approval_required"
+    assert retry_event.payload["retryable"] is True
+    assert second.status_code == 200
+    assert runtime.approval_resume_count == 2
+
+
 def test_streaming_runs_reject_same_case_but_allow_different_cases(tmp_path, monkeypatch) -> None:
     _configure(tmp_path, monkeypatch)
     import app.api.agent_runs as agent_runs
@@ -283,9 +325,10 @@ def test_shared_openai_client_pool_reuses_by_timeout(monkeypatch) -> None:
 
 
 class _FakeRuntime:
-    def __init__(self, store: CaseStore, waiting_first: bool = False) -> None:
+    def __init__(self, store: CaseStore, waiting_first: bool = False, resume_failures: int = 0) -> None:
         self.store = store
         self.waiting_first = waiting_first
+        self.resume_failures = resume_failures
         self.approval_resume_count = 0
         self.runner = SimpleNamespace(store=store, harness=HarnessRuntime(store))
 
@@ -344,6 +387,8 @@ class _FakeRuntime:
         event_sink: Any | None = None,
     ) -> AgentTurnResponse:
         self.approval_resume_count += 1
+        if self.approval_resume_count <= self.resume_failures:
+            raise RuntimeError("injected approval resume crash")
         assert approved is True
         assert event_sink is not None
         event_sink("approval_decision", {"approved": approved, "reason": reason}, summary="decision")

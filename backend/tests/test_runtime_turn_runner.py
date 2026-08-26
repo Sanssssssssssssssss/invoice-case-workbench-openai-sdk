@@ -1644,6 +1644,45 @@ def test_agent_runtime_interrupts_before_approved_tool_execution(tmp_path, monke
     assert resumed.reply == "已列出本地 case 文件。"
 
 
+def test_approval_resume_crash_preserves_checkpoint_for_retry(tmp_path, monkeypatch) -> None:
+    manager = ScriptedManagerRunner(
+        [
+            {"action": "call_tool", "target": "list_case_files", "input": {}, "reason": "inspect files"},
+            {"action": "final_answer", "final_answer": "retry completed"},
+        ]
+    )
+    runtime = _runtime(tmp_path, monkeypatch, manager)
+    runner = runtime.runner
+    runner.tools._specs["list_case_files"] = replace(runner.tools.get("list_case_files"), approval_mode="always")  # noqa: SLF001
+    waiting = runtime.run_turn(AgentTurnRequest(case_id="case_approval_crash", message="list files"))
+    original_resume = manager.resume
+
+    def crash_once(**_kwargs: Any) -> ManagerRunOutcome:
+        raise RuntimeError("injected crash after checkpoint load")
+
+    monkeypatch.setattr(manager, "resume", crash_once)
+    with pytest.raises(RuntimeError, match="injected crash"):
+        runtime.resume_approval(
+            "case_approval_crash",
+            waiting.trace["run_id"],
+            approved=True,
+            reason="ok",
+        )
+
+    runner.checkpoints.load("case_approval_crash", waiting.trace["run_id"])
+    monkeypatch.setattr(manager, "resume", original_resume)
+    final = runtime.resume_approval(
+        "case_approval_crash",
+        waiting.trace["run_id"],
+        approved=True,
+        reason="retry",
+    )
+
+    assert final.reply == "retry completed"
+    with pytest.raises(FileNotFoundError):
+        runner.checkpoints.load("case_approval_crash", waiting.trace["run_id"])
+
+
 def test_approval_resume_continues_after_events_flushed_past_checkpoint(tmp_path, monkeypatch) -> None:
     manager = ScriptedManagerRunner(
         [

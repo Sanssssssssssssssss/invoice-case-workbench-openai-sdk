@@ -455,7 +455,7 @@ class TurnRunner:
                     self._stream_emit = prior_emit
 
     def resume_approval(self, case_id: str, run_id: str, approved: bool, reason: str = "") -> AgentTurnResponse:
-        state, request, sdk_state, interruptions = self.checkpoints.consume(case_id, run_id)
+        state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
         self.harness.reconcile_debug_sequence(state)
         state.pending_approvals = []
         hooks_token = self.llm.bind_runtime_hooks(self.transcript_hooks(state))
@@ -512,7 +512,7 @@ class TurnRunner:
         self._stream_emit = event_sink
         lag_stop: asyncio.Event | None = None
         lag_task: asyncio.Task[None] | None = None
-        state, request, sdk_state, interruptions = self.checkpoints.consume(case_id, run_id)
+        state, request, sdk_state, interruptions = self.checkpoints.load(case_id, run_id)
         self.harness.reconcile_debug_sequence(state)
         state.pending_approvals = []
         hooks_token = self.llm.bind_runtime_hooks(self.transcript_hooks(state))
