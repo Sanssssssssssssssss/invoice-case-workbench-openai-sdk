@@ -31,6 +31,17 @@ def test_supervisor_prompt_is_not_a_long_route_table() -> None:
     assert "PlannerAction" not in prompt
 
 
+def test_supervisor_treats_child_failure_as_an_observation_not_a_relaunch() -> None:
+    prompt = load_system_prompt("agents/planner/prompt.md")
+
+    assert "durable child run, not a fire-and-forget call" in prompt
+    assert "use the exact child receipt as the next observation" in prompt
+    assert "success from a fluent child summary alone" in prompt
+    assert "provider, transport, timeout, runtime" in prompt
+    assert "establishes no business status" in prompt
+    assert "Do not repeat the same child request after the same operational error" in prompt
+
+
 def test_supervisor_prompt_keeps_human_reply_boundary() -> None:
     prompt = load_system_prompt("agents/planner/prompt.md")
 

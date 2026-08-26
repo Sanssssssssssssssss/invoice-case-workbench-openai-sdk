@@ -55,3 +55,44 @@ CommandCode 密钥没有暴露给 CLI 安全环境，运行按用户授权回退
 - [OpenAI Agents SDK: human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
 - [OpenAI Agents SDK: tracing](https://openai.github.io/openai-agents-python/tracing/)
 - [CodeWhale runtime API and durable child receipts](https://github.com/Hmbown/CodeWhale/blob/main/docs/RUNTIME_API.md)
+
+## CommandCode Provider 兼容性存档
+
+- 日期：2026-08-26（Asia/Singapore）
+- 运行提交：`f32e325`
+- Provider / model：CommandCode / `deepseek/deepseek-v4-flash`
+- 随机种子：`commandcode-20260826`
+- Reasoning：Manager `high`；worker `disabled`
+- 入口：`backend/scripts/run_business_eval.py <case> --output-root <round>`；密钥仅经安全输入注入
+- 本地产物：`output/business_benchmarks/runs/commandcode_provider_probe_20260826/`
+
+### 判定
+
+这次结果是 `INFRA_BLOCKED`，不是 Business Eval fail。API 鉴权、模型名、OpenAI-compatible 协议和 Manager 短调用均通过；两个真实 Manager Eval 都在 TaskCompiler 的长结构化请求阶段重复收到 HTTP 524，未生成 snapshot、score 或业务报告，因此不能用于判断业务正确率。
+
+当前提交与上面的四案成功基线使用相同生产代码：`1e35815..f32e325` 只修改本文件。这个控制变量支持把本轮差异定位在 Provider 承载能力，而不是近期业务逻辑回归。
+
+### 兼容性控制
+
+| 检查 | 结果 | 耗时 / usage |
+|---|---|---|
+| 官方参数核对 | PASS | base URL、endpoint 和 model 与 [CommandCode Provider API](https://commandcode.ai/docs/provider) 一致 |
+| 最小 Chat Completions | PASS | 2.44s；110 tokens，其中 reasoning 14 |
+| 项目 `LlmClient.complete_structured` | PASS | 3.08s；215 tokens |
+| Python `urllib` 默认 User-Agent | 403 | 只替换为常见 User-Agent 后同一请求 200；属于观测到的网关敏感性，不是密钥失效 |
+
+### 两个真实 Manager Eval
+
+| 案例 | 成功链路 | 阻塞链路 | 业务评分 |
+|---|---|---|---|
+| `invoice_arithmetic_conflict_001` | 5 次已完成 Manager provider call 均成功；附件抽取完成 | 4 个完整 child attempt 共 8 次 TaskCompiler provider call 均约 126s 后返回 524；第 5 次 attempt 人工停止 | 未产生，不计 fail |
+| `invoice_arithmetic_supported_0005` | 1 次 Manager provider call 成功；附件抽取完成 | TaskCompiler 两次本地调用均约 126s 后返回 524；Manager 正确重新委派后人工停止 | 未产生，不计 fail |
+
+原始 trace、抽取物和 provider events 只在本地 canonical benchmark root 中保留，不进入 Git。失败调用没有返回 usage，相关 token、cache hit 和成本必须保持 `null`，不能填零或估算成已计费值。
+
+### 留给统一复盘的正反证据
+
+- 做得好的部分：短请求兼容；真实 SDK 路径兼容；Manager 能观察 child 失败并继续；trace 能明确区分 Manager 成功、TaskCompiler 524 和人工终止；同一生产代码已有四案 99.5–100 分成功控制组。
+- 做得不好的部分：TaskCompiler 请求无法在该 Provider 的约 126s 上游窗口内完成；Compiler 的两次本地重试再乘上 Manager 重委派，把同一基础设施错误放大成 8 次调用和约 17 分钟等待；失败调用缺少 token/cost telemetry。
+- 暂不下结论：这组数据不能证明 TaskCompiler prompt 太大、模型能力不足或业务架构错误。需要用能稳定完成同一 payload 的 Provider 成功样本，才能把 Provider capacity 与 Agent quality 分开比较。
+- 后续总复盘应分别评价 `业务正确性`、`监督恢复质量`、`Provider 可承载性` 和 `失败成本控制`，不得把它们压成一个总分。
