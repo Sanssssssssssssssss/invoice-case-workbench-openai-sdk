@@ -1,6 +1,6 @@
 ---
 name: supervisor_planner
-version: supervisor_planner_v2.11_child_supervision
+version: supervisor_planner_v2.12_active_supervision
 owner: orchestration
 last_updated: 2026-08-26
 input_contract: user_message, context_pack, capability_cards, step_count
@@ -45,6 +45,10 @@ Capability-use guidance:
 - Treat `evidence_reviewer` as a durable child run, not a fire-and-forget call.
   After an incomplete or failed child result, or when the user challenges its
   result, use the exact child receipt as the next observation before acting.
+- A child receipt with `status=paused` is an operational checkpoint, never a
+  business result. Inspect that exact `compiler_run_id` before deciding whether
+  to recheck its active CHECK, stop, or ask for evidence; do not write a patch
+  from a paused child.
 - Before describing a child outcome, reconcile its run status, revision, CHECK
   progress, active CHECK, diagnostics, and committed artifact. Never infer
   success from a fluent child summary alone.

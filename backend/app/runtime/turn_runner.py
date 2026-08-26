@@ -19,6 +19,7 @@ from app.agents.thinking import manager_tool_loop_thinking_type
 from app.agents.patch_builder.deterministic import reduce_review_to_patch
 from app.agents.registry import RoleRegistry
 from app.compiler_runtime.runtime import (
+    CompilerSupervisionPause,
     CompilerRunCheckpoint,
     EvidenceCompilerRuntime,
     PROMPT_VERSIONS,
@@ -70,7 +71,7 @@ from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
 
 ROLE_TARGETS = {"materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"}
-MANAGER_PROMPT_VERSION = "supervisor_planner_v2.11_child_supervision"
+MANAGER_PROMPT_VERSION = "supervisor_planner_v2.12_active_supervision"
 _SAFE_FINAL_ANSWER_STOP = (
     "本轮最终回复未通过安全校验，因此未提供业务结论。请查看当前案件状态和运行记录。"
 )
@@ -1936,6 +1937,40 @@ class TurnRunner:
                 self._update_phase_after_role(state, role, result)
                 span.update(output=safe_role_output(result))
                 return _manager_success("role", role, observation=observation)
+            except CompilerSupervisionPause as pause:
+                state.observability.pop("_pending_review_artifact", None)
+                payload = pause.payload
+                receipt = {
+                    "status": "paused",
+                    "role": role,
+                    "compiler_run_id": str(payload.get("compiler_run_id") or compiler_run_id),
+                    "revision": int(payload.get("compiler_revision") or 1),
+                    "active_check_id": str((payload.get("focused_check_ids") or [""])[0]),
+                    "pause_reason": "CHECK_RETRY_EXHAUSTED",
+                    "diagnostic_codes": list(payload.get("diagnostic_codes") or []),
+                    "next_action_hint": "call_tool:inspect_compiler_run",
+                }
+                state.observability["compiler_run"] = receipt
+                self.harness.record_role_call(state, role, role_input, receipt, capability=capability)
+                self.harness.record_observation(
+                    state,
+                    {
+                        "kind": "role",
+                        "name": role,
+                        "summary": "Compiler paused after the active CHECK exhausted its bounded retry budget.",
+                        "key_facts": [
+                            f"compiler_run_id={receipt['compiler_run_id']}",
+                            f"revision={receipt['revision']}",
+                            f"active_check_id={receipt['active_check_id']}",
+                        ],
+                        "risks": ["No candidate from the active CHECK was committed."],
+                        "missing_items": [],
+                        "next_action_hint": receipt["next_action_hint"],
+                        "must_preserve_refs": [receipt["compiler_run_id"]],
+                    },
+                )
+                span.update(output=safe_role_output(receipt))
+                return receipt
             except Exception as exc:
                 state.observability.pop("_pending_review_artifact", None)
                 self.harness.record_role_call(
@@ -1962,7 +1997,7 @@ class TurnRunner:
                 }
 
     def _compiler_progress_sink(self, state: HarnessRunState) -> Any:
-        def emit(kind: str, payload: dict[str, Any], summary: str) -> None:
+        def emit(kind: str, payload: dict[str, Any], summary: str) -> bool:
             stage = str(payload.get("stage") or payload.get("role") or "evidence_compiler")
             name = str(payload.get("tool") or stage)
             self.harness.append_debug_event(
@@ -1975,6 +2010,7 @@ class TurnRunner:
                 caused_by_event_id=state.last_action_event_id,
             )
             self.emit_stream_event(kind, payload, summary=summary)
+            return str(payload.get("status") or "") == "frontier_rolled_back"
 
         return emit
 

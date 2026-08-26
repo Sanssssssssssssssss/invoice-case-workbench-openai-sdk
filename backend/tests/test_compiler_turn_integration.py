@@ -12,6 +12,7 @@ from app.compiler_runtime.policy import policy_excerpt_for, policy_hash
 from app.compiler_runtime.signatures import proof_signature_hash_for
 from app.compiler_runtime.runtime import (
     COMPILER_VERSION,
+    CompilerSupervisionPause,
     CompilerRunCheckpoint,
     CompilerRunResult,
     ExecutorSummary,
@@ -21,7 +22,7 @@ from app.harness import HarnessRuntime
 from app.runtime.checkpoints import RuntimeCheckpointStore
 from app.runtime.turn_runner import TurnRunner
 from app.state.case_store import CaseStore
-from app.state.schemas import AgentTurnRequest, Attachment
+from app.state.schemas import AgentTurnRequest, Attachment, SupervisorDecision
 
 
 @pytest.fixture(autouse=True)
@@ -563,6 +564,60 @@ def test_manager_can_inspect_and_recheck_one_durable_compiler_child(
     assert captured["compiler_run_id"] == checkpoint.compiler_run_id
     assert captured["checkpoint"].revision == 2
     assert captured["prepared_sources"][0].record.content == "INVOICE INV-001"
+
+    class PausingRuntime:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        def run(self, **_kwargs: Any) -> Any:
+            raise CompilerSupervisionPause(
+                {
+                    "compiler_run_id": checkpoint.compiler_run_id,
+                    "compiler_revision": 2,
+                    "focused_check_ids": ["check_invoice"],
+                    "status": "frontier_rolled_back",
+                    "public_reason": "bounded retry budget exhausted",
+                }
+            )
+
+    monkeypatch.setattr("app.runtime.turn_runner.EvidenceCompilerRuntime", PausingRuntime)
+    paused = runner._call_evidence_compiler(
+        state,
+        request,
+        {"compiler_run_id": checkpoint.compiler_run_id},
+        SupervisorDecision(
+            action="delegate_agent",
+            target="evidence_reviewer",
+            input={"mode": "review", "compiler_run_id": checkpoint.compiler_run_id},
+        ),
+    )
+
+    assert paused["status"] == "paused"
+    assert paused["active_check_id"] == "check_invoice"
+    assert paused["next_action_hint"] == "call_tool:inspect_compiler_run"
+
+
+def test_compiler_progress_requests_supervision_only_after_frontier_rollback(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("INVOICE_AGENT_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    runner = TurnRunner()
+    state = HarnessRuntime(runner.store).begin_run(
+        "case_supervision_pause",
+        "review",
+        run_id="run_supervision_pause",
+    )
+    sink = runner._compiler_progress_sink(state)
+    base = {
+        "stage": "executor",
+        "action": "frontier update",
+        "public_reason": "bounded retry state",
+        "compiler_run_id": "compiler_pause",
+    }
+
+    assert sink("model_thinking", {**base, "status": "frontier_rejected"}, "rejected") is False
+    assert sink("model_thinking", {**base, "status": "frontier_rolled_back"}, "rolled back") is True
 
 
 def _completed_compiler_checkpoint() -> CompilerRunCheckpoint:

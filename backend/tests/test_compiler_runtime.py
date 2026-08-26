@@ -28,6 +28,7 @@ from app.compiler_runtime.runtime import (
     EXECUTOR_MAX_TURNS,
     PROMPT_VERSIONS,
     CompilerCorrection,
+    CompilerSupervisionPause,
     EvidenceCompilerRuntime,
     ExecutorSummary,
     PreparedSource,
@@ -1134,6 +1135,36 @@ def test_runtime_discards_uncommitted_executor_session_after_crash(tmp_path, mon
     )
 
     assert session_items["check.one"] == []
+
+
+def test_frontier_retry_exhaustion_can_pause_at_durable_checkpoint(tmp_path) -> None:
+    plan = _two_check_plan()
+    checkpoints = []
+    runtime = _FrontierScriptRuntime(
+        LlmClient(_settings(tmp_path)),
+        plan=plan,
+        assessments={
+            "check.one": _not_found_assessment("check.one"),
+            "check.two": _not_found_assessment("check.two"),
+        },
+        verifier_failures={"check.one": CHECK_FRONTIER_ATTEMPT_CAP},
+    )
+    runtime.progress_sink = (
+        lambda _kind, payload, _summary: payload.get("status") == "frontier_rolled_back"
+    )
+
+    with pytest.raises(CompilerSupervisionPause) as paused:
+        runtime.run(
+            active_requirement_ids=["vendor_identity"],
+            prepared_sources=[],
+            policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+            compiler_run_id="compiler_pause",
+            checkpoint_sink=checkpoints.append,
+        )
+
+    assert paused.value.payload["focused_check_ids"] == ["check.one"]
+    assert checkpoints[-1].active_check_id == "check.one"
+    assert checkpoints[-1].completed_check_ids == []
 
 
 def test_runtime_restores_sources_from_checkpoint(tmp_path) -> None:

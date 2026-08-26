@@ -225,6 +225,12 @@ class CompilerRunResult:
     checkpoint: "CompilerRunCheckpoint | None" = None
 
 
+class CompilerSupervisionPause(RuntimeError):
+    def __init__(self, payload: Mapping[str, Any]) -> None:
+        self.payload = dict(payload)
+        super().__init__(str(payload.get("public_reason") or "Compiler paused for supervision"))
+
+
 class CompilerCorrection(_RuntimeModel):
     correction_id: str = Field(default_factory=lambda: f"correction_{uuid4().hex[:12]}")
     kind: Literal["RECHECK", "ADD_EVIDENCE", "CORRECT_SCOPE", "CANCEL"]
@@ -392,7 +398,7 @@ class EvidenceCompilerRuntime:
         *,
         hooks: Any | None = None,
         settings: Settings | None = None,
-        progress_sink: Callable[[str, dict[str, Any], str], None] | None = None,
+        progress_sink: Callable[[str, dict[str, Any], str], bool | None] | None = None,
         executor_session_db_path: str | Path | None = None,
     ) -> None:
         self.llm = llm
@@ -1772,9 +1778,11 @@ class EvidenceCompilerRuntime:
             **counts,
         }
         try:
-            self.progress_sink(kind, payload, action)
+            should_pause = self.progress_sink(kind, payload, action) is True
         except Exception:
             return
+        if should_pause:
+            raise CompilerSupervisionPause(payload)
 
     def _progress_error(self, stage: str, public_reason: str) -> None:
         self._progress(
