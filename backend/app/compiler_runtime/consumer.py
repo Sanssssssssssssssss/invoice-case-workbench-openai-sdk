@@ -1206,6 +1206,8 @@ def _validate_report_business_numbers(
         if _is_structural_number(markdown, match, has_currency=has_currency, is_percent=is_percent):
             continue
         parse_text = match.group(0)
+        if is_percent and match.group("open") and not match.group("sign"):
+            parse_text = parse_text.strip()[1:-1]
         if _is_markdown_list_marker(markdown, match):
             parse_text = re.sub(
                 r"^\s*[\-\N{MINUS SIGN}]\s+",

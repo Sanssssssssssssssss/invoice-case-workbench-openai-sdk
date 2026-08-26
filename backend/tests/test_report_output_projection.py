@@ -213,8 +213,14 @@ def test_percent_literal_inside_canonical_claim_text_is_admitted() -> None:
     ]
 
     assert validate_canonical_report_projection("法定增值税率：20%", packet) == "法定增值税率：20%"
+    assert (
+        validate_canonical_report_projection("Statutory VAT (20%) applies", packet)
+        == "Statutory VAT (20%) applies"
+    )
     with pytest.raises(ValueError, match="business numeric value.*21%"):
         validate_canonical_report_projection("税率：21%", packet)
+    with pytest.raises(ValueError, match=r"business numeric value.*\(21%\)"):
+        validate_canonical_report_projection("Statutory VAT (21%) applies", packet)
 
 
 def test_deterministic_report_does_not_attach_currency_to_embedded_percentage() -> None:
