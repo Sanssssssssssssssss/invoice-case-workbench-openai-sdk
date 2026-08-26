@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from agents import FunctionTool, RunConfig, Runner
 from agents.exceptions import MaxTurnsExceeded
+from agents.memory import SQLiteSession
 from agents.run_state import RunState
 from pydantic import BaseModel
 
@@ -112,13 +113,18 @@ class SdkManagerRunner:
         tools = runner.sdk_tools(state=state, request=request, planner_context=planner_context)
         manager = runner.manager_factory.build(tools, metadata=_manager_metadata(runner, state))
         started = time.perf_counter()
-        result = run_agent_sync(
-            manager,
-            json.dumps(manager_input, ensure_ascii=False, default=str),
-            max_turns=max(1, state.max_steps - state.step_count + 2),
-            run_config=runner.run_config(state),
-            hooks=_transcript_hooks_for(runner, state),
-        )
+        session = runner.manager_session(state.case_id)
+        try:
+            result = run_agent_sync(
+                manager,
+                json.dumps(manager_input, ensure_ascii=False, default=str),
+                max_turns=max(1, state.max_steps - state.step_count + 2),
+                run_config=runner.run_config(state),
+                hooks=_transcript_hooks_for(runner, state),
+                session=session,
+            )
+        finally:
+            session.close()
         runner.record_manager_model_call(state, manager_input, result, latency_ms=_elapsed_ms(started))
         interruptions = list(getattr(result, "interruptions", []) or [])
         sdk_state = result.to_state().to_string() if interruptions else ""
@@ -142,6 +148,7 @@ class SdkManagerRunner:
         tools = runner.sdk_tools(state=state, request=request, planner_context=planner_context)
         manager = runner.manager_factory.build(tools, metadata=_manager_metadata(runner, state))
         run_config = runner.run_config(state)
+        session = runner.manager_session(state.case_id)
         try:
             started = time.perf_counter()
             result = Runner.run_streamed(
@@ -150,6 +157,7 @@ class SdkManagerRunner:
                 max_turns=max(1, state.max_steps - state.step_count + 2),
                 run_config=run_config,
                 hooks=_transcript_hooks_for(runner, state),
+                session=session,
             )
             mark_model_started(state.observability, "planner")
             runner.emit_stream_event(
@@ -163,6 +171,7 @@ class SdkManagerRunner:
             return _manager_outcome_from_result(result)
         finally:
             await close_run_config_client(run_config)
+            session.close()
 
     def resume(
         self,
@@ -187,13 +196,18 @@ class SdkManagerRunner:
             else:
                 run_state.reject(item, rejection_message=reason or "User rejected this tool call.")
         started = time.perf_counter()
-        result = run_agent_sync(
-            manager,
-            run_state,
-            max_turns=max(1, state.max_steps - state.step_count + 2),
-            run_config=runner.run_config(state),
-            hooks=_transcript_hooks_for(runner, state),
-        )
+        session = runner.manager_session(state.case_id)
+        try:
+            result = run_agent_sync(
+                manager,
+                run_state,
+                max_turns=max(1, state.max_steps - state.step_count + 2),
+                run_config=runner.run_config(state),
+                hooks=_transcript_hooks_for(runner, state),
+                session=session,
+            )
+        finally:
+            session.close()
         runner.record_manager_model_call(
             state,
             {"approval_resume": approved, "reason": reason},
@@ -232,6 +246,7 @@ class SdkManagerRunner:
             else:
                 run_state.reject(item, rejection_message=reason or "User rejected this tool call.")
         run_config = runner.run_config(state)
+        session = runner.manager_session(state.case_id)
         try:
             started = time.perf_counter()
             result = Runner.run_streamed(
@@ -240,6 +255,7 @@ class SdkManagerRunner:
                 max_turns=max(1, state.max_steps - state.step_count + 2),
                 run_config=run_config,
                 hooks=_transcript_hooks_for(runner, state),
+                session=session,
             )
             mark_model_started(state.observability, "planner")
             runner.emit_stream_event(
@@ -258,6 +274,7 @@ class SdkManagerRunner:
             return _manager_outcome_from_result(result)
         finally:
             await close_run_config_client(run_config)
+            session.close()
 
 
 def _manager_metadata(runner: TurnRunner, state: HarnessRunState) -> dict[str, Any]:
@@ -1219,6 +1236,9 @@ class TurnRunner:
             },
             timeout_seconds=self.settings.timeout_for_role("planner"),
         )
+
+    def manager_session(self, case_id: str) -> SQLiteSession:
+        return SQLiteSession(f"{self.store.validate_case_id(case_id)}:manager", self.settings.session_db_path)
 
     def transcript_hooks(self, state: HarnessRunState) -> ModelTranscriptHooks:
         hook = self._transcript_hooks.get(state.run_id)

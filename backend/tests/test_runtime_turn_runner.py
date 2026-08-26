@@ -732,6 +732,7 @@ def test_sdk_manager_resume_passes_run_state_as_runner_input(monkeypatch) -> Non
         interruptions: list[Any] = []
 
     run_state = FakeRunState()
+    session = SimpleNamespace(close=lambda: setattr(session, "closed", True), closed=False)
     captured: dict[str, Any] = {}
 
     monkeypatch.setattr("app.runtime.turn_runner.RunState.from_string", lambda *_args, **_kwargs: run_state)
@@ -746,6 +747,7 @@ def test_sdk_manager_resume_passes_run_state_as_runner_input(monkeypatch) -> Non
         context_assembler=SimpleNamespace(build_planner_context=lambda *_args, **_kwargs: {}),
         sdk_tools=lambda **_kwargs: [],
         manager_factory=SimpleNamespace(build=lambda *_args, **_kwargs: "manager"),
+        manager_session=lambda _case_id: session,
         run_config=lambda _state: "run_config",
         record_manager_model_call=lambda *_args, **_kwargs: None,
     )
@@ -764,6 +766,79 @@ def test_sdk_manager_resume_passes_run_state_as_runner_input(monkeypatch) -> Non
     assert run_state.approved is True
     assert captured["args"][:2] == ("manager", run_state)
     assert captured["kwargs"]["run_config"] == "run_config"
+    assert captured["kwargs"]["session"] is session
+    assert session.closed is True
+
+
+def test_manager_session_persists_sdk_items_by_case(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, monkeypatch, ScriptedManagerRunner([]))
+    first = runtime.runner.manager_session("case_sdk_session")
+    asyncio.run(first.add_items([{"role": "user", "content": "first turn"}]))
+    first.close()
+
+    reopened = runtime.runner.manager_session("case_sdk_session")
+    other = runtime.runner.manager_session("case_other_session")
+    try:
+        assert asyncio.run(reopened.get_items()) == [{"role": "user", "content": "first turn"}]
+        assert asyncio.run(other.get_items()) == []
+    finally:
+        reopened.close()
+        other.close()
+
+
+def test_streamed_manager_uses_and_closes_the_same_case_session(monkeypatch) -> None:
+    session = SimpleNamespace(close=lambda: setattr(session, "closed", True), closed=False)
+    captured: dict[str, Any] = {}
+
+    class FakeStream:
+        final_output = "streamed"
+        interruptions: list[Any] = []
+
+        async def stream_events(self):
+            if False:
+                yield None
+
+    def fake_run_streamed(*_args: Any, **kwargs: Any) -> FakeStream:
+        captured.update(kwargs)
+        return FakeStream()
+
+    async def fake_close(_config: Any) -> None:
+        return None
+
+    monkeypatch.setattr("app.runtime.turn_runner.Runner.run_streamed", fake_run_streamed)
+    monkeypatch.setattr("app.runtime.turn_runner.close_run_config_client", fake_close)
+    runner = SimpleNamespace(
+        context=None,
+        sdk_tools=lambda **_kwargs: [],
+        manager_factory=SimpleNamespace(build=lambda *_args, **_kwargs: "manager"),
+        manager_session=lambda _case_id: session,
+        run_config=lambda _state: "run_config",
+        settings=SimpleNamespace(llm_model="deepseek-v4-flash"),
+        emit_stream_event=lambda *_args, **_kwargs: None,
+        record_sdk_stream_event=lambda *_args, **_kwargs: None,
+        record_manager_model_call=lambda *_args, **_kwargs: None,
+    )
+    state = SimpleNamespace(
+        case_id="case_stream_session",
+        run_id="run_stream_session",
+        max_steps=10,
+        step_count=0,
+        observability={},
+    )
+
+    outcome = asyncio.run(
+        SdkManagerRunner().run_streamed(
+            runner=runner,
+            request=AgentTurnRequest(case_id=state.case_id, message="continue"),
+            state=state,
+            planner_context={},
+            manager_input={"user_message": "continue"},
+        )
+    )
+
+    assert outcome.final_output == "streamed"
+    assert captured["session"] is session
+    assert session.closed is True
 
 
 def test_agent_runtime_uses_manager_policy_loop(tmp_path, monkeypatch) -> None:
