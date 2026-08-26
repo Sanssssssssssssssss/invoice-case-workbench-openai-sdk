@@ -139,13 +139,14 @@ class PolicyGate:
                 )
 
         reviewer_terminal_failure = _role_failed_nonretryable(state, "evidence_reviewer")
+        reviewer_paused = _reviewer_is_paused(state)
         if reviewer_terminal_failure and decision.action not in {"final_answer", "ask_user"}:
             return block(
                 "reviewer_failure_requires_final",
                 "Evidence review failed terminally in this turn; no CasePatch can be produced.",
                 constraints=["Use final_answer. Runtime will disclose that review failed and no evidence was written."],
             )
-        if has_observation(state, kind="tool", name="read_attachment") and not _review_finished(state) and not reviewer_terminal_failure:
+        if has_observation(state, kind="tool", name="read_attachment") and not _review_finished(state) and not reviewer_terminal_failure and not reviewer_paused:
             expected_mode = _next_reviewer_mode(state)
             if not _decision_is_reviewer(decision, expected_mode):
                 return block(
@@ -153,6 +154,13 @@ class PolicyGate:
                     "Attachment content has been read but not yet reviewed by evidence_reviewer.",
                     constraints=[f"Choose delegate_agent target=evidence_reviewer input.mode={expected_mode}."],
                 )
+
+        if reviewer_paused and decision.action == "delegate_agent" and decision.target == "case_patch_writer":
+            return block(
+                "paused_review_requires_inspection",
+                "A paused Compiler receipt is not a review result and cannot be reduced into a CasePatch.",
+                constraints=["Inspect the exact compiler_run_id before recheck, resume, stop, or asking for evidence."],
+            )
 
         if has_reviewer_mode(state, "review") and not has_observation(state, kind="role", name="case_patch_writer"):
             if not (decision.action == "delegate_agent" and decision.target == "case_patch_writer"):
@@ -433,6 +441,8 @@ def has_observation(state: Any, *, kind: str, name: str) -> bool:
 
 
 def has_reviewer_mode(state: Any, mode: str) -> bool:
+    if _reviewer_is_paused(state):
+        return False
     for observation in getattr(state, "observations", []) or []:
         if not isinstance(observation, dict):
             continue
@@ -443,6 +453,15 @@ def has_reviewer_mode(state: Any, mode: str) -> bool:
             return True
         if observed_mode == mode:
             return True
+    return False
+
+
+def _reviewer_is_paused(state: Any) -> bool:
+    for observation in reversed(getattr(state, "observations", []) or []):
+        if not isinstance(observation, dict):
+            continue
+        if observation.get("kind") == "role" and observation.get("name") == "evidence_reviewer":
+            return observation.get("status") == "paused"
     return False
 
 

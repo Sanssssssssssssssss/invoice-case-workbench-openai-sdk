@@ -1957,6 +1957,7 @@ class TurnRunner:
                     {
                         "kind": "role",
                         "name": role,
+                        "status": "paused",
                         "summary": "Compiler paused after the active CHECK exhausted its bounded retry budget.",
                         "key_facts": [
                             f"compiler_run_id={receipt['compiler_run_id']}",

@@ -709,6 +709,43 @@ def test_policy_gate_blocks_extract_when_text_attachment_expects_review(tmp_path
     assert "mode=review" in " ".join(check.recommended_constraints)
 
 
+def test_policy_gate_inspects_paused_reviewer_before_patch(tmp_path) -> None:
+    store, context, harness, state = _state(tmp_path, message="review attachment")
+    harness.record_observation(state, {"kind": "tool", "name": "read_attachment"})
+    harness.record_observation(
+        state,
+        {
+            "kind": "role",
+            "name": "evidence_reviewer",
+            "status": "paused",
+            "next_action_hint": "call_tool:inspect_compiler_run",
+        },
+    )
+    gate = PolicyGate(store=store, context=context)
+    request = AgentTurnRequest(case_id=state.case_id, message="review attachment")
+
+    inspected = gate.check(
+        request=request,
+        state=state,
+        decision=SupervisorDecision(
+            action="call_tool",
+            target="inspect_compiler_run",
+            input={"compiler_run_id": "compiler_pause"},
+        ),
+        planner_context={"attachments": []},
+    )
+    blocked_patch = gate.check(
+        request=request,
+        state=state,
+        decision=SupervisorDecision(action="delegate_agent", target="case_patch_writer"),
+        planner_context={"attachments": []},
+    )
+
+    assert inspected.allowed
+    assert not blocked_patch.allowed
+    assert blocked_patch.error_type == "paused_review_requires_inspection"
+
+
 def test_policy_gate_enforces_report_writer_file_and_pdf_sequence(tmp_path, monkeypatch) -> None:
     store, context, harness, state = _state(tmp_path, message="生成最终报告")
     monkeypatch.setattr(
