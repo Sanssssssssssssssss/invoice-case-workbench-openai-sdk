@@ -184,6 +184,47 @@ describe('compiler child run view', () => {
     expect(JSON.stringify(view)).not.toContain('private')
   })
 
+  it('does not treat a phase-local completion as completion of the whole child run', () => {
+    const childEvent = (id: string, caseSeq: number, payload: Record<string, unknown>) => ({
+      ...event(id, 'model_thinking'),
+      case_seq: caseSeq,
+      payload: { compiler_run_id: 'compiler_live', compiler_revision: 1, ...payload }
+    })
+    const view = compilerChildRunView([
+      childEvent('plan', 1, { stage: 'task_compiler', status: 'completed', check_count: 6 }),
+      childEvent('check-1', 2, { stage: 'proof_kernel', status: 'frontier_committed', focused_check_ids: ['check_1'] }),
+      childEvent('check-2', 3, { stage: 'proof_kernel', status: 'frontier_committed', focused_check_ids: ['check_2'] }),
+      childEvent('partial-proof', 4, { stage: 'proof_kernel', status: 'completed', supported_count: 1 }),
+      childEvent('check-3-started', 5, { stage: 'fine_verifier', status: 'started', focused_check_ids: ['check_3'], check_count: 1 })
+    ])
+
+    expect(view).toMatchObject({
+      status: 'running',
+      completedChecks: 2,
+      totalChecks: 6,
+      activeCheckId: 'check_3'
+    })
+  })
+
+  it('does not count a rolled-back CHECK as completed', () => {
+    const childEvent = (id: string, caseSeq: number, status: string, checkId = '') => ({
+      ...event(id, 'model_thinking'),
+      case_seq: caseSeq,
+      payload: {
+        compiler_run_id: 'compiler_paused',
+        compiler_revision: 1,
+        status,
+        check_count: 6,
+        focused_check_ids: checkId ? [checkId] : []
+      }
+    })
+    const events = [childEvent('plan', 1, 'completed')]
+    for (let index = 1; index <= 5; index += 1) events.push(childEvent(`check-${index}`, index + 1, 'frontier_committed', `check_${index}`))
+    events.push(childEvent('check-6-rollback', 7, 'frontier_rolled_back', 'check_6'))
+
+    expect(compilerChildRunView(events)).toMatchObject({ status: 'running', completedChecks: 5, totalChecks: 6 })
+  })
+
   it('returns null when the selected run has no child metadata', () => {
     expect(compilerChildRunView([event('task_compiler')])).toBeNull()
   })

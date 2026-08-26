@@ -162,14 +162,11 @@ export function compilerChildRunView(events: TraceEvent[]): CompilerChildRunView
 
   const latest = revisionEvents.at(-1)!
   const latestStatus = stringValue(latest.payload.status) || latest.status
-  const hasFinalProof = revisionEvents.some((event) => numberValue(event.payload.supported_count)
-    + numberValue(event.payload.contradicted_count)
-    + numberValue(event.payload.not_found_count) > 0)
   const status = ['fatal', 'error'].includes(latestStatus)
     ? 'error'
-    : hasFinalProof || (totalChecks > 0 && completed.size >= totalChecks)
+    : totalChecks > 0 && completed.size >= totalChecks
       ? 'completed'
-      : latestStatus || 'running'
+      : latestStatus === 'cancelled' ? 'cancelled' : 'running'
 
   return {
     compilerRunId,
