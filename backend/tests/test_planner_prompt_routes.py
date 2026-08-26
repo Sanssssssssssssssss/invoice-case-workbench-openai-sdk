@@ -42,6 +42,8 @@ def test_supervisor_treats_child_failure_as_an_observation_not_a_relaunch() -> N
     assert "Do not repeat the same child request after the same operational error" in prompt
     assert "status=paused" in prompt
     assert "Inspect that exact `compiler_run_id`" in prompt
+    assert "pause_reason=PLAN_READY" in prompt
+    assert "continue that exact" in prompt
 
 
 def test_supervisor_prompt_keeps_human_reply_boundary() -> None:

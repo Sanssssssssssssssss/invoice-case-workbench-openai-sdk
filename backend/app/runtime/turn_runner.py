@@ -72,7 +72,7 @@ from app.tools.file_workspace import FileWorkspace, report_paths_for_run
 
 
 ROLE_TARGETS = {"materials_advisor", "evidence_reviewer", "case_patch_writer", "report_writer"}
-MANAGER_PROMPT_VERSION = "supervisor_planner_v2.12_active_supervision"
+MANAGER_PROMPT_VERSION = "supervisor_planner_v2.13_plan_checkpoint"
 _SAFE_FINAL_ANSWER_STOP = (
     "本轮最终回复未通过安全校验，因此未提供业务结论。请查看当前案件状态和运行记录。"
 )
@@ -1754,7 +1754,15 @@ class TurnRunner:
                 resume_checkpoint = CompilerRunCheckpoint.model_validate(raw_checkpoint)
                 if resume_checkpoint.status != "running":
                     raise ValueError("Compiler run is not waiting for a recheck")
-                if not resume_checkpoint.corrections or resume_checkpoint.corrections[-1].kind != "RECHECK":
+                plan_checkpoint = (
+                    not resume_checkpoint.active_check_id
+                    and not resume_checkpoint.completed_check_ids
+                    and not resume_checkpoint.corrections
+                )
+                if not plan_checkpoint and (
+                    not resume_checkpoint.corrections
+                    or resume_checkpoint.corrections[-1].kind != "RECHECK"
+                ):
                     raise ValueError("Compiler run has no pending RECHECK correction")
             except Exception as exc:
                 self.harness.record_observation(
@@ -1960,13 +1968,14 @@ class TurnRunner:
             except CompilerSupervisionPause as pause:
                 state.observability.pop("_pending_review_artifact", None)
                 payload = pause.payload
+                plan_ready = str(payload.get("status") or "") == "plan_ready"
                 receipt = {
                     "status": "paused",
                     "role": role,
                     "compiler_run_id": str(payload.get("compiler_run_id") or compiler_run_id),
                     "revision": int(payload.get("compiler_revision") or 1),
                     "active_check_id": str((payload.get("focused_check_ids") or [""])[0]),
-                    "pause_reason": "CHECK_RETRY_EXHAUSTED",
+                    "pause_reason": "PLAN_READY" if plan_ready else "CHECK_RETRY_EXHAUSTED",
                     "diagnostic_codes": list(payload.get("diagnostic_codes") or []),
                     "next_action_hint": "call_tool:inspect_compiler_run",
                 }
@@ -1978,13 +1987,19 @@ class TurnRunner:
                         "kind": "role",
                         "name": role,
                         "status": "paused",
-                        "summary": "Compiler paused after the active CHECK exhausted its bounded retry budget.",
+                        "summary": (
+                            "Compiler paused after saving a new Proof Plan for Supervisor inspection."
+                            if plan_ready
+                            else "Compiler paused after the active CHECK exhausted its bounded retry budget."
+                        ),
                         "key_facts": [
                             f"compiler_run_id={receipt['compiler_run_id']}",
                             f"revision={receipt['revision']}",
                             f"active_check_id={receipt['active_check_id']}",
                         ],
-                        "risks": ["No candidate from the active CHECK was committed."],
+                        "risks": (
+                            [] if plan_ready else ["No candidate from the active CHECK was committed."]
+                        ),
                         "missing_items": [],
                         "next_action_hint": receipt["next_action_hint"],
                         "must_preserve_refs": [receipt["compiler_run_id"]],
@@ -2061,7 +2076,7 @@ class TurnRunner:
                 caused_by_event_id=state.last_action_event_id,
             )
             self.emit_stream_event(kind, payload, summary=summary)
-            return str(payload.get("status") or "") == "frontier_rolled_back"
+            return str(payload.get("status") or "") in {"plan_ready", "frontier_rolled_back"}
 
         return emit
 

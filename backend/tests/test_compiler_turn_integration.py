@@ -600,7 +600,7 @@ def test_manager_can_inspect_and_recheck_one_durable_compiler_child(
     assert paused["next_action_hint"] == "call_tool:inspect_compiler_run"
 
 
-def test_compiler_progress_requests_supervision_only_after_frontier_rollback(
+def test_compiler_progress_requests_supervision_at_plan_and_frontier_boundaries(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -620,6 +620,7 @@ def test_compiler_progress_requests_supervision_only_after_frontier_rollback(
     }
 
     assert sink("model_thinking", {**base, "status": "frontier_rejected"}, "rejected") is False
+    assert sink("model_thinking", {**base, "status": "plan_ready"}, "plan ready") is True
     assert sink("model_thinking", {**base, "status": "frontier_rolled_back"}, "rolled back") is True
 
 

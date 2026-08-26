@@ -1167,6 +1167,42 @@ def test_frontier_retry_exhaustion_can_pause_at_durable_checkpoint(tmp_path) -> 
     assert checkpoints[-1].completed_check_ids == []
 
 
+def test_new_plan_can_pause_at_saved_checkpoint_and_resume(tmp_path) -> None:
+    plan = _two_check_plan()
+    assessments = {
+        "check.one": _not_found_assessment("check.one"),
+        "check.two": _not_found_assessment("check.two"),
+    }
+    checkpoints = []
+    first = _FrontierScriptRuntime(LlmClient(_settings(tmp_path)), plan=plan, assessments=assessments)
+    first.progress_sink = lambda _kind, payload, _summary: payload.get("status") == "plan_ready"
+
+    with pytest.raises(CompilerSupervisionPause) as paused:
+        first.run(
+            active_requirement_ids=["vendor_identity"],
+            prepared_sources=[],
+            policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+            compiler_run_id="compiler_plan_pause",
+            checkpoint_sink=checkpoints.append,
+        )
+
+    assert paused.value.payload["status"] == "plan_ready"
+    assert checkpoints[-1].active_check_id == ""
+    assert checkpoints[-1].completed_check_ids == []
+
+    resumed = _FrontierScriptRuntime(LlmClient(_settings(tmp_path)), plan=plan, assessments=assessments)
+    result = resumed.run(
+        active_requirement_ids=["vendor_identity"],
+        prepared_sources=[],
+        policy_excerpt=policy_excerpt_for(["vendor_identity"]),
+        compiler_run_id="compiler_plan_pause",
+        checkpoint=checkpoints[-1],
+    )
+
+    assert resumed.execute_calls == ["check.one", "check.two"]
+    assert result.checkpoint is not None and result.checkpoint.status == "completed"
+
+
 def test_runtime_restores_sources_from_checkpoint(tmp_path) -> None:
     plan = _two_check_plan()
     assessments = {

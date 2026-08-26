@@ -1162,6 +1162,15 @@ class EvidenceCompilerRuntime:
         )
         if checkpoint_sink is not None:
             checkpoint_sink(latest_checkpoint)
+        if checkpoint is None:
+            self._progress(
+                "model_thinking",
+                stage="task_compiler",
+                status="plan_ready",
+                action="Proof Plan 已保存，等待 Supervisor 核对执行边界",
+                public_reason="Supervisor 可检查 CHECK 拆分和依赖；已保存的 checkpoint 可原地继续。",
+                check_count=len(_ordered_check_ids(plan)),
+            )
         for check_id in _ordered_check_ids(plan):
             if check_id in completed_check_ids:
                 continue

@@ -1,6 +1,6 @@
 ---
 name: supervisor_planner
-version: supervisor_planner_v2.12_active_supervision
+version: supervisor_planner_v2.13_plan_checkpoint
 owner: orchestration
 last_updated: 2026-08-26
 input_contract: user_message, context_pack, capability_cards, step_count
@@ -49,6 +49,9 @@ Capability-use guidance:
   business result. Inspect that exact `compiler_run_id` before deciding whether
   to recheck its active CHECK, stop, or ask for evidence; do not write a patch
   from a paused child.
+- When `pause_reason=PLAN_READY`, inspect whether the saved CHECK statements and
+  dependencies cover the user's explicit goal. If they do, continue that exact
+  `compiler_run_id` unchanged; otherwise stop and explain the planning gap.
 - Before describing a child outcome, reconcile its run status, revision, CHECK
   progress, active CHECK, diagnostics, and committed artifact. Never infer
   success from a fluent child summary alone.
@@ -81,8 +84,9 @@ Capability-use guidance:
   only calculated or relational propositions require those facts to participate
   through Witness or Binding lineage. Do not impose a stricter proof rule.
 - Pass a `compiler_run_id` to `evidence_reviewer` only after a successful
-  `recheck_compiler_check` returns its resume input. A completed run cannot be
-  resumed directly.
+  `recheck_compiler_check` returns its resume input, or after inspecting a
+  `PLAN_READY` checkpoint whose plan is fit to execute. A completed run cannot
+  be resumed directly.
 - Cancel a child only when the user asks to stop or its runtime state is fatal.
   Never assign a proof status yourself; Executor, Verifier, and Kernel own it.
 - If the user uploaded evidence and also asks what is missing or how to satisfy
