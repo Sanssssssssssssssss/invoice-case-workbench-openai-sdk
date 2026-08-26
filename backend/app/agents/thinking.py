@@ -34,7 +34,7 @@ def model_extra_body_for_thinking(
     thinking_type: str | None,
     base_url: str = "",
 ) -> dict[str, Any] | None:
-    model = str(model_name or "").lower()
+    model = str(model_name or "").strip().lower().rsplit("/", 1)[-1]
     if model == "kimi-k2.5":
         return {"thinking": {"type": _normalized_thinking_type(thinking_type)}}
     if model.startswith("deepseek-v4-"):

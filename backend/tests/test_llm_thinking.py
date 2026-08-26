@@ -31,6 +31,12 @@ def test_deepseek_v4_uses_the_official_responses_contract() -> None:
     assert _model_extra_body("deepseek-v4-flash", "enabled") == {"reasoning": {"effort": "high"}}
 
 
+def test_commandcode_model_prefix_keeps_deepseek_thinking_control() -> None:
+    assert _model_extra_body("deepseek/deepseek-v4-flash", "high") == {
+        "reasoning": {"effort": "high"}
+    }
+
+
 def test_amd_deepseek_v4_uses_the_gateway_thinking_template_flag() -> None:
     base_url = "https://developer.amd.com.cn/radeon/api/v1"
 
